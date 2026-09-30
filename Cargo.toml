@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/promptify-core", "crates/promptify-llm", "src-tauri"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+# Unoptimized whisper.cpp / llama.cpp are too slow to use even in dev builds.
+[profile.dev.package.whisper-rs-sys]
+opt-level = 3
+
+[profile.dev.package.llama-cpp-sys-2]
+opt-level = 3

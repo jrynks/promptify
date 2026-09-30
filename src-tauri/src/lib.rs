@@ -1,0 +1,210 @@
+pub mod audio;
+mod commands;
+mod controller;
+pub mod download;
+mod hotkeys;
+pub mod insert;
+pub mod llm_client;
+pub mod settings;
+pub mod stt;
+mod system_context;
+
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+
+use promptify_core::context::ContextPolicy;
+use promptify_core::history::{HistoryLimits, HistoryLog};
+use promptify_core::models::{Manifest, ModelKind, ModelTier, is_installed};
+use promptify_core::pipeline::{Backends, Limits, Orchestrator};
+use promptify_core::profiles::ProfileSet;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager, PhysicalPosition, WindowEvent};
+
+use crate::controller::Controller;
+use crate::download::Downloads;
+use crate::hotkeys::{HotkeyConfig, HotkeyState, Hotkeys};
+use crate::llm_client::LlmWorker;
+use crate::settings::{AppSettings, SharedSettings};
+use crate::stt::WhisperEngine;
+
+pub struct AppState {
+    pub orchestrator: Arc<Orchestrator>,
+    pub controller: Controller,
+    pub hotkeys: RwLock<HotkeyState>,
+    pub data_dir: PathBuf,
+    pub models_dir: PathBuf,
+    pub manifest: Manifest,
+    pub settings: SharedSettings,
+    pub history: Arc<HistoryLog>,
+    pub downloads: Arc<Downloads>,
+    pub stt: Arc<WhisperEngine>,
+    pub llm: Arc<LlmWorker>,
+}
+
+/// Selects an installed model for any kind that has none, preferring the balanced tier.
+pub fn ensure_selection(manifest: &Manifest, models_dir: &std::path::Path, settings: &mut AppSettings) -> bool {
+    let mut changed = false;
+    for kind in [ModelKind::Stt, ModelKind::Llm] {
+        let slot = match kind {
+            ModelKind::Stt => &mut settings.stt_model,
+            ModelKind::Llm => &mut settings.llm_model,
+        };
+        let current_ok = slot.as_deref().and_then(|id| manifest.get(id)).is_some_and(|e| e.kind == kind && is_installed(models_dir, e));
+        if current_ok {
+            continue;
+        }
+        let mut installed: Vec<_> = manifest.models.iter().filter(|e| e.kind == kind && is_installed(models_dir, e)).collect();
+        installed.sort_by_key(|e| match e.tier {
+            ModelTier::Balanced => 0,
+            ModelTier::Small => 1,
+            ModelTier::Quality => 2,
+        });
+        let next = installed.first().map(|e| e.id.clone());
+        if *slot != next {
+            *slot = next;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Warms both engines off the UI thread so the first dictation is fast.
+pub fn preload_engines(stt: Arc<WhisperEngine>, llm: Arc<LlmWorker>) {
+    std::thread::spawn(move || {
+        if let Err(e) = stt.preload() {
+            log::info!("speech model not ready: {e}");
+        }
+        if let Err(e) = llm.preload() {
+            log::info!("language model not ready: {e}");
+        }
+    });
+}
+
+fn show_settings(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn place_overlay(app: &AppHandle) {
+    let Some(overlay) = app.get_webview_window("overlay") else { return };
+    let Ok(Some(monitor)) = overlay.primary_monitor() else { return };
+    let scale = monitor.scale_factor();
+    let width = overlay.outer_size().map(|s| s.width as i32).unwrap_or((560.0 * scale) as i32);
+    let x = monitor.position().x + (monitor.size().width as i32 - width) / 2;
+    let y = monitor.position().y + (16.0 * scale) as i32;
+    let _ = overlay.set_position(PhysicalPosition::new(x, y));
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_settings(app)))
+        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
+        .invoke_handler(tauri::generate_handler![
+            commands::app_info,
+            commands::list_profiles,
+            commands::preview_prompt,
+            commands::clean_dictation,
+            commands::copy_last_result,
+            commands::hide_overlay,
+            commands::list_models,
+            commands::download_model,
+            commands::cancel_download,
+            commands::delete_model,
+            commands::select_model,
+            commands::list_history,
+            commands::delete_history_entry,
+            commands::clear_history,
+            commands::set_history_enabled,
+            commands::set_hotkey,
+        ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+
+            let data_dir = settings::app_data_dir();
+            std::fs::create_dir_all(&data_dir)?;
+            let models_dir = settings::models_dir(&data_dir);
+            let manifest = Manifest::bundled();
+            let mut loaded = settings::load(&data_dir);
+            if ensure_selection(&manifest, &models_dir, &mut loaded) {
+                settings::save(&data_dir, &loaded)?;
+            }
+            let mut hotkey_config = HotkeyConfig::from_settings(&loaded);
+            let hotkeys = Hotkeys::parse(&hotkey_config).or_else(|e| {
+                log::warn!("saved hotkeys are invalid, using defaults: {e}");
+                hotkey_config = HotkeyConfig::defaults();
+                Hotkeys::parse(&hotkey_config)
+            })?;
+            let (history, report) = HistoryLog::open(data_dir.join("history.jsonl"), HistoryLimits::default(), loaded.history_enabled)?;
+            if report.skipped > 0 {
+                log::warn!("dropped {} unreadable history lines", report.skipped);
+            }
+            let history = Arc::new(history);
+            let settings: SharedSettings = Arc::new(RwLock::new(loaded));
+            let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), settings.clone()));
+            let llm = Arc::new(LlmWorker::new(llm_client::worker_exe(), manifest.clone(), models_dir.clone(), settings.clone()));
+
+            let backends = Backends {
+                context: Arc::new(system_context::SystemContext),
+                transcriber: stt.clone(),
+                generator: llm.clone(),
+                inserter: Arc::new(insert::ClipboardPaste),
+                history: history.clone(),
+            };
+            let orchestrator = Arc::new(Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), Limits::default()));
+            let cancel = hotkeys.cancel;
+            let esc_handle = handle.clone();
+            let controller = Controller::spawn(handle.clone(), orchestrator.clone(), move |active| {
+                hotkeys::set_cancel_registered(&esc_handle, cancel, active)
+            });
+            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None };
+            hotkeys::register_mode_hotkeys(&handle, &mut hotkey_state);
+            preload_engines(stt.clone(), llm.clone());
+            app.manage(AppState {
+                orchestrator,
+                controller,
+                hotkeys: RwLock::new(hotkey_state),
+                data_dir,
+                models_dir,
+                manifest,
+                settings,
+                history,
+                downloads: Arc::default(),
+                stt,
+                llm,
+            });
+
+            let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Promptify", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&settings, &quit])?;
+            let icon = app.default_window_icon().cloned().ok_or("missing app icon")?;
+            TrayIconBuilder::new()
+                .icon(icon)
+                .tooltip("Promptify")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "settings" => show_settings(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
+            place_overlay(&handle);
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Promptify lives in the tray; closing settings only hides it.
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "settings"
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running Promptify");
+}

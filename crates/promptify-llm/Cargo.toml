@@ -1,0 +1,11 @@
+[package]
+name = "promptify-llm"
+description = "Out-of-process llama.cpp worker for Promptify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+llama-cpp-2 = { version = "0.1.157", default-features = false, features = ["openmp"] }
+promptify-core = { path = "../promptify-core" }
+serde_json = "1.0.151"

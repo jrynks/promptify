@@ -1,0 +1,19 @@
+[package]
+name = "promptify-core"
+description = "Platform-independent pipeline, context profiles and prompt building for Promptify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex = "0.4.3"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+toml = "1.1.6"
+url = "2.5.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

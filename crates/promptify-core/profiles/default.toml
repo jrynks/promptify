@@ -1,0 +1,179 @@
+# Target profiles. The most specific matching rule wins (host/process/title each add one);
+# ties go to the profile listed first. The "generic" profile is the fallback.
+
+[[profile]]
+id = "chatgpt"
+name = "ChatGPT"
+kind = "ai_chat"
+style = """
+The prompt goes to ChatGPT. Open with the role or expertise that fits the task only when it clearly helps.
+State the goal, then the context and constraints, then the exact output format (for example a table, bullet list, or numbered steps).
+Use short paragraphs or bullets; Markdown is fine.
+"""
+[[profile.examples]]
+said = "okay help me think through pricing for the team plan um three options maybe what could go wrong with each and how we'd test them"
+prompt = """
+Act as a SaaS pricing strategist. Propose 3 pricing options for our new team plan.
+
+For each option, give:
+- Price point and target customer
+- The biggest risk
+- One cheap experiment to validate it
+
+End with your recommendation."""
+[[profile.match]]
+hosts = ["chatgpt.com", "chat.openai.com"]
+[[profile.match]]
+processes = ["chatgpt", "com.openai.chat"]
+
+[[profile]]
+id = "claude"
+name = "Claude"
+kind = "ai_chat"
+style = """
+The prompt goes to Claude. Be direct and specific about the goal, the relevant background, and what a great answer looks like.
+Group background and requirements under short labels when there are several.
+Ask for the desired format explicitly. Markdown is fine.
+"""
+[[profile.examples]]
+said = "help me plan customer interviews for the new onboarding flow goals questions and a way to synthesize the calls"
+prompt = """
+Create a customer interview plan for our redesigned onboarding flow.
+
+Include:
+- 3 learning goals
+- A 30-minute discussion guide with neutral follow-up probes
+- A lightweight framework for synthesizing the calls"""
+[[profile.match]]
+hosts = ["claude.ai"]
+[[profile.match]]
+processes = ["claude", "com.anthropic.claudefordesktop"]
+
+[[profile]]
+id = "gemini"
+name = "Gemini"
+kind = "ai_chat"
+style = """
+The prompt goes to Google Gemini. State the task, context and constraints clearly, and specify the output format.
+"""
+[[profile.match]]
+hosts = ["gemini.google.com", "aistudio.google.com"]
+
+[[profile]]
+id = "copilot"
+name = "Microsoft Copilot"
+kind = "ai_chat"
+style = """
+The prompt goes to Microsoft Copilot. State the task, context and constraints clearly, and specify the output format.
+"""
+[[profile.match]]
+hosts = ["copilot.microsoft.com", "m365.cloud.microsoft"]
+
+[[profile]]
+id = "perplexity"
+name = "Perplexity"
+kind = "search"
+style = """
+The prompt goes to an AI search engine. Phrase it as a precise research question.
+Name the entities, time frame and region the speaker mentioned, and ask for sources to be cited.
+Keep it to a few sentences; no role-play.
+"""
+[[profile.match]]
+hosts = ["perplexity.ai"]
+[[profile.match]]
+processes = ["perplexity"]
+
+[[profile]]
+id = "cursor"
+name = "Cursor"
+kind = "code_agent"
+style = """
+The prompt goes to an AI coding agent inside the Cursor editor.
+State the change to make, the files, functions or components involved (only those the speaker named), constraints to respect,
+and how to verify the result (tests to run or behavior to check). Use a short task description followed by bullets.
+Never invent file names, APIs or requirements.
+"""
+[[profile.examples]]
+said = "the login button thing um when you click it twice it sends two requests fix that and add a test for it"
+prompt = """
+Fix the login button so double-clicking it sends only one login request.
+
+- Ignore further clicks while a login request is in flight.
+- Add a test that clicks the button twice and asserts a single request is sent."""
+[[profile.match]]
+processes = ["cursor"]
+
+[[profile]]
+id = "vscode"
+name = "VS Code (Copilot Chat)"
+kind = "code_agent"
+style = """
+The prompt goes to GitHub Copilot Chat or agent mode in VS Code.
+State the change to make, the files or symbols involved (only those the speaker named), constraints, and how to verify the result.
+Use a short task description followed by bullets. Never invent file names, APIs or requirements.
+"""
+[[profile.match]]
+processes = ["code", "code - insiders", "visual studio code", "vscodium"]
+
+[[profile]]
+id = "claude_code"
+name = "Claude Code"
+kind = "code_agent"
+paste = "terminal"
+style = """
+The prompt goes to Claude Code, an AI coding agent running in a terminal.
+State the task, the relevant files or commands (only those the speaker named), constraints, and how to verify the result.
+Keep it compact: one short paragraph or a few hyphen bullets. No Markdown headings or code fences.
+"""
+[[profile.match]]
+processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
+title = '\bclaude\b'
+
+[[profile]]
+id = "codex_cli"
+name = "Codex CLI"
+kind = "code_agent"
+paste = "terminal"
+style = """
+The prompt goes to the Codex CLI coding agent running in a terminal.
+State the task, the relevant files or commands (only those the speaker named), constraints, and how to verify the result.
+Keep it compact: one short paragraph or a few hyphen bullets. No Markdown headings or code fences.
+"""
+[[profile.match]]
+processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
+title = '\bcodex\b'
+
+[[profile]]
+id = "terminal"
+name = "Terminal"
+kind = "code_agent"
+paste = "terminal"
+newlines = "collapse"
+style = """
+The prompt is pasted into a terminal, most likely into an AI command-line agent.
+Write it as a single compact paragraph with no line breaks, Markdown, bullets or code fences.
+State the task, the relevant files or commands the speaker named, and how to verify the result.
+"""
+[[profile.match]]
+processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
+
+[[profile]]
+id = "image_gen"
+name = "Image generator"
+kind = "image_gen"
+newlines = "collapse"
+style = """
+The prompt goes to an image generation model. Write one descriptive paragraph:
+subject, setting, composition, lighting, style or medium, mood and color palette, using only details the speaker gave or clearly implied.
+No instructions to an assistant, no bullets.
+"""
+[[profile.match]]
+hosts = ["midjourney.com", "ideogram.ai", "leonardo.ai", "firefly.adobe.com"]
+
+[[profile]]
+id = "generic"
+name = "AI assistant"
+kind = "ai_chat"
+style = """
+The prompt goes to a general-purpose AI assistant. State the goal, relevant context and constraints, and the desired output format.
+"""
