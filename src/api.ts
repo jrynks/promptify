@@ -119,6 +119,7 @@ export interface RemoteInfo {
   enabled: boolean;
   relay_url: string | null;
   lan_direct: boolean;
+  lan_discovery: boolean;
   status: { relay: RelayStatus; listen: string | null; sessions: number; devices: number; pairing_expires_unix: number | null } | null;
   error: string | null;
   devices: Device[];
@@ -168,8 +169,8 @@ export const api = {
   setUseGpu: (enabled: boolean) => invoke<void>("set_use_gpu", { enabled }),
   setModifierHold: (enabled: boolean) => invoke<void>("set_modifier_hold", { enabled }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),
-  setRemoteSettings: (enabled: boolean, relayUrl: string | null, lanDirect: boolean) =>
-    invoke<void>("set_remote_settings", { enabled, relayUrl, lanDirect }),
+  setRemoteSettings: (enabled: boolean, relayUrl: string | null, lanDirect: boolean, lanDiscovery: boolean) =>
+    invoke<void>("set_remote_settings", { enabled, relayUrl, lanDirect, lanDiscovery }),
   createPairingOffer: () => invoke<OfferInfo>("create_pairing_offer"),
   cancelPairing: () => invoke<void>("cancel_pairing"),
   removeDevice: (id: string) => invoke<boolean>("remove_device", { id }),

@@ -36,6 +36,7 @@ pub fn config_for(settings: &AppSettings, data_dir: &std::path::Path) -> ServerC
         relay_url: settings.relay_url.clone().filter(|u| !u.trim().is_empty()),
         listen: Some(listen),
         advertise_direct: if settings.lan_direct { lan_ip().map(|ip| format!("{ip}:{DEFAULT_PORT}")) } else { None },
+        discoverable: settings.lan_direct && settings.lan_discovery,
     }
 }
 
@@ -68,6 +69,7 @@ pub struct RemoteInfo {
     enabled: bool,
     relay_url: Option<String>,
     lan_direct: bool,
+    lan_discovery: bool,
     status: Option<ServerStatus>,
     error: Option<String>,
     devices: Vec<Device>,
@@ -82,6 +84,7 @@ pub fn remote_info(state: State<'_, AppState>) -> RemoteInfo {
         enabled: settings.server_enabled,
         relay_url: settings.relay_url,
         lan_direct: settings.lan_direct,
+        lan_discovery: settings.lan_discovery,
         status: server.as_ref().map(|s| s.status()),
         error: state.remote.error.lock().unwrap().clone(),
         devices: server.as_ref().map(|s| s.devices()).unwrap_or_default(),
@@ -90,7 +93,7 @@ pub fn remote_info(state: State<'_, AppState>) -> RemoteInfo {
 }
 
 #[tauri::command]
-pub fn set_remote_settings(state: State<'_, AppState>, enabled: bool, relay_url: Option<String>, lan_direct: bool) -> Result<(), String> {
+pub fn set_remote_settings(state: State<'_, AppState>, enabled: bool, relay_url: Option<String>, lan_direct: bool, lan_discovery: bool) -> Result<(), String> {
     let relay_url = relay_url.map(|u| u.trim().to_owned()).filter(|u| !u.is_empty());
     if let Some(url) = &relay_url {
         promptify_server::validate_relay_url(url)?;
@@ -100,6 +103,7 @@ pub fn set_remote_settings(state: State<'_, AppState>, enabled: bool, relay_url:
         settings.server_enabled = enabled;
         settings.relay_url = relay_url;
         settings.lan_direct = lan_direct;
+        settings.lan_discovery = lan_discovery;
     }
     let snapshot = state.settings.read().unwrap().clone();
     crate::settings::save(&state.data_dir, &snapshot).map_err(|e| format!("could not save settings: {e}"))?;

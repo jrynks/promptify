@@ -10,6 +10,8 @@ axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 log = "0.4.34"
+mdns-sd = "0.13"
+sha2 = "0.10"
 promptify-core = { path = "../promptify-core" }
 promptify-protocol = { path = "../promptify-protocol" }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }

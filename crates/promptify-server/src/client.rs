@@ -138,7 +138,16 @@ pub async fn pair(offer: &PairingOffer, device_name: &str, prefer_direct: bool) 
 pub async fn open(identity: &ClientIdentity, prefer_direct: bool) -> Result<Connection, String> {
     let keys = identity.keys()?;
     let desktop = decode_key(&identity.desktop_key).ok_or("bad desktop key")?;
-    let mut ws = connect(identity.relay.as_deref(), identity.direct.as_deref(), &identity.room, prefer_direct).await?;
+    let mut ws = match connect(identity.relay.as_deref(), identity.direct.as_deref(), &identity.room, prefer_direct).await {
+        Ok(ws) => ws,
+        Err(e) if prefer_direct => {
+            // The desktop's address may have changed; look for it on the local network by room.
+            let room = identity.room.clone();
+            let found = tokio::task::spawn_blocking(move || crate::discovery::find(&room, Duration::from_secs(3))).await.ok().flatten().ok_or(e)?;
+            connect(None, Some(&found.to_string()), &identity.room, true).await?
+        }
+        Err(e) => return Err(e),
+    };
     let mut hs = Handshake::session_initiator(&keys, &desktop).map_err(|e| e.to_string())?;
     let mut first = vec![KIND_SESSION];
     first.extend(hs.write(b"").map_err(|e| e.to_string())?);

@@ -29,7 +29,7 @@ const USAGE: &str = "usage:
   promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json]
   promptify-cli eval <cases.toml>
   promptify-cli mcp [--api http://127.0.0.1:47821]   (stdio MCP server for Claude Desktop, VS Code, Cursor...)
-  promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE]
+  promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE] [--discoverable]
   promptify-cli remote pair <pairing-link> [--name NAME] [--direct] [--identity FILE]
   promptify-cli remote send <text> [--app APP] [--url URL] [--dictation] [--direct] [--identity FILE]";
 
@@ -417,6 +417,7 @@ fn run() -> Result<(), String> {
                 relay_url: flag(&args, "--relay"),
                 listen: Some(listen),
                 advertise_direct: Some(flag(&args, "--advertise").unwrap_or_else(|| listen.to_string())),
+                discoverable: args.iter().any(|a| a == "--discoverable"),
             };
             let server = promptify_server::RemoteServer::start(config, service)?;
             let offer = server.pairing_offer(600)?;

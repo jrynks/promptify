@@ -2,6 +2,7 @@
 //! direct link; every byte between them is end-to-end encrypted. Also serves the loopback-only API.
 
 pub mod client;
+pub mod discovery;
 mod local;
 mod relay_link;
 pub mod session;
@@ -30,6 +31,13 @@ pub struct ServerConfig {
     pub listen: Option<SocketAddr>,
     /// host:port phones should dial for a direct link, advertised in pairing offers.
     pub advertise_direct: Option<String>,
+    /// Announce the direct port over mDNS so paired phones can find it after an address change.
+    pub discoverable: bool,
+}
+
+/// mDNS is only useful, and only allowed, when the direct port is reachable from the network.
+pub fn should_advertise(discoverable: bool, bound: SocketAddr) -> bool {
+    discoverable && !bound.ip().is_loopback()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -138,6 +146,7 @@ pub struct RemoteServer {
     shared: Arc<Shared>,
     runtime: Option<tokio::runtime::Runtime>,
     listen: Option<SocketAddr>,
+    advertiser: Option<discovery::Advertiser>,
 }
 
 fn load_api_token(path: &std::path::Path) -> Result<String, String> {
@@ -196,7 +205,18 @@ impl RemoteServer {
         if let Some(relay) = config.relay_url.clone() {
             runtime.spawn(relay_link::run(shared.clone(), relay));
         }
-        Ok(Self { shared, runtime: Some(runtime), listen })
+        let advertiser = match listen {
+            Some(bound) if should_advertise(config.discoverable, bound) => match discovery::Advertiser::start(&shared.identity.room(), bound.port()) {
+                Ok(advertiser) => Some(advertiser),
+                Err(e) => {
+                    // Discovery is a convenience; direct links still work with the saved address.
+                    log::warn!("LAN discovery unavailable: {e}");
+                    None
+                }
+            },
+            _ => None,
+        };
+        Ok(Self { shared, runtime: Some(runtime), listen, advertiser })
     }
 
     pub fn listen_addr(&self) -> Option<SocketAddr> {
@@ -263,6 +283,7 @@ impl RemoteServer {
     }
 
     fn stop(&mut self) {
+        self.advertiser = None;
         let _ = self.shared.shutdown.send(true);
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_timeout(Duration::from_secs(2));

@@ -352,6 +352,7 @@ function Remote() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
   const [offer, setOffer] = useState<OfferInfo | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now() / 1000);
 
@@ -383,7 +384,7 @@ function Remote() {
   };
 
   if (!info) return null;
-  const save = (enabled: boolean, lan: boolean) => act(() => api.setRemoteSettings(enabled, relayUrl.trim() || null, lan));
+  const save = (enabled: boolean, lan: boolean, discovery = info.lan_discovery) => act(() => api.setRemoteSettings(enabled, relayUrl.trim() || null, lan, discovery));
   const secondsLeft = offer ? Math.max(0, Math.round(offer.expires_unix - now)) : 0;
 
   return (
@@ -400,6 +401,12 @@ function Remote() {
         <input type="checkbox" checked={info.lan_direct} onChange={(e) => save(info.enabled, e.target.checked)} />
         Accept direct connections on this network
       </label>
+      {info.lan_direct && (
+        <label className="inline">
+          <input type="checkbox" checked={info.lan_discovery} onChange={(e) => save(info.enabled, info.lan_direct, e.target.checked)} />
+          Let paired phones find this computer if its network address changes (mDNS)
+        </label>
+      )}
       <label>
         Relay for access over the internet (optional, self-hosted)
         <input placeholder="wss://relay.example.net" value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} />
@@ -432,11 +439,30 @@ function Remote() {
       <ul className="history">
         {info.devices.map((d) => (
           <li key={d.id}>
-            <strong>{d.name}</strong>
+            {renaming?.id === d.id ? (
+              <input
+                autoFocus
+                maxLength={64}
+                value={renaming.name}
+                onChange={(e) => setRenaming({ id: d.id, name: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setRenaming(null);
+                  if (e.key === "Enter" && renaming.name.trim()) {
+                    const name = renaming.name.trim();
+                    setRenaming(null);
+                    act(() => api.renameDevice(d.id, name));
+                  }
+                }}
+                onBlur={() => setRenaming(null)}
+              />
+            ) : (
+              <strong>{d.name}</strong>
+            )}
             <span className="hint">
               {" "}· paired {new Date(d.paired_unix * 1000).toLocaleDateString()}
               {d.last_seen_unix ? ` · last seen ${new Date(d.last_seen_unix * 1000).toLocaleString()}` : ""}
             </span>
+            <button className="link" onClick={() => setRenaming({ id: d.id, name: d.name })}>Rename</button>
             <button className="link" onClick={() => act(() => api.removeDevice(d.id))}>Remove</button>
           </li>
         ))}

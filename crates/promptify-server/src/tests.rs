@@ -78,6 +78,7 @@ fn fixture() -> Fixture {
         relay_url: Some(format!("ws://{relay_addr}")),
         listen: Some("127.0.0.1:0".parse().unwrap()),
         advertise_direct: None,
+        discoverable: true,
     };
     let server = RemoteServer::start(config, service).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();

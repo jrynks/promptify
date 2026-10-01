@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub relay_url: Option<String>,
     /// Accept direct (still end-to-end encrypted) connections from the local network.
     pub lan_direct: bool,
+    /// Announce this desktop on the local network (mDNS) so paired phones can find it.
+    pub lan_discovery: bool,
     /// Holding Ctrl+Shift alone starts a prompt recording.
     pub modifier_hold: bool,
 }
@@ -53,6 +55,7 @@ impl Default for AppSettings {
             server_enabled: false,
             relay_url: None,
             lan_direct: false,
+            lan_discovery: false,
             modifier_hold: false,
         }
     }
