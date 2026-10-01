@@ -115,6 +115,10 @@ impl Transcriber for WhisperEngine {
         // English-only models reject other languages; multilingual models auto-detect.
         params.set_language(if id.ends_with("-en") { Some("en") } else { Some("auto") });
         params.set_no_context(true);
+        let glossary = self.settings.read().unwrap().vocabulary.whisper_prompt();
+        if let Some(glossary) = &glossary {
+            params.set_initial_prompt(glossary);
+        }
         params.set_no_timestamps(true);
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);

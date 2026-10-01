@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/promptify-core", "crates/promptify-llm", "src-tauri"]
+members = ["crates/promptify-core", "crates/promptify-llm", "crates/promptify-protocol", "crates/promptify-relay", "crates/promptify-server", "crates/promptify-mcp", "src-tauri"]
 resolver = "3"
 
 [workspace.package]

@@ -89,6 +89,16 @@ impl CaptureBuffer {
     pub fn finish(self) -> CapturedAudio {
         CapturedAudio { samples: self.samples, capped: self.capped }
     }
+
+    /// The 16 kHz samples captured so far.
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+
+    /// Like [`Self::finish`] for a buffer that is shared with a live reader.
+    pub fn take(&mut self) -> CapturedAudio {
+        CapturedAudio { samples: std::mem::take(&mut self.samples), capped: self.capped }
+    }
 }
 
 #[cfg(test)]

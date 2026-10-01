@@ -5,9 +5,12 @@ pub mod download;
 mod hotkeys;
 pub mod insert;
 pub mod llm_client;
+mod mcp;
+mod modifier_hook;
+mod remote;
 pub mod settings;
 pub mod stt;
-mod system_context;
+pub mod system_context;
 mod tray;
 
 use std::path::PathBuf;
@@ -39,6 +42,8 @@ pub struct AppState {
     pub downloads: Arc<Downloads>,
     pub stt: Arc<WhisperEngine>,
     pub llm: Arc<LlmWorker>,
+    pub remote: remote::RemoteState,
+    pub modifier_hook: std::sync::Mutex<Option<modifier_hook::Hook>>,
 }
 
 /// Selects an installed model for any kind that has none, preferring the balanced tier.
@@ -94,7 +99,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_settings(app)))
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
+        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).level_for("rmcp", log::LevelFilter::Warn).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -112,8 +117,21 @@ pub fn run() {
             commands::delete_history_entry,
             commands::clear_history,
             commands::set_history_enabled,
+            commands::set_modifier_hold,
+            commands::set_auto_mode,
+            commands::set_vocabulary,
+            commands::set_screen_text_apps,
+            mcp::mcp_info,
+            mcp::mcp_reload,
+            mcp::mcp_test,
             commands::set_hotkey,
             commands::set_use_gpu,
+            remote::remote_info,
+            remote::set_remote_settings,
+            remote::create_pairing_offer,
+            remote::cancel_pairing,
+            remote::remove_device,
+            remote::rename_device,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -149,12 +167,14 @@ pub fn run() {
                 history: history.clone(),
             };
             let orchestrator = Arc::new(Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), Limits::default()));
+            commands::apply_text_settings(&orchestrator, &settings.read().unwrap());
+            let _ = mcp::reload(&data_dir, &orchestrator);
             let cancel = hotkeys.cancel;
             let esc_handle = handle.clone();
             let controller = Controller::spawn(handle.clone(), orchestrator.clone(), move |active| {
                 hotkeys::set_cancel_registered(&esc_handle, cancel, active)
             });
-            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, paused: false };
+            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, answer_error: None, paused: false };
             hotkeys::register_mode_hotkeys(&handle, &mut hotkey_state);
             preload_engines(stt.clone(), llm.clone());
             let tray_hotkeys = hotkey_state.config.clone();
@@ -171,7 +191,17 @@ pub fn run() {
                 downloads: Arc::default(),
                 stt,
                 llm,
+                remote: remote::RemoteState::default(),
+                modifier_hook: Default::default(),
             });
+            remote::apply(&app.state::<AppState>());
+            {
+                let state = app.state::<AppState>();
+                let enabled = state.settings.read().unwrap().modifier_hold;
+                if let Err(e) = modifier_hook::apply(&handle, &state.modifier_hook, enabled) {
+                    log::warn!("Ctrl+Shift hold hotkey: {e}");
+                }
+            }
 
             tray::build(&handle, &tray_hotkeys)?;
             place_overlay(&handle);

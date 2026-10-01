@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type ModelStatus, type PreviewOutput, type ProfileSummary } from "../api";
+import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type McpInfo, type ModelStatus, type OfferInfo, type PreviewOutput, type ProfileSummary, type RemoteInfo } from "../api";
 import "./settings.css";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
@@ -26,7 +26,7 @@ function toAccelerator(e: React.KeyboardEvent): string | null {
   return [...parts, key].join("+");
 }
 
-function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation"; value: string; onSaved: () => void }) {
+function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation" | "answer"; value: string | null; onSaved: () => void }) {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -52,9 +52,28 @@ function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation"; v
         />
       ) : (
         <>
-          <kbd>{formatHotkey(value)}</kbd> <button className="link" onClick={() => setCapturing(true)}>Change</button>
+          {value ? <kbd>{formatHotkey(value)}</kbd> : <span className="hint">Not set</span>}{" "}
+          <button className="link" onClick={() => setCapturing(true)}>{value ? "Change" : "Set"}</button>
         </>
       )}
+      {error && <div className="error">{error}</div>}
+    </>
+  );
+}
+
+function ModifierHold({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <label className="inline">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => void api.setModifierHold(e.target.checked).then(() => { setError(null); onChange(); }, (err) => setError(String(err)))}
+        />
+        Also start a prompt by holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> on their own
+      </label>
+      <span className="hint">Shortcuts like Ctrl+Shift+T and the quick Ctrl+Shift layout switch are ignored.</span>
       {error && <div className="error">{error}</div>}
     </>
   );
@@ -70,8 +89,24 @@ function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void
         <dd>{info.input_device ? `${info.input_device} (system default)` : "No default microphone found"}</dd>
         <dt>Prompt hotkey</dt>
         <dd><HotkeyField mode="prompt" value={info.hotkeys.prompt} onSaved={onChange} /> hold to talk, or tap to start and tap again to finish</dd>
+        <dt></dt>
+        <dd>
+          <ModifierHold enabled={info.modifier_hold} onChange={onChange} />
+        </dd>
         <dt>Dictation hotkey</dt>
         <dd><HotkeyField mode="dictation" value={info.hotkeys.dictation} onSaved={onChange} /></dd>
+        <dt>Answer hotkey</dt>
+        <dd>
+          <HotkeyField mode="answer" value={info.hotkeys.answer} onSaved={onChange} /> ask a question; the local model's answer is shown, never pasted
+        </dd>
+        <dt>Automatic mode</dt>
+        <dd>
+          <label className="inline">
+            <input type="checkbox" checked={info.auto_mode} onChange={(e) => void api.setAutoMode(e.target.checked).then(onChange)} />
+            Outside AI apps, the prompt hotkey types what you said instead of writing a prompt
+          </label>
+          <span className="hint">Start with “prompt:” or “dictate:” to choose yourself.</span>
+        </dd>
         <dt>Cancel</dt>
         <dd><kbd>{info.hotkeys.cancel}</kbd> while listening or processing</dd>
         <dt>Local models</dt>
@@ -270,6 +305,236 @@ function Playground({ profiles }: { profiles: ProfileSummary[] }) {
   );
 }
 
+function relayLabel(info: RemoteInfo): string {
+  const relay = info.status?.relay;
+  if (!relay || relay.state === "disabled") return "No relay (local network only)";
+  if (relay.state === "connected") return "Relay connected";
+  if (relay.state === "connecting") return "Connecting to relay…";
+  return `Relay error: ${relay.message}`;
+}
+
+function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void }) {
+  const [words, setWords] = useState("");
+  const [fixes, setFixes] = useState("");
+  const [apps, setApps] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!info) return;
+    setWords(info.vocabulary.words.join("\n"));
+    setFixes(info.vocabulary.replacements.map((r) => `${r.from} => ${r.to}`).join("\n"));
+    setApps(info.screen_text_apps.join("\n"));
+  }, [info]);
+
+  if (!info) return null;
+  const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const save = () => {
+    const replacements = lines(fixes).flatMap((l) => {
+      const [from, ...rest] = l.split("=>");
+      return rest.length ? [{ from: from.trim(), to: rest.join("=>").trim() }] : [];
+    });
+    Promise.all([api.setVocabulary({ words: lines(words), replacements }), api.setScreenTextApps(lines(apps))]).then(
+      () => {
+        setStatus("Saved.");
+        onChange();
+      },
+      (err) => setStatus(String(err)),
+    );
+  };
+
+  return (
+    <section>
+      <h2>Your words</h2>
+      <label>
+        Names and terms to expect, one per line
+        <textarea rows={4} value={words} onChange={(e) => setWords(e.target.value)} placeholder={"Promptify\nKubernetes\nPriya"} />
+      </label>
+      <label>
+        Corrections, one per line as <code>heard =&gt; meant</code>
+        <textarea rows={3} value={fixes} onChange={(e) => setFixes(e.target.value)} placeholder="prompt if I => Promptify" />
+      </label>
+      <p className="hint">In dictation, say “new line”, “new paragraph” or “scratch that” as their own sentence.</p>
+      <label>
+        Apps whose on-screen text may be used as context, one per line (for example <code>chatgpt.com</code> or <code>outlook</code>)
+        <textarea rows={3} value={apps} onChange={(e) => setApps(e.target.value)} />
+      </label>
+      <p className="hint">Only the focused text box is read, only when you press a hotkey in one of these apps, and never password fields. It is not saved in history.</p>
+      <button onClick={save}>Save</button> {status && <span className="hint">{status}</span>}
+    </section>
+  );
+}
+
+function Tools() {
+  const [info, setInfo] = useState<McpInfo | null>(null);
+  const [tests, setTests] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    void api.mcpInfo().then(setInfo);
+  }, []);
+
+  const test = (name: string) => {
+    setTests((t) => ({ ...t, [name]: "Testing…" }));
+    api.mcpTest(name).then(
+      (tools) => setTests((t) => ({ ...t, [name]: tools.length ? `Connected. Tools: ${tools.join(", ")}` : "Connected, but it offers no tools." })),
+      (err) => setTests((t) => ({ ...t, [name]: `Failed: ${String(err)}` })),
+    );
+  };
+
+  if (!info) return null;
+  return (
+    <section>
+      <h2>Tools (MCP)</h2>
+      <p className="hint">
+        Connected tools can add reference facts before a prompt is written. Configure them in <code>{info.path}</code>, then
+        reload. Only hotkey prompts use tools; dictation, phones and the local API never do.
+      </p>
+      {info.error && <p className="error">{info.error}</p>}
+      {info.servers.length === 0 && !info.error && <p>No tools configured.</p>}
+      <ul className="devices">
+        {info.servers.map((s) => (
+          <li key={s.name}>
+            <strong>{s.name}</strong> {s.enabled ? "" : "(off) "}
+            <span className="hint">
+              {s.remote ? "remote server" : "runs on this computer"} · {s.hooks} lookups
+              {s.loop_tools.length > 0 && ` · the model may call ${s.loop_tools.join(", ")}`}
+              {s.profiles.length > 0 && ` · only for ${s.profiles.join(", ")}`}
+            </span>
+            {s.remote && s.transcript_allowed && (
+              <p className="error">What you say is sent to this remote server. Turn off allow_transcript to keep it on this computer.</p>
+            )}
+            {!s.remote && <p className="hint">Runs a program with your user rights. Only add servers you trust.</p>}
+            <button onClick={() => test(s.name)}>Test</button> {tests[s.name] && <span className="hint">{tests[s.name]}</span>}
+          </li>
+        ))}
+      </ul>
+      <button onClick={() => void api.mcpReload().then(setInfo)}>Reload mcp.json</button> {info.active && <span className="hint">Tools are on.</span>}
+    </section>
+  );
+}
+
+function Remote() {
+  const [info, setInfo] = useState<RemoteInfo | null>(null);
+  const [relayUrl, setRelayUrl] = useState("");
+  const [offer, setOffer] = useState<OfferInfo | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+
+  const refresh = useCallback(() => {
+    void api.remoteInfo().then((next) => {
+      setInfo(next);
+      if (next.status?.pairing_expires_unix == null) setOffer(null);
+    });
+  }, []);
+
+  useEffect(() => {
+    void api.remoteInfo().then((next) => {
+      setInfo(next);
+      setRelayUrl(next.relay_url ?? "");
+    });
+    const timer = window.setInterval(() => {
+      setNow(Date.now() / 1000);
+      refresh();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const act = (fn: () => Promise<unknown>) => {
+    setError(null);
+    fn().then(refresh, (e) => {
+      setError(String(e));
+      refresh();
+    });
+  };
+
+  if (!info) return null;
+  const save = (enabled: boolean, lan: boolean, discovery = info.lan_discovery) => act(() => api.setRemoteSettings(enabled, relayUrl.trim() || null, lan, discovery));
+  const secondsLeft = offer ? Math.max(0, Math.round(offer.expires_unix - now)) : 0;
+
+  return (
+    <section>
+      <h2>Phones and remote access</h2>
+      <p className="hint">
+        Let your own phones use this computer's local models. Everything between a paired phone and this computer is end-to-end encrypted; a relay only forwards scrambled data it cannot read. Phones never get your history or screen text.
+      </p>
+      <label className="inline">
+        <input type="checkbox" checked={info.enabled} onChange={(e) => save(e.target.checked, info.lan_direct)} />
+        Allow paired devices to use Promptify
+      </label>
+      <label className="inline">
+        <input type="checkbox" checked={info.lan_direct} onChange={(e) => save(info.enabled, e.target.checked)} />
+        Accept direct connections on this network
+      </label>
+      {info.lan_direct && (
+        <label className="inline">
+          <input type="checkbox" checked={info.lan_discovery} onChange={(e) => save(info.enabled, info.lan_direct, e.target.checked)} />
+          Let paired phones find this computer if its network address changes (mDNS)
+        </label>
+      )}
+      <label>
+        Relay for access over the internet (optional, self-hosted)
+        <input placeholder="wss://relay.example.net" value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} />
+      </label>
+      <button onClick={() => save(info.enabled, info.lan_direct)}>Save relay</button>
+      {info.enabled && info.status && (
+        <p className="hint">
+          {relayLabel(info)} · {info.status.sessions} connected · local API on {info.status.listen} (token in {info.api_token_path})
+        </p>
+      )}
+      {info.enabled && (
+        <div>
+          {offer && secondsLeft > 0 ? (
+            <div className="pairing">
+              <img alt="Pairing code" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(offer.svg)}`} />
+              <p className="hint">Scan with the Promptify app within {secondsLeft}s. The code works once.</p>
+              <details>
+                <summary>Pairing link</summary>
+                <pre>{offer.uri}</pre>
+              </details>
+              <button onClick={() => act(api.cancelPairing)}>Cancel pairing</button>
+            </div>
+          ) : (
+            <button onClick={() => act(() => api.createPairingOffer().then(setOffer))}>Pair a phone</button>
+          )}
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+      {info.error && <p className="error">{info.error}</p>}
+      <ul className="history">
+        {info.devices.map((d) => (
+          <li key={d.id}>
+            {renaming?.id === d.id ? (
+              <input
+                autoFocus
+                maxLength={64}
+                value={renaming.name}
+                onChange={(e) => setRenaming({ id: d.id, name: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setRenaming(null);
+                  if (e.key === "Enter" && renaming.name.trim()) {
+                    const name = renaming.name.trim();
+                    setRenaming(null);
+                    act(() => api.renameDevice(d.id, name));
+                  }
+                }}
+                onBlur={() => setRenaming(null)}
+              />
+            ) : (
+              <strong>{d.name}</strong>
+            )}
+            <span className="hint">
+              {" "}· paired {new Date(d.paired_unix * 1000).toLocaleDateString()}
+              {d.last_seen_unix ? ` · last seen ${new Date(d.last_seen_unix * 1000).toLocaleString()}` : ""}
+            </span>
+            <button className="link" onClick={() => setRenaming({ id: d.id, name: d.name })}>Rename</button>
+            <button className="link" onClick={() => act(() => api.removeDevice(d.id))}>Remove</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Settings() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -287,6 +552,9 @@ function Settings() {
       <Status info={info} onChange={refreshInfo} />
       <Models onChange={refreshInfo} />
       <History info={info} onChange={refreshInfo} />
+      <Words info={info} onChange={refreshInfo} />
+      <Remote />
+      <Tools />
       <Playground profiles={profiles} />
     </main>
   );

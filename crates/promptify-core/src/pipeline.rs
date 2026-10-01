@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::context::{ActiveContext, AdmittedText, ContextPolicy, FocusedText, WindowIdentity};
-use crate::dictation::remove_fillers;
 use crate::history::{HistoryContext, HistoryLog, NewHistoryEntry};
-use crate::profiles::{PasteChord, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, build_prompt_messages};
-use crate::sanitize::sanitize_output;
+use crate::profiles::{PasteChord, Profile, ProfileSet};
+use crate::prompt::ChatMessage;
+use crate::scheduler::{AdmitError, Priority, SchedulerLimits};
+use crate::transform::{Input, Transform, TransformOutcome, TransformService};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -29,13 +29,19 @@ impl CancelToken {
 pub enum Mode {
     Prompt,
     Dictation,
+    /// Answer the spoken question with the local model and show it; nothing is pasted.
+    Answer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Transcribing,
+    /// Fetching reference text with the user's MCP tools.
+    Researching,
     Generating,
+    /// Rewriting a draft whose task graph was malformed.
+    Revising,
     Inserting,
 }
 
@@ -52,6 +58,8 @@ pub struct Limits {
     pub max_new_tokens: u32,
     pub generation_timeout: Duration,
     pub max_output_chars: usize,
+    /// Extra generations allowed to fix a malformed task graph; all share `generation_timeout`.
+    pub max_structure_repairs: u32,
 }
 
 impl Default for Limits {
@@ -61,6 +69,7 @@ impl Default for Limits {
             max_new_tokens: 768,
             generation_timeout: Duration::from_secs(60),
             max_output_chars: 6000,
+            max_structure_repairs: 1,
         }
     }
 }
@@ -84,6 +93,8 @@ pub struct Generation {
 
 pub struct GenerationRequest<'a> {
     pub messages: &'a [ChatMessage],
+    /// Leading messages that repeat across requests for this profile; backends may cache them.
+    pub stable_prefix: usize,
     pub max_new_tokens: u32,
     pub deadline: Instant,
 }
@@ -163,6 +174,8 @@ pub enum FailReason {
     GenerationFailed,
     TimedOut,
     EmptyOutput,
+    /// The engines stayed busy with other clients' requests past the wait limit.
+    EngineBusy,
 }
 
 /// Terminal state of a job. `Blocked` carries the text so the UI can offer a copy button.
@@ -170,6 +183,8 @@ pub enum FailReason {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Outcome {
     Inserted { text: String },
+    /// An answer to show the user; answer jobs never paste.
+    Answered { text: String },
     Blocked { text: String, reason: BlockReason, detail: Option<String> },
     NoSpeech,
     Cancelled,
@@ -181,12 +196,25 @@ impl Outcome {
     pub fn kind(&self) -> &'static str {
         match self {
             Outcome::Inserted { .. } => "inserted",
+            Outcome::Answered { .. } => "answered",
             Outcome::Blocked { .. } => "blocked",
             Outcome::NoSpeech => "no_speech",
             Outcome::Cancelled => "cancelled",
             Outcome::Failed { .. } => "failed",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructureCheck {
+    /// No numbered steps or loops in the output.
+    Unstructured,
+    Valid,
+    /// The first draft was malformed and a repair passed validation.
+    Repaired,
+    /// No repair passed validation; the first draft was kept.
+    KeptOriginal,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,6 +224,7 @@ pub struct JobReport {
     pub outcome: Outcome,
     pub elapsed_ms: u64,
     pub history_saved: bool,
+    pub structure: Option<StructureCheck>,
 }
 
 struct BusyGuard(Arc<AtomicBool>);
@@ -228,25 +257,54 @@ impl Job {
 }
 
 pub struct Orchestrator {
-    backends: Backends,
-    profiles: ProfileSet,
-    policy: ContextPolicy,
-    limits: Limits,
+    context: Arc<dyn ContextProvider>,
+    inserter: Arc<dyn Inserter>,
+    service: Arc<TransformService>,
+    policy: std::sync::RwLock<ContextPolicy>,
     busy: Arc<AtomicBool>,
     next_id: AtomicU64,
+    auto_mode: AtomicBool,
 }
 
 impl Orchestrator {
     pub fn new(backends: Backends, profiles: ProfileSet, policy: ContextPolicy, limits: Limits) -> Self {
-        Self { backends, profiles, policy, limits, busy: Arc::default(), next_id: AtomicU64::new(1) }
+        Self::with_scheduler(backends, profiles, policy, limits, SchedulerLimits::default())
+    }
+
+    pub fn with_scheduler(backends: Backends, profiles: ProfileSet, policy: ContextPolicy, limits: Limits, scheduler: SchedulerLimits) -> Self {
+        let service = TransformService::new(backends.transcriber, backends.generator, backends.history, profiles, limits, scheduler);
+        Self {
+            context: backends.context,
+            inserter: backends.inserter,
+            service: Arc::new(service),
+            policy: std::sync::RwLock::new(policy),
+            busy: Arc::default(),
+            next_id: AtomicU64::new(1),
+            auto_mode: AtomicBool::new(false),
+        }
+    }
+
+    /// With automatic mode on, the prompt hotkey writes plain dictation outside AI apps.
+    pub fn set_auto_mode(&self, enabled: bool) {
+        self.auto_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Which apps may share their on-screen text; applies from the next hotkey press.
+    pub fn set_policy(&self, policy: ContextPolicy) {
+        *self.policy.write().unwrap_or_else(|p| p.into_inner()) = policy;
+    }
+
+    /// The engine-side service, shared with the local API and remote devices.
+    pub fn service(&self) -> &Arc<TransformService> {
+        &self.service
     }
 
     pub fn limits(&self) -> &Limits {
-        &self.limits
+        self.service.limits()
     }
 
     pub fn profiles(&self) -> &ProfileSet {
-        &self.profiles
+        self.service.profiles()
     }
 
     /// Captures the target window (and opted-in surrounding text) at hotkey press.
@@ -255,12 +313,13 @@ impl Orchestrator {
             return Err(BeginError::Busy);
         }
         let busy = BusyGuard(self.busy.clone());
-        let target = self.backends.context.identify().map_err(BeginError::Context)?;
-        let profile_id = self.profiles.resolve(&target).id.clone();
-        let surrounding = if mode == Mode::Prompt && self.policy.allows_surrounding_text(&target) {
+        let target = self.context.identify().map_err(BeginError::Context)?;
+        let profile_id = self.profiles().resolve(&target).id.clone();
+        let policy = self.policy.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let surrounding = if mode != Mode::Dictation && policy.allows_surrounding_text(&target) {
             // Surrounding text is optional context; a read failure must not block the job.
-            match self.backends.context.focused_text(&target.window) {
-                Ok(Some(focused)) => self.policy.admit(&target, focused),
+            match self.context.focused_text(&target.window) {
+                Ok(Some(focused)) => policy.admit(&target, focused),
                 Ok(None) | Err(_) => None,
             }
         } else {
@@ -278,11 +337,50 @@ impl Orchestrator {
     }
 
     pub fn finish(&self, job: Job, audio: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
+        self.finish_input(job, Input::Audio(audio), on_event)
+    }
+
+    /// Finishes a recording whose start was already transcribed while the user spoke.
+    pub fn finish_live(&self, job: Job, committed: &str, tail: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
+        self.finish_input(job, Input::Live { committed, tail }, on_event)
+    }
+
+    fn finish_input(&self, job: Job, input: Input<'_>, on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
         let started = Instant::now();
-        let (outcome, transcript) = self.run(&job, audio, on_event);
+        let profiles = self.profiles();
+        let profile = profiles.get(&job.profile_id).unwrap_or_else(|| profiles.resolve(&job.target));
+        let transform = Transform {
+            input,
+            mode: job.mode,
+            profile,
+            target: &job.target,
+            surrounding: job.surrounding.as_ref(),
+            use_history: true,
+            use_tools: true,
+            auto_mode: self.auto_mode.load(Ordering::SeqCst),
+        };
+        // Local jobs go first, but may still wait for a remote job that already holds the engines.
+        let queue_wait = self.limits().generation_timeout;
+        let report = self.service.run_scheduled(Priority::Local, LOCAL_CLIENT, &transform, &job.cancel, queue_wait, on_event);
+        let (outcome, transcript, structure, mode) = match report {
+            Ok(report) => {
+                let outcome = match report.outcome {
+                    // Answers are only shown; they never reach the target app.
+                    TransformOutcome::Ready { text } | TransformOutcome::Truncated { text } if report.mode == Mode::Answer => Outcome::Answered { text },
+                    TransformOutcome::Ready { text } => self.insert(&job, profile, text, on_event),
+                    TransformOutcome::Truncated { text } => Outcome::Blocked { text, reason: BlockReason::OutputTruncated, detail: None },
+                    TransformOutcome::NoSpeech => Outcome::NoSpeech,
+                    TransformOutcome::Cancelled => Outcome::Cancelled,
+                    TransformOutcome::Failed { reason, detail } => Outcome::Failed { reason, detail },
+                };
+                (outcome, report.transcript, report.structure, report.mode)
+            }
+            Err(AdmitError::Cancelled) => (Outcome::Cancelled, None, None, job.mode),
+            Err(error) => (Outcome::Failed { reason: FailReason::EngineBusy, detail: Some(error.to_string()) }, None, None, job.mode),
+        };
         let history_saved = match (&outcome, transcript) {
-            (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, transcript, text, true),
-            (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, transcript, text, false),
+            (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, mode, transcript, text, true),
+            (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, mode, transcript, text, false),
             _ => false,
         };
         JobReport {
@@ -291,12 +389,13 @@ impl Orchestrator {
             outcome,
             elapsed_ms: started.elapsed().as_millis() as u64,
             history_saved,
+            structure,
         }
     }
 
-    fn record(&self, job: &Job, transcript: String, output: &str, inserted: bool) -> bool {
+    fn record(&self, job: &Job, mode: Mode, transcript: String, output: &str, inserted: bool) -> bool {
         let entry = NewHistoryEntry {
-            mode: job.mode,
+            mode,
             profile_id: job.profile_id.clone(),
             app_key: job.target.app_key(),
             transcript,
@@ -304,106 +403,28 @@ impl Orchestrator {
             inserted,
         };
         // A history failure must never change the job outcome; the report carries the receipt.
-        self.backends.history.record(entry).unwrap_or(false)
+        self.service.history().record(entry).unwrap_or(false)
     }
 
-    fn run(&self, job: &Job, audio: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> (Outcome, Option<String>) {
-        let mut transcript = None;
-        let outcome = self.run_stages(job, audio, &mut transcript, on_event);
-        (outcome, transcript)
-    }
-
-    fn run_stages(&self, job: &Job, audio: &[f32], saved_transcript: &mut Option<String>, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
-        let cancel = &job.cancel;
-        if cancel.is_cancelled() {
-            return Outcome::Cancelled;
-        }
-        if audio.len() > self.limits.max_audio_samples {
-            return Outcome::Failed { reason: FailReason::RecordingTooLong, detail: None };
-        }
-        let profile = self.profiles.get(&job.profile_id).unwrap_or_else(|| self.profiles.resolve(&job.target));
-
-        on_event(JobEvent::Stage(Stage::Transcribing));
-        let transcript = match self.backends.transcriber.transcribe(audio, cancel) {
-            Ok(text) => text,
-            Err(_) if cancel.is_cancelled() => return Outcome::Cancelled,
-            Err(err) => return failed(FailReason::TranscriptionFailed, err),
-        };
-        if cancel.is_cancelled() {
-            return Outcome::Cancelled;
-        }
-        let transcript = transcript.trim();
-        if transcript.is_empty() {
-            return Outcome::NoSpeech;
-        }
-        on_event(JobEvent::Transcript(transcript));
-        *saved_transcript = Some(transcript.to_owned());
-
-        let (raw, finish) = match job.mode {
-            Mode::Dictation => (remove_fillers(transcript), FinishReason::Stop),
-            Mode::Prompt => {
-                let label = target_label(&job.target);
-                let history = self.backends.history.context(&profile.id, &job.target.app_key());
-                let messages = build_prompt_messages(&PromptRequest {
-                    transcript,
-                    profile,
-                    target_label: &label,
-                    surrounding: job.surrounding.as_ref(),
-                    history: &history,
-                });
-                on_event(JobEvent::Stage(Stage::Generating));
-                let deadline = Instant::now() + self.limits.generation_timeout;
-                let request = GenerationRequest { messages: &messages, max_new_tokens: self.limits.max_new_tokens, deadline };
-                let mut forward = |token: &str| on_event(JobEvent::Token(token));
-                let generation = match self.backends.generator.generate(&request, cancel, &mut forward) {
-                    Ok(generation) => generation,
-                    Err(_) if cancel.is_cancelled() => return Outcome::Cancelled,
-                    Err(_) if Instant::now() > deadline => return Outcome::Failed { reason: FailReason::TimedOut, detail: None },
-                    Err(err) => return failed(FailReason::GenerationFailed, err),
-                };
-                // A result that arrives after the deadline is discarded, never inserted late.
-                if Instant::now() > deadline {
-                    return Outcome::Failed { reason: FailReason::TimedOut, detail: None };
-                }
-                (generation.text, generation.finish)
-            }
-        };
-
-        let text = match sanitize_output(&raw, profile.newlines, self.limits.max_output_chars) {
-            Ok(sanitized) if sanitized.truncated || finish == FinishReason::Length => {
-                return Outcome::Blocked { text: sanitized.text, reason: BlockReason::OutputTruncated, detail: None };
-            }
-            Ok(sanitized) => sanitized.text,
-            Err(_) => return Outcome::Failed { reason: FailReason::EmptyOutput, detail: None },
-        };
-
+    fn insert(&self, job: &Job, profile: &Profile, text: String, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
         on_event(JobEvent::Stage(Stage::Inserting));
-        match self.backends.context.foreground() {
+        match self.context.foreground() {
             Ok(window) if window == job.target.window => {}
             Ok(_) => return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: None },
             Err(err) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(err.0) },
         }
         // Cancellation outranks insertion; this is the last check before the paste effect.
-        if cancel.is_cancelled() {
+        if job.cancel.is_cancelled() {
             return Outcome::Cancelled;
         }
-        match self.backends.inserter.insert(&job.target.window, &text, profile.paste) {
+        match self.inserter.insert(&job.target.window, &text, profile.paste) {
             Ok(()) => Outcome::Inserted { text },
             Err(err) => Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some(err.0) },
         }
     }
 }
 
-fn failed(reason: FailReason, err: BackendError) -> Outcome {
-    Outcome::Failed { reason, detail: Some(err.0) }
-}
-
-fn target_label(ctx: &ActiveContext) -> String {
-    match ctx.url_host() {
-        Some(host) => format!("{host} in {}", ctx.normalized_process()),
-        None => ctx.normalized_process(),
-    }
-}
+pub const LOCAL_CLIENT: &str = "local";
 
 #[cfg(test)]
 mod tests {
@@ -411,6 +432,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+    use crate::prompt::Role;
 
     const TARGET: WindowIdentity = WindowIdentity { handle: 42, process_id: 7 };
 
@@ -455,11 +477,30 @@ mod tests {
         cancel_during: bool,
         error: Option<String>,
         calls: Mutex<Vec<Vec<ChatMessage>>>,
+        /// Outputs for later calls (the repair rounds), consumed in order after the first call.
+        later: Mutex<Vec<String>>,
+        later_delay: Duration,
+        cancel_on_later: bool,
     }
 
     impl Generator for FakeGenerator {
         fn generate(&self, req: &GenerationRequest<'_>, cancel: &CancelToken, on_token: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
-            self.calls.lock().unwrap().push(req.messages.to_vec());
+            let call = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.push(req.messages.to_vec());
+                calls.len()
+            };
+            if call > 1 {
+                std::thread::sleep(self.later_delay);
+                if self.cancel_on_later {
+                    cancel.cancel();
+                    return Err(BackendError("worker killed".into()));
+                }
+                let mut later = self.later.lock().unwrap();
+                let text = if later.is_empty() { self.output.clone() } else { later.remove(0) };
+                on_token(&text);
+                return Ok(Generation { text, finish: FinishReason::Stop });
+            }
             std::thread::sleep(self.delay);
             if self.cancel_during {
                 cancel.cancel();
@@ -794,5 +835,165 @@ mod tests {
         let messages = h.generator.calls.lock().unwrap()[0].clone();
         assert!(messages.iter().any(|m| m.role == crate::prompt::Role::Assistant && m.content == "PAST-PROMPT"));
         assert!(messages.last().unwrap().content.contains("<previous_prompt>\nPREVIOUS-PROMPT\n</previous_prompt>"));
+    }
+
+    const BAD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 3): Build.\nStep 3: Test.";
+    const GOOD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 1): Build.\nLoop: if it fails, return to Step 2 (max 2 rounds).";
+
+    fn scripted(first: &str, later: &[&str]) -> FakeGenerator {
+        FakeGenerator { output: first.into(), later: Mutex::new(later.iter().map(|s| s.to_string()).collect()), ..Default::default() }
+    }
+
+    fn calls(h: &Harness) -> usize {
+        h.generator.calls.lock().unwrap().len()
+    }
+
+    #[test]
+    fn valid_graph_is_inserted_without_repair() {
+        let h = harness(chat_ctx(), "x", generator(GOOD_GRAPH), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::Valid));
+        assert_eq!(calls(&h), 1);
+        let h = harness(chat_ctx(), "x", generator("Plain prompt."), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::Unstructured));
+    }
+
+    #[test]
+    fn malformed_graph_is_repaired_once() {
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let mut stages = Vec::new();
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        let report = h.orchestrator.finish(job, &[0.0; 16], &mut |e| if let JobEvent::Stage(s) = e { stages.push(s) });
+        assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert_eq!(stages, vec![Stage::Transcribing, Stage::Generating, Stage::Revising, Stage::Inserting]);
+        let calls = h.generator.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let repair = &calls[1];
+        assert_eq!(&repair[..calls[0].len()], &calls[0][..]);
+        assert_eq!(repair[repair.len() - 2], ChatMessage { role: Role::Assistant, content: BAD_GRAPH.into() });
+        assert!(repair.last().unwrap().content.contains("Step 2 depends on step 3"));
+    }
+
+    #[test]
+    fn failed_repair_keeps_first_draft_and_stays_bounded() {
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert_eq!(calls(&h), 2);
+        let limits = Limits { max_structure_repairs: 0, ..Limits::default() };
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), limits);
+        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::KeptOriginal));
+        assert_eq!(calls(&h), 1);
+    }
+
+    #[test]
+    fn late_repair_is_discarded_for_the_in_time_draft() {
+        let limits = Limits { generation_timeout: Duration::from_millis(30), ..Limits::default() };
+        let generator = FakeGenerator { later_delay: Duration::from_millis(60), ..scripted(BAD_GRAPH, &[GOOD_GRAPH]) };
+        let h = harness(chat_ctx(), "x", generator, ContextPolicy::default(), limits);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+    }
+
+    #[test]
+    fn cancel_during_repair_prevents_insertion() {
+        let generator = FakeGenerator { cancel_on_later: true, ..scripted(BAD_GRAPH, &[GOOD_GRAPH]) };
+        let h = harness(chat_ctx(), "x", generator, ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Cancelled);
+        assert_eq!(inserts(&h), 0);
+        assert!(records(&h).is_empty());
+    }
+
+    #[test]
+    fn local_job_waits_for_remote_holder_and_fails_closed_when_busy() {
+        let limits = Limits { generation_timeout: Duration::from_millis(40), ..Limits::default() };
+        let h = harness(chat_ctx(), "x", generator("Prompt."), ContextPolicy::default(), limits);
+        let scheduler = h.orchestrator.service().scheduler();
+        let held = scheduler.acquire(Priority::Device, "phone", &CancelToken::default(), Instant::now() + Duration::from_secs(5)).unwrap();
+        let report = run(&h, Mode::Prompt);
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::EngineBusy, .. }));
+        assert!(h.generator.calls.lock().unwrap().is_empty());
+        assert_eq!(inserts(&h), 0);
+        assert!(!report.history_saved);
+        drop(held);
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Prompt.".into() });
+    }
+
+    #[test]
+    fn flat_profiles_and_dictation_skip_structure_checks() {
+        let ctx = ActiveContext { window: TARGET, process_name: "chrome.exe".into(), url: Some("https://www.perplexity.ai/".into()), ..Default::default() };
+        let h = harness(ctx, "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.profile_id, "perplexity");
+        assert_eq!(report.structure, None);
+        assert_eq!(calls(&h), 1);
+        let h = harness(chat_ctx(), "x", generator("unused"), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Dictation).structure, None);
+    }
+
+    fn notepad_ctx() -> ActiveContext {
+        ActiveContext { window: TARGET, process_name: "notepad.exe".into(), window_title: "notes".into(), url: None }
+    }
+
+    #[test]
+    fn answers_are_shown_never_pasted_or_recorded() {
+        let h = harness(chat_ctx(), "what is a mutex", generator("A lock that allows one owner at a time."), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Answer);
+        assert_eq!(report.outcome, Outcome::Answered { text: "A lock that allows one owner at a time.".into() });
+        assert_eq!(inserts(&h), 0);
+        assert!(!report.history_saved && records(&h).is_empty());
+        assert!(last_user_message(&h).contains("<transcript>\nwhat is a mutex\n</transcript>"));
+        let truncated = harness(chat_ctx(), "x", FakeGenerator { output: "Partial".into(), finish: Some(FinishReason::Length), ..Default::default() }, ContextPolicy::default(), Limits::default());
+        assert!(matches!(run(&truncated, Mode::Answer).outcome, Outcome::Answered { .. }));
+        assert_eq!(inserts(&truncated), 0);
+        let terminal = ActiveContext { window: TARGET, process_name: "WindowsTerminal.exe".into(), window_title: "pwsh".into(), url: None };
+        let h = harness(terminal, "list the steps", generator("1. Build\n2. Test"), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Answer).outcome, Outcome::Answered { text: "1. Build\n2. Test".into() }, "answers keep line breaks in single-line apps");
+    }
+
+    #[test]
+    fn auto_mode_dictates_outside_ai_apps_unless_asked_for_a_prompt() {
+        let h = harness(notepad_ctx(), "um, meeting moved to Friday.", generator("unused"), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_auto_mode(true);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: "Meeting moved to Friday.".into() });
+        assert_eq!(calls(&h), 0, "no prompt is written outside AI apps");
+        assert_eq!(records(&h)[0].mode, Mode::Dictation, "history keeps the mode actually used");
+
+        let cue = harness(notepad_ctx(), "Prompt: plan the launch", generator("Plan the launch."), ContextPolicy::default(), Limits::default());
+        cue.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&cue, Mode::Prompt).outcome, Outcome::Inserted { text: "Plan the launch.".into() });
+        assert!(last_user_message(&cue).contains("<transcript>\nplan the launch\n</transcript>"), "cue word removed");
+
+        let chat = harness(chat_ctx(), "compare pricing", generator("Compare pricing."), ContextPolicy::default(), Limits::default());
+        chat.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&chat, Mode::Prompt).outcome, Outcome::Inserted { text: "Compare pricing.".into() });
+        let dictate = harness(chat_ctx(), "dictate, hello there", generator("unused"), ContextPolicy::default(), Limits::default());
+        dictate.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&dictate, Mode::Prompt).outcome, Outcome::Inserted { text: "hello there".into() });
+        assert_eq!(calls(&dictate), 0);
+    }
+
+    #[test]
+    fn auto_mode_off_and_explicit_modes_are_unchanged() {
+        let h = harness(notepad_ctx(), "plan the launch", generator("Plan the launch."), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Plan the launch.".into() });
+        let d = harness(chat_ctx(), "Prompt: x", generator("unused"), ContextPolicy::default(), Limits::default());
+        d.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&d, Mode::Dictation).outcome, Outcome::Inserted { text: "Prompt: x".into() }, "dictation hotkey ignores cues");
+    }
+
+    #[test]
+    fn vocabulary_corrects_speech_and_spoken_commands_shape_dictation() {
+        let h = harness(notepad_ctx(), "Ask prompt if I. New line. Thanks.", generator("unused"), ContextPolicy::default(), Limits::default());
+        h.orchestrator.service().set_vocabulary(crate::dictation::Vocabulary {
+            words: vec![],
+            replacements: vec![crate::dictation::Replacement { from: "prompt if I".into(), to: "Promptify".into() }],
+        });
+        assert_eq!(run(&h, Mode::Dictation).outcome, Outcome::Inserted { text: "Ask Promptify.\nThanks.".into() });
     }
 }

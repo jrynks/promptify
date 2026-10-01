@@ -12,17 +12,32 @@ pub fn default_input_name() -> Option<String> {
     device.description().ok().map(|d| d.name().to_owned())
 }
 
+/// Sent once by the capture thread: the device name and the shared buffer, or why it failed.
+type Ready = Result<(String, Arc<Mutex<CaptureBuffer>>), String>;
+
 /// An in-progress capture from the system default microphone.
 pub struct Recording {
     stop_tx: mpsc::Sender<()>,
     thread: JoinHandle<Result<CapturedAudio, String>>,
+    buffer: Arc<Mutex<CaptureBuffer>>,
+}
+
+/// Read access to a recording's audio while it is still being captured.
+#[derive(Clone)]
+pub struct LiveAudio(Arc<Mutex<CaptureBuffer>>);
+
+impl LiveAudio {
+    /// Copies the 16 kHz samples from `start` to the current end.
+    pub fn copy_from(&self, start: usize) -> Vec<f32> {
+        self.0.lock().unwrap().samples().get(start..).map(<[f32]>::to_vec).unwrap_or_default()
+    }
 }
 
 impl Recording {
     /// Opens whatever the OS default input device is right now, so default-device changes apply
     /// to the next recording.
     pub fn start(max_samples: usize, on_level: impl Fn(f32) + Send + 'static) -> Result<Self, String> {
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<String, String>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Ready>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         // cpal streams are not Send on every platform, so the stream lives on its own thread.
         let thread = std::thread::Builder::new()
@@ -30,9 +45,9 @@ impl Recording {
             .spawn(move || capture_thread(max_samples, on_level, ready_tx, stop_rx))
             .map_err(|e| format!("could not start capture thread: {e}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(device)) => {
+            Ok(Ok((device, buffer))) => {
                 log::info!("recording from default input device {device:?}");
-                Ok(Self { stop_tx, thread })
+                Ok(Self { stop_tx, thread, buffer })
             }
             Ok(Err(err)) => Err(err),
             Err(_) => {
@@ -40,6 +55,10 @@ impl Recording {
                 Err("the microphone did not start in time".into())
             }
         }
+    }
+
+    pub fn live(&self) -> LiveAudio {
+        LiveAudio(self.buffer.clone())
     }
 
     pub fn stop(self) -> Result<CapturedAudio, String> {
@@ -51,7 +70,7 @@ impl Recording {
 fn capture_thread(
     max_samples: usize,
     on_level: impl Fn(f32) + Send + 'static,
-    ready_tx: mpsc::Sender<Result<String, String>>,
+    ready_tx: mpsc::Sender<Ready>,
     stop_rx: mpsc::Receiver<()>,
 ) -> Result<CapturedAudio, String> {
     let fail = |msg: String| {
@@ -88,7 +107,7 @@ fn capture_thread(
     if let Err(e) = stream.play() {
         return fail(format!("Could not start the microphone: {e}"));
     }
-    let _ = ready_tx.send(Ok(name));
+    let _ = ready_tx.send(Ok((name, buffer.clone())));
 
     let _ = stop_rx.recv();
     drop(stream);
@@ -96,8 +115,7 @@ fn capture_thread(
     if let Some(err) = stream_error.lock().unwrap().take() {
         return Err(format!("The microphone stopped: {err}"));
     }
-    let buffer = Arc::try_unwrap(buffer).map_err(|_| "audio buffer still in use".to_string())?;
-    Ok(buffer.into_inner().unwrap().finish())
+    Ok(buffer.lock().unwrap().take())
 }
 
 fn build<T>(

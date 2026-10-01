@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use promptify_core::llm_protocol::{WireFinish, WorkerEvent, WorkerRequest, chatml_prompt};
+use promptify_core::llm_protocol::{WireFinish, WorkerEvent, WorkerRequest, chatml_prompt_with_prefix};
 use promptify_core::models::{Manifest, ModelKind, final_path, is_installed};
 use promptify_core::pipeline::{BackendError, CancelToken, FinishReason, Generation, GenerationRequest, Generator};
 
@@ -183,7 +183,9 @@ impl LlmWorker {
         let load_deadline = request.deadline.max(Instant::now() + LOAD_TIMEOUT);
         let worker = self.ready(slot, load_deadline)?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        worker.send(&WorkerRequest::Generate { id, prompt: chatml_prompt(request.messages), max_new_tokens: request.max_new_tokens })?;
+        let (prompt, prefix) = chatml_prompt_with_prefix(request.messages, request.stable_prefix);
+        let prefix_bytes = (prefix > 0).then_some(prefix);
+        worker.send(&WorkerRequest::Generate { id, prompt, max_new_tokens: request.max_new_tokens, prefix_bytes })?;
 
         let mut text = String::new();
         let mut cancel_sent: Option<Instant> = None;
@@ -205,7 +207,8 @@ impl LlmWorker {
                         on_token(&piece);
                     }
                 }
-                Ok(WorkerEvent::Done { id: got, finish }) if got == id => {
+                Ok(WorkerEvent::Done { id: got, finish, prompt_tokens, cached_tokens, prefill_ms }) if got == id => {
+                    log::info!("generation: {prompt_tokens} prompt tokens, {cached_tokens} from cache, prefill {prefill_ms} ms");
                     return match finish {
                         WireFinish::Stop => Ok(Generation { text, finish: FinishReason::Stop }),
                         WireFinish::Length => Ok(Generation { text, finish: FinishReason::Length }),

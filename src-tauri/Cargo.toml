@@ -21,6 +21,9 @@ enigo = "0.6.1"
 hound = "3.5.1"
 log = "0.4.34"
 promptify-core = { path = "../crates/promptify-core" }
+promptify-mcp = { path = "../crates/promptify-mcp" }
+promptify-protocol = { path = "../crates/promptify-protocol" }
+promptify-server = { path = "../crates/promptify-server" }
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -29,6 +32,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 whisper-rs = { version = "0.16.0", features = ["raw-api"] }
 x-win = "5.8.0"
 
@@ -38,3 +42,7 @@ whisper-rs = { version = "0.16.0", features = ["vulkan"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["metal"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Accessibility"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

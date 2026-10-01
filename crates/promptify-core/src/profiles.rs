@@ -2,6 +2,7 @@ use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::context::{ActiveContext, normalize_process};
+use crate::structure::Structure;
 
 pub const FALLBACK_PROFILE_ID: &str = "generic";
 
@@ -60,6 +61,7 @@ struct RawProfile {
     paste: PasteChord,
     #[serde(default)]
     newlines: NewlinePolicy,
+    structure: Option<Structure>,
     #[serde(default)]
     examples: Vec<Example>,
     #[serde(default, rename = "match")]
@@ -112,6 +114,7 @@ pub struct Profile {
     pub style: String,
     pub paste: PasteChord,
     pub newlines: NewlinePolicy,
+    pub structure: Structure,
     pub examples: Vec<Example>,
     #[serde(skip)]
     rules: Vec<Rule>,
@@ -152,6 +155,14 @@ impl ProfileSet {
             if p.style.trim().is_empty() {
                 return Err(invalid("style must not be empty"));
             }
+            let structure = p.structure.unwrap_or(match (p.kind, p.newlines) {
+                (ProfileKind::Search | ProfileKind::ImageGen, _) => Structure::Flat,
+                (_, NewlinePolicy::Collapse) => Structure::Inline,
+                _ => Structure::Graph,
+            });
+            if structure == Structure::Graph && p.newlines == NewlinePolicy::Collapse {
+                return Err(invalid("graph structure needs line breaks; use inline"));
+            }
             let mut rules = Vec::with_capacity(p.rules.len());
             for r in &p.rules {
                 let title = match &r.title {
@@ -181,6 +192,7 @@ impl ProfileSet {
                 style: p.style.trim().to_owned(),
                 paste: p.paste,
                 newlines: p.newlines,
+                structure,
                 examples: p.examples,
                 rules,
             });
