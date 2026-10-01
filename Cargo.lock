@@ -4069,6 +4069,8 @@ dependencies = [
  "hound",
  "log",
  "promptify-core",
+ "promptify-protocol",
+ "promptify-server",
  "reqwest",
  "serde",
  "serde_json",
@@ -4078,6 +4080,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-log",
  "tauri-plugin-single-instance",
+ "tokio",
  "whisper-rs",
  "x-win",
 ]

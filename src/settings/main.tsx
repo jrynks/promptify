@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type ModelStatus, type PreviewOutput, type ProfileSummary } from "../api";
+import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type ModelStatus, type OfferInfo, type PreviewOutput, type ProfileSummary, type RemoteInfo } from "../api";
 import "./settings.css";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
@@ -270,6 +270,111 @@ function Playground({ profiles }: { profiles: ProfileSummary[] }) {
   );
 }
 
+function relayLabel(info: RemoteInfo): string {
+  const relay = info.status?.relay;
+  if (!relay || relay.state === "disabled") return "No relay (local network only)";
+  if (relay.state === "connected") return "Relay connected";
+  if (relay.state === "connecting") return "Connecting to relay…";
+  return `Relay error: ${relay.message}`;
+}
+
+function Remote() {
+  const [info, setInfo] = useState<RemoteInfo | null>(null);
+  const [relayUrl, setRelayUrl] = useState("");
+  const [offer, setOffer] = useState<OfferInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+
+  const refresh = useCallback(() => {
+    void api.remoteInfo().then((next) => {
+      setInfo(next);
+      if (next.status?.pairing_expires_unix == null) setOffer(null);
+    });
+  }, []);
+
+  useEffect(() => {
+    void api.remoteInfo().then((next) => {
+      setInfo(next);
+      setRelayUrl(next.relay_url ?? "");
+    });
+    const timer = window.setInterval(() => {
+      setNow(Date.now() / 1000);
+      refresh();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const act = (fn: () => Promise<unknown>) => {
+    setError(null);
+    fn().then(refresh, (e) => {
+      setError(String(e));
+      refresh();
+    });
+  };
+
+  if (!info) return null;
+  const save = (enabled: boolean, lan: boolean) => act(() => api.setRemoteSettings(enabled, relayUrl.trim() || null, lan));
+  const secondsLeft = offer ? Math.max(0, Math.round(offer.expires_unix - now)) : 0;
+
+  return (
+    <section>
+      <h2>Phones and remote access</h2>
+      <p className="hint">
+        Let your own phones use this computer's local models. Everything between a paired phone and this computer is end-to-end encrypted; a relay only forwards scrambled data it cannot read. Phones never get your history or screen text.
+      </p>
+      <label className="inline">
+        <input type="checkbox" checked={info.enabled} onChange={(e) => save(e.target.checked, info.lan_direct)} />
+        Allow paired devices to use Promptify
+      </label>
+      <label className="inline">
+        <input type="checkbox" checked={info.lan_direct} onChange={(e) => save(info.enabled, e.target.checked)} />
+        Accept direct connections on this network
+      </label>
+      <label>
+        Relay for access over the internet (optional, self-hosted)
+        <input placeholder="wss://relay.example.net" value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} />
+      </label>
+      <button onClick={() => save(info.enabled, info.lan_direct)}>Save relay</button>
+      {info.enabled && info.status && (
+        <p className="hint">
+          {relayLabel(info)} · {info.status.sessions} connected · local API on {info.status.listen} (token in {info.api_token_path})
+        </p>
+      )}
+      {info.enabled && (
+        <div>
+          {offer && secondsLeft > 0 ? (
+            <div className="pairing">
+              <img alt="Pairing code" width={240} height={240} src={`data:image/svg+xml;utf8,${encodeURIComponent(offer.svg)}`} />
+              <p className="hint">Scan with the Promptify app within {secondsLeft}s. The code works once.</p>
+              <details>
+                <summary>Pairing link</summary>
+                <pre>{offer.uri}</pre>
+              </details>
+              <button onClick={() => act(api.cancelPairing)}>Cancel pairing</button>
+            </div>
+          ) : (
+            <button onClick={() => act(() => api.createPairingOffer().then(setOffer))}>Pair a phone</button>
+          )}
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+      {info.error && <p className="error">{info.error}</p>}
+      <ul className="history">
+        {info.devices.map((d) => (
+          <li key={d.id}>
+            <strong>{d.name}</strong>
+            <span className="hint">
+              {" "}· paired {new Date(d.paired_unix * 1000).toLocaleDateString()}
+              {d.last_seen_unix ? ` · last seen ${new Date(d.last_seen_unix * 1000).toLocaleString()}` : ""}
+            </span>
+            <button className="link" onClick={() => act(() => api.removeDevice(d.id))}>Remove</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Settings() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -287,6 +392,7 @@ function Settings() {
       <Status info={info} onChange={refreshInfo} />
       <Models onChange={refreshInfo} />
       <History info={info} onChange={refreshInfo} />
+      <Remote />
       <Playground profiles={profiles} />
     </main>
   );

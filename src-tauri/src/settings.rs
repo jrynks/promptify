@@ -14,7 +14,11 @@ pub fn app_data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join(APP_IDENTIFIER)
 }
 
+/// `PROMPTIFY_MODELS_DIR` lets isolated test data folders reuse already-downloaded models.
 pub fn models_dir(data_dir: &Path) -> PathBuf {
+    if let Some(dir) = std::env::var_os("PROMPTIFY_MODELS_DIR") {
+        return PathBuf::from(dir);
+    }
     data_dir.join("models")
 }
 
@@ -27,11 +31,27 @@ pub struct AppSettings {
     pub prompt_hotkey: Option<String>,
     pub dictation_hotkey: Option<String>,
     pub use_gpu: bool,
+    /// Lets paired phones and local tools use this desktop's engines. Off until the user turns it on.
+    pub server_enabled: bool,
+    /// Self-hosted relay for access over the internet, e.g. wss://relay.example.net.
+    pub relay_url: Option<String>,
+    /// Accept direct (still end-to-end encrypted) connections from the local network.
+    pub lan_direct: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { stt_model: None, llm_model: None, history_enabled: true, prompt_hotkey: None, dictation_hotkey: None, use_gpu: true }
+        Self {
+            stt_model: None,
+            llm_model: None,
+            history_enabled: true,
+            prompt_hotkey: None,
+            dictation_hotkey: None,
+            use_gpu: true,
+            server_enabled: false,
+            relay_url: None,
+            lan_direct: false,
+        }
     }
 }
 

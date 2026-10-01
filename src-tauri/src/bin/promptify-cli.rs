@@ -26,7 +26,10 @@ const USAGE: &str = "usage:
   promptify-cli transcribe <file.wav>
   promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
   promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE]
-  promptify-cli eval <cases.toml>";
+  promptify-cli eval <cases.toml>
+  promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE]
+  promptify-cli remote pair <pairing-link> [--name NAME] [--direct] [--identity FILE]
+  promptify-cli remote send <text> [--app APP] [--url URL] [--dictation] [--direct] [--identity FILE]";
 
 /// Feeds typed text through the pipeline in place of speech.
 struct TextTranscriber(String);
@@ -127,6 +130,53 @@ impl log::Log for StderrLogger {
         }
     }
     fn flush(&self) {}
+}
+
+/// Acts as a paired phone, for testing remote access end to end.
+fn remote(args: &[String], data_dir: &Path) -> Result<(), String> {
+    use promptify_protocol::messages::{ServerMessage, WireContext, WireMode};
+    use promptify_server::client;
+
+    let identity_path = flag(args, "--identity").map(PathBuf::from).unwrap_or_else(|| data_dir.join("remote-test-client.json"));
+    let direct = args.iter().any(|a| a == "--direct");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    match args.get(1).map(String::as_str) {
+        Some("pair") => {
+            let link = args.get(2).ok_or(USAGE)?;
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let offer = promptify_protocol::pairing::PairingOffer::parse(link, now).map_err(|e| e.to_string())?;
+            let name = flag(args, "--name").unwrap_or_else(|| "Promptify CLI".into());
+            let (identity, _) = runtime.block_on(client::pair(&offer, &name, direct))?;
+            identity.save(&identity_path)?;
+            println!("paired as {} (identity saved to {})", identity.device_id, identity_path.display());
+        }
+        Some("send") => {
+            let text = args.get(2).ok_or(USAGE)?;
+            let identity = client::ClientIdentity::load(&identity_path)?;
+            let mode = if args.iter().any(|a| a == "--dictation") { WireMode::Dictation } else { WireMode::Prompt };
+            let context = WireContext { app: flag(args, "--app").unwrap_or_default(), url: flag(args, "--url"), title: String::new() };
+            let started = Instant::now();
+            let result = runtime.block_on(async {
+                let mut connection = client::open(&identity, direct).await?;
+                connection
+                    .transform_text(1, mode, context, text, &mut |event| {
+                        if let ServerMessage::Stage { stage, .. } = event {
+                            eprintln!("[{:.1?}] {stage}", started.elapsed());
+                        }
+                    })
+                    .await
+            })?;
+            match result {
+                ServerMessage::Done { text, profile, structure, truncated, .. } => {
+                    eprintln!("profile={profile} structure={structure:?} truncated={truncated} in {:.1?}", started.elapsed());
+                    println!("{text}");
+                }
+                other => return Err(format!("{other:?}")),
+            }
+        }
+        _ => return Err(USAGE.into()),
+    }
+    Ok(())
 }
 
 fn main() {
@@ -280,6 +330,36 @@ fn run() -> Result<(), String> {
                 }
             }
             println!("graph: {graph_pass}/{graph_total}  flat: {flat_pass}/{flat_total}  repaired: {repaired}");
+        }
+        Some("remote") => remote(&args, &data_dir)?,
+        Some("serve") => {
+            use promptify_core::scheduler::SchedulerLimits;
+            use promptify_core::transform::TransformService;
+            let shared: SharedSettings = Arc::new(RwLock::new(app_settings));
+            let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
+            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
+            stt.preload().map_err(|e| e.0)?;
+            llm.preload().map_err(|e| e.0)?;
+            let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
+            let service = Arc::new(TransformService::new(stt, llm, Arc::new(NoHistory), ProfileSet::bundled(), limits, SchedulerLimits::default()));
+            let listen: std::net::SocketAddr = flag(&args, "--listen").unwrap_or_else(|| "127.0.0.1:47822".into()).parse().map_err(|e| format!("bad --listen: {e}"))?;
+            let config = promptify_server::ServerConfig {
+                data_dir: data_dir.clone(),
+                relay_url: flag(&args, "--relay"),
+                listen: Some(listen),
+                advertise_direct: Some(flag(&args, "--advertise").unwrap_or_else(|| listen.to_string())),
+            };
+            let server = promptify_server::RemoteServer::start(config, service)?;
+            let offer = server.pairing_offer(600)?;
+            if let Some(path) = flag(&args, "--offer-file") {
+                std::fs::write(&path, &offer.uri).map_err(|e| e.to_string())?;
+            }
+            println!("{}", offer.uri);
+            eprintln!("serving on {:?}; pairing link valid for 10 minutes; Ctrl+C to stop", server.listen_addr());
+            loop {
+                std::thread::sleep(Duration::from_secs(10));
+                eprintln!("status: {}", serde_json::to_string(&server.status()).unwrap_or_default());
+            }
         }
         _ => return Err(USAGE.into()),
     }

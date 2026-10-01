@@ -83,3 +83,10 @@ label.inline { flex-direction: row; align-items: center; gap: 8px; font-weight: 
 .history .said { margin: 4px 0; font-style: italic; }
 button.link { border: none; background: none; color: LinkText; cursor: pointer; padding: 0 0 0 8px; }
 input.capture { min-width: 320px; font-style: italic; }
+
+.pairing img {
+  background: #fff;
+  padding: 8px;
+  border-radius: 8px;
+}
+

@@ -99,6 +99,36 @@ export interface PreviewInput {
   surroundingText: string | null;
 }
 
+export interface Device {
+  id: string;
+  name: string;
+  public_key: string;
+  paired_unix: number;
+  last_seen_unix: number | null;
+}
+
+export type RelayStatus =
+  | { state: "disabled" }
+  | { state: "connecting" }
+  | { state: "connected" }
+  | { state: "error"; message: string };
+
+export interface RemoteInfo {
+  enabled: boolean;
+  relay_url: string | null;
+  lan_direct: boolean;
+  status: { relay: RelayStatus; listen: string | null; sessions: number; devices: number; pairing_expires_unix: number | null } | null;
+  error: string | null;
+  devices: Device[];
+  api_token_path: string;
+}
+
+export interface OfferInfo {
+  uri: string;
+  svg: string;
+  expires_unix: number;
+}
+
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   listProfiles: () => invoke<ProfileSummary[]>("list_profiles"),
@@ -117,4 +147,11 @@ export const api = {
   setHistoryEnabled: (enabled: boolean) => invoke<void>("set_history_enabled", { enabled }),
   setHotkey: (mode: Mode, accelerator: string) => invoke<void>("set_hotkey", { mode, accelerator }),
   setUseGpu: (enabled: boolean) => invoke<void>("set_use_gpu", { enabled }),
+  remoteInfo: () => invoke<RemoteInfo>("remote_info"),
+  setRemoteSettings: (enabled: boolean, relayUrl: string | null, lanDirect: boolean) =>
+    invoke<void>("set_remote_settings", { enabled, relayUrl, lanDirect }),
+  createPairingOffer: () => invoke<OfferInfo>("create_pairing_offer"),
+  cancelPairing: () => invoke<void>("cancel_pairing"),
+  removeDevice: (id: string) => invoke<boolean>("remove_device", { id }),
+  renameDevice: (id: string, name: string) => invoke<boolean>("rename_device", { id, name }),
 };

@@ -5,6 +5,7 @@ pub mod download;
 mod hotkeys;
 pub mod insert;
 pub mod llm_client;
+mod remote;
 pub mod settings;
 pub mod stt;
 mod system_context;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub downloads: Arc<Downloads>,
     pub stt: Arc<WhisperEngine>,
     pub llm: Arc<LlmWorker>,
+    pub remote: remote::RemoteState,
 }
 
 /// Selects an installed model for any kind that has none, preferring the balanced tier.
@@ -114,6 +116,12 @@ pub fn run() {
             commands::set_history_enabled,
             commands::set_hotkey,
             commands::set_use_gpu,
+            remote::remote_info,
+            remote::set_remote_settings,
+            remote::create_pairing_offer,
+            remote::cancel_pairing,
+            remote::remove_device,
+            remote::rename_device,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -171,7 +179,9 @@ pub fn run() {
                 downloads: Arc::default(),
                 stt,
                 llm,
+                remote: remote::RemoteState::default(),
             });
+            remote::apply(&app.state::<AppState>());
 
             tray::build(&handle, &tray_hotkeys)?;
             place_overlay(&handle);
