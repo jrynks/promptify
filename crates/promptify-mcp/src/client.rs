@@ -16,7 +16,9 @@
 //! Only servers allowed to see the transcript may offer loop tools.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use promptify_core::context::ActiveContext;
@@ -33,6 +35,8 @@ pub const MAX_SERVERS: usize = 8;
 pub const MAX_HOOKS_PER_SERVER: usize = 4;
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_MAX_CHARS: usize = 2000;
+/// `npx -y` and `uvx` servers can take this long to download and start the first time.
+pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,17 +90,53 @@ pub struct McpConfig {
     pub servers: BTreeMap<String, ServerConfig>,
 }
 
+/// mcp.json is hand-written configuration; anything larger is a mistake.
+pub const MAX_CONFIG_BYTES: usize = 256 * 1024;
+
 impl McpConfig {
     pub fn load(path: &Path) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let config: McpConfig = serde_json::from_str(&text).map_err(|e| format!("mcp.json is invalid: {e}"))?;
-                config.validate()?;
-                Ok(config)
-            }
+            Ok(text) => Self::parse(&text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(format!("cannot read mcp.json: {e}")),
         }
+    }
+
+    /// The one check used both when loading and before the editor saves, so a saved file always loads.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if text.len() > MAX_CONFIG_BYTES {
+            return Err(format!("mcp.json is larger than {} KB", MAX_CONFIG_BYTES / 1024));
+        }
+        if text.trim().is_empty() {
+            return Ok(Self::default());
+        }
+        let config: McpConfig = serde_json::from_str(text).map_err(|e| format!("mcp.json is invalid: {e}"))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Writes `text` only if it is valid and the file still holds `original`, i.e. nobody else changed it
+    /// since it was opened. The write is atomic, so a crash never leaves a half-written file.
+    pub fn save(path: &Path, text: &str, original: &str) -> Result<Self, String> {
+        let config = Self::parse(text)?;
+        let current = match std::fs::read_to_string(path) {
+            Ok(current) => current,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("cannot read mcp.json: {e}")),
+        };
+        if current != original {
+            return Err("mcp.json was changed outside the editor. Reload it before saving.".into());
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|e| format!("cannot save mcp.json: {e}"))?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot save mcp.json: {e}")
+        })?;
+        Ok(config)
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -192,7 +232,7 @@ type Client = RunningService<RoleClient, ()>;
 pub struct McpEnricher {
     config: McpConfig,
     runtime: tokio::runtime::Runtime,
-    clients: HashMap<String, tokio::sync::Mutex<Option<Client>>>,
+    clients: Arc<HashMap<String, tokio::sync::Mutex<Option<Client>>>>,
     /// Tool descriptions for the tool loop, fetched once per server.
     loop_specs: std::sync::Mutex<HashMap<String, Vec<ToolSpec>>>,
 }
@@ -203,12 +243,47 @@ async fn connect(server: &ServerConfig) -> Result<Client, String> {
         let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(url.as_str());
         return ().serve(transport).await.map_err(|e| e.to_string());
     }
-    let mut command = tokio::process::Command::new(server.command.as_deref().unwrap_or_default());
-    command.args(&server.args).envs(&server.env).kill_on_drop(true);
+    let program = server.command.as_deref().unwrap_or_default();
+    let path = match server.env.get("PATH") {
+        Some(path) => OsString::from(path),
+        None => server_path(&std::env::var_os("PATH").unwrap_or_default(), std::env::current_exe().ok().as_deref().and_then(Path::parent)),
+    };
+    let mut command = tokio::process::Command::new(resolve_program(program, &path));
+    command.args(&server.args).envs(&server.env).env("PATH", &path).kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
-    let transport = rmcp::transport::TokioChildProcess::new(command).map_err(|e| e.to_string())?;
+    let transport = rmcp::transport::TokioChildProcess::new(command).map_err(|e| format!("cannot start {program}: {e}"))?;
     ().serve(transport).await.map_err(|e| e.to_string())
+}
+
+/// The user's PATH without the app's own folders. `cargo run` adds every native build folder there,
+/// and cmd.exe (which runs npx and the servers it installs) cannot search a PATH that long.
+fn server_path(inherited: &OsStr, app_dir: Option<&Path>) -> OsString {
+    let Some(app_dir) = app_dir else { return inherited.to_owned() };
+    let app = app_dir.to_string_lossy().to_lowercase();
+    let kept = std::env::split_paths(inherited).filter(|dir| {
+        let dir = dir.to_string_lossy().to_lowercase();
+        dir != app && !dir.starts_with(&format!("{app}\\")) && !dir.starts_with(&format!("{app}/"))
+    });
+    std::env::join_paths(kept).unwrap_or_else(|_| inherited.to_owned())
+}
+
+/// Windows only tries `.exe` for a bare name, so `npx` (really `npx.cmd`) would never be found.
+/// Looks the name up in PATH with PATHEXT like a shell does; anything else is left to the OS.
+fn resolve_program(program: &str, path: &OsStr) -> PathBuf {
+    if !cfg!(windows) || program.contains(['/', '\\']) {
+        return PathBuf::from(program);
+    }
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    let extensions: Vec<&str> = pathext.split(';').filter(|e| !e.is_empty()).collect();
+    let lower = program.to_ascii_lowercase();
+    if extensions.iter().any(|e| lower.ends_with(&e.to_ascii_lowercase())) {
+        return PathBuf::from(program);
+    }
+    std::env::split_paths(path)
+        .flat_map(|dir| extensions.iter().map(move |e| dir.join(format!("{program}{e}"))))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from(program))
 }
 
 /// Starts a server, lists its tools and stops it again. Used by the settings page's "Test" button.
@@ -251,7 +326,19 @@ impl McpEnricher {
             .enable_all()
             .build()
             .map_err(|e| e.to_string())?;
-        let clients = config.servers.keys().map(|name| (name.clone(), tokio::sync::Mutex::new(None))).collect();
+        let clients: Arc<HashMap<_, _>> = Arc::new(config.servers.keys().map(|name| (name.clone(), tokio::sync::Mutex::new(None))).collect());
+        // Start servers now: a prompt only waits a few seconds, far less than a cold `npx -y` start.
+        for (name, server) in config.servers.iter().filter(|(_, s)| s.enabled && (!s.hooks.is_empty() || !s.loop_tools.is_empty())) {
+            let (name, server, clients) = (name.clone(), server.clone(), clients.clone());
+            runtime.spawn(async move {
+                let mut slot = clients[&name].lock().await;
+                match tokio::time::timeout(STARTUP_TIMEOUT, connect(&server)).await {
+                    Ok(Ok(client)) => *slot = Some(client),
+                    Ok(Err(e)) => log::warn!("mcp: could not start server {name}: {e}"),
+                    Err(_) => log::warn!("mcp: server {name} did not start within {}s", STARTUP_TIMEOUT.as_secs()),
+                }
+            });
+        }
         Ok(Some(Self { config, runtime, clients, loop_specs: Default::default() }))
     }
 
@@ -266,8 +353,12 @@ impl McpEnricher {
         if slot.is_none() {
             match tokio::time::timeout(timeout, connect(server)).await {
                 Ok(Ok(client)) => *slot = Some(client),
-                _ => {
-                    log::warn!("mcp: could not start server {name}");
+                Ok(Err(e)) => {
+                    log::warn!("mcp: could not start server {name}: {e}");
+                    return None;
+                }
+                Err(_) => {
+                    log::warn!("mcp: server {name} is still starting");
                     return None;
                 }
             }
@@ -407,6 +498,34 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn bare_names_find_cmd_shims_like_npx() {
+        let dir = std::env::temp_dir().join(format!("promptify-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shim = dir.join("fakenpx.cmd");
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+        let path = dir.as_os_str();
+        let found = resolve_program("fakenpx", path);
+        let explicit = resolve_program("fakenpx.cmd", path);
+        let missing = resolve_program("not-installed-anywhere", path);
+        let with_dir = resolve_program(r"C:\tools\fakenpx", path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(found.to_string_lossy().to_lowercase(), shim.to_string_lossy().to_lowercase());
+        assert_eq!(explicit, PathBuf::from("fakenpx.cmd"));
+        assert_eq!(missing, PathBuf::from("not-installed-anywhere"));
+        assert_eq!(with_dir, PathBuf::from(r"C:\tools\fakenpx"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn servers_do_not_inherit_the_apps_own_folders_on_path() {
+        let inherited = OsStr::new(r"C:\ptb\debug\build\whisper\out;C:\nodejs;C:\PTB\Debug;C:\ptb\debug\;C:\ptb\debugger;C:\Users\me\npm");
+        let path = server_path(inherited, Some(Path::new(r"C:\ptb\debug")));
+        assert_eq!(path, OsString::from(r"C:\nodejs;C:\ptb\debugger;C:\Users\me\npm"));
+        assert_eq!(server_path(inherited, None), inherited);
+    }
+
+    #[test]
     fn plans_templated_calls_for_matching_profiles() {
         let c = config(r#"{"servers":{"docs":{"command":"x","profiles":["cursor"],"hooks":[{"tool":"search","arguments":{"query":"{transcript} in {app}","site":["{url}"],"n":3}}]}}}"#);
         let calls = plan_calls(&c, "cursor", "fix login", &target());
@@ -455,6 +574,35 @@ mod tests {
 
     fn validate(json: &str) -> Result<(), String> {
         config(json).validate()
+    }
+
+    #[test]
+    fn editor_saves_only_valid_text_over_the_version_it_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        let good = r#"{"servers":{"docs":{"command":"x","hooks":[{"tool":"search"}]}}}"#;
+
+        // First save creates the file; the editor opened it as empty.
+        assert_eq!(McpConfig::save(&path, good, "").unwrap().servers.len(), 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), good);
+
+        for bad in [r#"{"servers": {"#, r#"{"servers":{"a.b":{"command":"x"}}}"#, r#"{"servers":{"r":{"url":"https://x.example/mcp","loop_tools":["s"]}}}"#] {
+            assert!(McpConfig::save(&path, bad, good).is_err(), "{bad}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), good, "an invalid save leaves the file unchanged");
+        }
+
+        let edited_elsewhere = r#"{"servers":{}}"#;
+        std::fs::write(&path, edited_elsewhere).unwrap();
+        let err = McpConfig::save(&path, good, good).unwrap_err();
+        assert!(err.contains("changed outside"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited_elsewhere);
+
+        let huge = format!(r#"{{"servers":{{}}, "pad": "{}"}}"#, "x".repeat(MAX_CONFIG_BYTES));
+        assert!(McpConfig::save(&path, &huge, edited_elsewhere).unwrap_err().contains("larger than"));
+        assert!(!dir.path().join("mcp.json.tmp").exists());
+
+        assert!(McpConfig::save(&path, "  ", edited_elsewhere).unwrap().servers.is_empty(), "an empty file means no tools");
+        assert_eq!(McpConfig::load(&path).unwrap().servers.len(), 0);
     }
 
     #[test]
