@@ -19,6 +19,7 @@ use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
 use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_structure};
+use crate::tool_loop::{MAX_PLANNER_TOKENS, MAX_TOOL_ROUNDS, ToolRequest, ToolSpec, parse_tool_request, planner_messages};
 
 pub const MAX_TEXT_INPUT_CHARS: usize = 8000;
 pub const MAX_TOOL_CONTEXTS: usize = 4;
@@ -30,15 +31,31 @@ pub const TOOL_CONTEXT_TIMEOUT: Duration = Duration::from_secs(4);
 /// `deadline`; anything they fail to fetch is simply left out.
 pub trait ContextEnricher: Send + Sync {
     fn enrich(&self, profile_id: &str, transcript: &str, target: &ActiveContext, deadline: Instant, cancel: &CancelToken) -> Vec<ToolContext>;
+
+    /// Tools the model may call in the optional tool loop for this profile. Empty turns the loop off.
+    fn loop_tools(&self, _profile_id: &str) -> Vec<ToolSpec> {
+        Vec::new()
+    }
+
+    /// Runs one tool the model asked for. Only called with names returned by [`Self::loop_tools`].
+    fn call_tool(&self, _request: &ToolRequest, _deadline: Instant, _cancel: &CancelToken) -> Option<ToolContext> {
+        None
+    }
 }
 
-/// Applies the size caps here, at the core, whatever the enricher returned.
-pub fn cap_tool_context(contexts: Vec<ToolContext>) -> Vec<ToolContext> {
+/// Applies the size caps here, at the core, whatever the enricher returned. Also returns how many
+/// results were dropped, so the model can be told something was left out.
+pub fn cap_tool_context(contexts: Vec<ToolContext>) -> (Vec<ToolContext>, usize) {
     let mut total = 0;
     let mut out = Vec::new();
-    for mut context in contexts.into_iter().take(MAX_TOOL_CONTEXTS) {
+    let mut omitted = 0;
+    for (index, mut context) in contexts.into_iter().enumerate() {
+        if context.text.trim().is_empty() {
+            continue;
+        }
         let budget = MAX_TOOL_CONTEXT_CHARS.min(MAX_TOOL_CONTEXT_TOTAL_CHARS - total);
-        if budget == 0 || context.text.trim().is_empty() {
+        if index >= MAX_TOOL_CONTEXTS || budget == 0 {
+            omitted += 1;
             continue;
         }
         if context.text.chars().count() > budget {
@@ -49,7 +66,7 @@ pub fn cap_tool_context(contexts: Vec<ToolContext>) -> Vec<ToolContext> {
         total += context.text.chars().count();
         out.push(context);
     }
-    out
+    (out, omitted)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -256,15 +273,24 @@ impl TransformService {
             Mode::Prompt => {
                 let label = target_label(t.target);
                 let history = if t.use_history { self.history.context(&profile.id, &t.target.app_key()) } else { HistoryContext::default() };
-                let tool_context = match self.enricher() {
+                // Tool lookups count against the same deadline as writing the prompt.
+                let deadline = Instant::now() + self.limits.generation_timeout;
+                let (tool_context, omitted) = match self.enricher() {
                     Some(enricher) if t.use_tools => {
-                        let contexts = cap_tool_context(enricher.enrich(&profile.id, transcript, t.target, Instant::now() + TOOL_CONTEXT_TIMEOUT, cancel));
-                        if !contexts.is_empty() {
-                            log::info!("tool context: {} items, {} chars", contexts.len(), contexts.iter().map(|c| c.text.chars().count()).sum::<usize>());
+                        let mut fetched = enricher.enrich(&profile.id, transcript, t.target, Instant::now() + TOOL_CONTEXT_TIMEOUT, cancel);
+                        let tools = enricher.loop_tools(&profile.id);
+                        if !tools.is_empty() && !cancel.is_cancelled() {
+                            on_event(JobEvent::Stage(Stage::Researching));
+                            self.tool_loop(enricher.as_ref(), &tools, transcript, &mut fetched, deadline, cancel);
                         }
-                        contexts
+                        let (contexts, omitted) = cap_tool_context(fetched);
+                        if !contexts.is_empty() || omitted > 0 {
+                            let chars: usize = contexts.iter().map(|c| c.text.chars().count()).sum();
+                            log::info!("tool context: {} items, {chars} chars, {omitted} omitted", contexts.len());
+                        }
+                        (contexts, omitted)
                     }
-                    _ => Vec::new(),
+                    _ => (Vec::new(), 0),
                 };
                 if cancel.is_cancelled() {
                     return TransformOutcome::Cancelled;
@@ -276,9 +302,9 @@ impl TransformService {
                     surrounding: t.surrounding,
                     history: &history,
                     tool_context: &tool_context,
+                    tool_context_omitted: omitted,
                 });
                 on_event(JobEvent::Stage(Stage::Generating));
-                let deadline = Instant::now() + self.limits.generation_timeout;
                 let stable_prefix = stable_prefix_len(profile);
                 let request = GenerationRequest { messages: &messages, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
                 let mut forward = |token: &str| on_event(JobEvent::Token(token));
@@ -311,6 +337,35 @@ impl TransformService {
             Ok(sanitized) => TransformOutcome::Ready { text: sanitized.text },
             Err(_) => TransformOutcome::Failed { reason: FailReason::EmptyOutput, detail: None },
         }
+    }
+
+    /// Lets the model request up to [`MAX_TOOL_ROUNDS`] lookups from the allowlist. Ends at the first
+    /// answer that is not exactly one new allowed call, at the deadline, or on cancellation.
+    fn tool_loop(&self, enricher: &dyn ContextEnricher, tools: &[ToolSpec], transcript: &str, fetched: &mut Vec<ToolContext>, deadline: Instant, cancel: &CancelToken) {
+        let mut calls: Vec<ToolRequest> = Vec::new();
+        for _ in 0..MAX_TOOL_ROUNDS {
+            if cancel.is_cancelled() || Instant::now() >= deadline {
+                break;
+            }
+            let messages = planner_messages(tools, transcript, fetched);
+            let request = GenerationRequest { messages: &messages, stable_prefix: 0, max_new_tokens: MAX_PLANNER_TOKENS, deadline };
+            let Ok(answer) = self.generator.generate(&request, cancel, &mut |_| {}) else { break };
+            if answer.finish != FinishReason::Stop || Instant::now() >= deadline || cancel.is_cancelled() {
+                break;
+            }
+            let Some(call) = parse_tool_request(&answer.text, tools) else { break };
+            if calls.contains(&call) {
+                break;
+            }
+            let call_deadline = deadline.min(Instant::now() + TOOL_CONTEXT_TIMEOUT);
+            let result = enricher.call_tool(&call, call_deadline, cancel);
+            calls.push(call);
+            match result {
+                Some(context) if !cancel.is_cancelled() => fetched.push(context),
+                _ => break,
+            }
+        }
+        log::info!("tool loop: {} calls", calls.len());
     }
 
     /// Validates the draft's task graph and runs at most `max_structure_repairs` rewrites inside the
@@ -543,6 +598,103 @@ mod tests {
         let tool_chars: usize = last.split("<tool_context>\n").skip(1).map(|s| s.split("\n</tool_context>").next().unwrap().chars().count()).sum();
         assert!(tool_chars <= MAX_TOOL_CONTEXT_TOTAL_CHARS, "{tool_chars}");
         assert!(last.contains("truncated"));
+        assert!(last.contains("(7 more tool results were left out to fit the size limit.)"), "10 results, 3 fit");
+    }
+
+    /// Answers planner requests from a script, and prompt requests with a fixed prompt.
+    struct ScriptedGenerator {
+        planner: Mutex<Vec<&'static str>>,
+        planner_calls: AtomicUsize,
+        cancel_after_planner: Option<CancelToken>,
+    }
+
+    impl Generator for ScriptedGenerator {
+        fn generate(&self, req: &GenerationRequest<'_>, _: &CancelToken, _: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
+            if req.max_new_tokens == crate::tool_loop::MAX_PLANNER_TOKENS {
+                self.planner_calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(cancel) = &self.cancel_after_planner {
+                    cancel.cancel();
+                }
+                let mut script = self.planner.lock().unwrap();
+                let text = if script.is_empty() { "NONE" } else { script.remove(0) };
+                return Ok(Generation { text: text.into(), finish: FinishReason::Stop });
+            }
+            Ok(Generation { text: "A finished prompt.".into(), finish: FinishReason::Stop })
+        }
+    }
+
+    #[derive(Default)]
+    struct LoopTools(Mutex<Vec<String>>);
+
+    impl ContextEnricher for LoopTools {
+        fn enrich(&self, _: &str, _: &str, _: &ActiveContext, _: Instant, _: &CancelToken) -> Vec<ToolContext> {
+            Vec::new()
+        }
+        fn loop_tools(&self, _: &str) -> Vec<ToolSpec> {
+            vec![ToolSpec { name: "docs.search".into(), description: "Search the docs".into(), parameters: vec!["query".into()] }]
+        }
+        fn call_tool(&self, request: &ToolRequest, _: Instant, _: &CancelToken) -> Option<ToolContext> {
+            let query = request.arguments["query"].as_str().unwrap_or_default().to_owned();
+            self.0.lock().unwrap().push(format!("{}:{query}", request.tool));
+            Some(ToolContext { source: request.tool.clone(), text: format!("facts about {query}"), truncated: false })
+        }
+    }
+
+    fn run_loop(script: Vec<&'static str>, mode: Mode, cancel_after_planner: bool) -> (Arc<LoopTools>, Arc<ScriptedGenerator>, TransformOutcome) {
+        let cancel = CancelToken::default();
+        let generator = Arc::new(ScriptedGenerator {
+            planner: Mutex::new(script),
+            planner_calls: AtomicUsize::new(0),
+            cancel_after_planner: cancel_after_planner.then(|| cancel.clone()),
+        });
+        let tools = Arc::new(LoopTools::default());
+        let service = TransformService::new(
+            Arc::new(CountingTranscriber::default()),
+            generator.clone(),
+            Arc::new(SentinelHistory::default()),
+            ProfileSet::bundled(),
+            Limits::default(),
+            SchedulerLimits::default(),
+        );
+        service.set_enricher(Some(tools.clone()));
+        let target = ActiveContext::default();
+        let profile = service.profiles().resolve(&target);
+        let transform = Transform { input: Input::Text("check the rate limits"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools: true };
+        let report = service.run_scheduled(Priority::Local, "local", &transform, &cancel, Duration::from_secs(5), &mut |_| {}).unwrap();
+        (tools, generator, report.outcome)
+    }
+
+    const CALL_A: &str = r#"{"tool": "docs.search", "arguments": {"query": "limits"}}"#;
+    const CALL_B: &str = r#"{"tool": "docs.search", "arguments": {"query": "quotas"}}"#;
+
+    #[test]
+    fn tool_loop_is_bounded_to_two_rounds_of_allowed_calls() {
+        let (tools, generator, outcome) = run_loop(vec![CALL_A, CALL_B, CALL_A, CALL_B], Mode::Prompt, false);
+        assert_eq!(*tools.0.lock().unwrap(), vec!["docs.search:limits", "docs.search:quotas"]);
+        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), MAX_TOOL_ROUNDS);
+        assert_eq!(outcome, TransformOutcome::Ready { text: "A finished prompt.".into() });
+    }
+
+    #[test]
+    fn tool_loop_stops_on_none_unknown_tools_and_repeats() {
+        let (tools, generator, _) = run_loop(vec!["NONE", CALL_A], Mode::Prompt, false);
+        assert!(tools.0.lock().unwrap().is_empty());
+        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), 1);
+        let (tools, _, _) = run_loop(vec![r#"{"tool": "shell.run", "arguments": {"query": "x"}}"#], Mode::Prompt, false);
+        assert!(tools.0.lock().unwrap().is_empty());
+        let (tools, generator, _) = run_loop(vec![CALL_A, CALL_A], Mode::Prompt, false);
+        assert_eq!(tools.0.lock().unwrap().len(), 1, "the same call is never repeated");
+        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn tool_loop_never_runs_for_dictation_or_after_cancel() {
+        let (tools, generator, _) = run_loop(vec![CALL_A], Mode::Dictation, false);
+        assert!(tools.0.lock().unwrap().is_empty());
+        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), 0);
+        let (tools, _, outcome) = run_loop(vec![CALL_A, CALL_B], Mode::Prompt, true);
+        assert!(tools.0.lock().unwrap().is_empty(), "a cancel during planning stops the call");
+        assert_eq!(outcome, TransformOutcome::Cancelled);
     }
 
     #[test]

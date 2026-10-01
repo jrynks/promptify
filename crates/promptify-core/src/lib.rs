@@ -15,4 +15,5 @@ pub mod prompt;
 pub mod sanitize;
 pub mod scheduler;
 pub mod structure;
+pub mod tool_loop;
 pub mod transform;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type ModelStatus, type OfferInfo, type PreviewOutput, type ProfileSummary, type RemoteInfo } from "../api";
+import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type McpInfo, type ModelStatus, type OfferInfo, type PreviewOutput, type ProfileSummary, type RemoteInfo } from "../api";
 import "./settings.css";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
@@ -300,6 +300,54 @@ function relayLabel(info: RemoteInfo): string {
   return `Relay error: ${relay.message}`;
 }
 
+function Tools() {
+  const [info, setInfo] = useState<McpInfo | null>(null);
+  const [tests, setTests] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    void api.mcpInfo().then(setInfo);
+  }, []);
+
+  const test = (name: string) => {
+    setTests((t) => ({ ...t, [name]: "Testing…" }));
+    api.mcpTest(name).then(
+      (tools) => setTests((t) => ({ ...t, [name]: tools.length ? `Connected. Tools: ${tools.join(", ")}` : "Connected, but it offers no tools." })),
+      (err) => setTests((t) => ({ ...t, [name]: `Failed: ${String(err)}` })),
+    );
+  };
+
+  if (!info) return null;
+  return (
+    <section>
+      <h2>Tools (MCP)</h2>
+      <p className="hint">
+        Connected tools can add reference facts before a prompt is written. Configure them in <code>{info.path}</code>, then
+        reload. Only hotkey prompts use tools; dictation, phones and the local API never do.
+      </p>
+      {info.error && <p className="error">{info.error}</p>}
+      {info.servers.length === 0 && !info.error && <p>No tools configured.</p>}
+      <ul className="devices">
+        {info.servers.map((s) => (
+          <li key={s.name}>
+            <strong>{s.name}</strong> {s.enabled ? "" : "(off) "}
+            <span className="hint">
+              {s.remote ? "remote server" : "runs on this computer"} · {s.hooks} lookups
+              {s.loop_tools.length > 0 && ` · the model may call ${s.loop_tools.join(", ")}`}
+              {s.profiles.length > 0 && ` · only for ${s.profiles.join(", ")}`}
+            </span>
+            {s.remote && s.transcript_allowed && (
+              <p className="error">What you say is sent to this remote server. Turn off allow_transcript to keep it on this computer.</p>
+            )}
+            {!s.remote && <p className="hint">Runs a program with your user rights. Only add servers you trust.</p>}
+            <button onClick={() => test(s.name)}>Test</button> {tests[s.name] && <span className="hint">{tests[s.name]}</span>}
+          </li>
+        ))}
+      </ul>
+      <button onClick={() => void api.mcpReload().then(setInfo)}>Reload mcp.json</button> {info.active && <span className="hint">Tools are on.</span>}
+    </section>
+  );
+}
+
 function Remote() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
@@ -415,6 +463,7 @@ function Settings() {
       <Models onChange={refreshInfo} />
       <History info={info} onChange={refreshInfo} />
       <Remote />
+      <Tools />
       <Playground profiles={profiles} />
     </main>
   );

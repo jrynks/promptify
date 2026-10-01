@@ -131,6 +131,23 @@ export interface OfferInfo {
   expires_unix: number;
 }
 
+export interface McpServerInfo {
+  name: string;
+  remote: boolean;
+  enabled: boolean;
+  profiles: string[];
+  hooks: number;
+  loop_tools: string[];
+  transcript_allowed: boolean;
+}
+
+export interface McpInfo {
+  path: string;
+  error: string | null;
+  active: boolean;
+  servers: McpServerInfo[];
+}
+
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   listProfiles: () => invoke<ProfileSummary[]>("list_profiles"),
@@ -157,4 +174,7 @@ export const api = {
   cancelPairing: () => invoke<void>("cancel_pairing"),
   removeDevice: (id: string) => invoke<boolean>("remove_device", { id }),
   renameDevice: (id: string, name: string) => invoke<boolean>("rename_device", { id, name }),
+  mcpInfo: () => invoke<McpInfo>("mcp_info"),
+  mcpReload: () => invoke<McpInfo>("mcp_reload"),
+  mcpTest: (name: string) => invoke<string[]>("mcp_test", { name }),
 };

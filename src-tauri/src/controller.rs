@@ -39,6 +39,7 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
         OverlayEvent::Listening { .. } => Some("listening\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Transcribing } => Some("transcribing\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Generating } => Some("writing prompt\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::Researching } => Some("looking up context\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Revising } => Some("revising prompt\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
         OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),

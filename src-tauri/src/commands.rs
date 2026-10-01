@@ -299,6 +299,7 @@ pub fn preview_prompt(state: State<'_, AppState>, input: PreviewInput) -> Result
         surrounding: surrounding.as_ref(),
         history: &history,
         tool_context: &[],
+        tool_context_omitted: 0,
     });
     Ok(PreviewOutput { profile_id: profile.id.clone(), profile_name: profile.name.clone(), messages })
 }

@@ -35,6 +35,8 @@ pub enum Mode {
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Transcribing,
+    /// Fetching reference text with the user's MCP tools.
+    Researching,
     Generating,
     /// Rewriting a draft whose task graph was malformed.
     Revising,

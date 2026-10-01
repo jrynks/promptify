@@ -35,6 +35,7 @@ function describe(outcome: Outcome, capped: boolean): View {
 
 const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing…",
+  researching: "Looking up context…",
   generating: "Writing your prompt…",
   revising: "Fixing the prompt's step structure…",
   inserting: "Pasting…",
