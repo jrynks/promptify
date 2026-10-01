@@ -5,12 +5,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::context::{ActiveContext, AdmittedText, ContextPolicy, FocusedText, WindowIdentity};
-use crate::dictation::remove_fillers;
 use crate::history::{HistoryContext, HistoryLog, NewHistoryEntry};
-use crate::profiles::{PasteChord, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, build_prompt_messages};
-use crate::sanitize::sanitize_output;
-use crate::structure::{GraphError, Structure, validate_structure};
+use crate::profiles::{PasteChord, Profile, ProfileSet};
+use crate::prompt::ChatMessage;
+use crate::scheduler::{AdmitError, Priority, SchedulerLimits};
+use crate::transform::{Input, Transform, TransformOutcome, TransformService};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -169,6 +168,8 @@ pub enum FailReason {
     GenerationFailed,
     TimedOut,
     EmptyOutput,
+    /// The engines stayed busy with other clients' requests past the wait limit.
+    EngineBusy,
 }
 
 /// Terminal state of a job. `Blocked` carries the text so the UI can offer a copy button.
@@ -247,25 +248,42 @@ impl Job {
 }
 
 pub struct Orchestrator {
-    backends: Backends,
-    profiles: ProfileSet,
+    context: Arc<dyn ContextProvider>,
+    inserter: Arc<dyn Inserter>,
+    service: Arc<TransformService>,
     policy: ContextPolicy,
-    limits: Limits,
     busy: Arc<AtomicBool>,
     next_id: AtomicU64,
 }
 
 impl Orchestrator {
     pub fn new(backends: Backends, profiles: ProfileSet, policy: ContextPolicy, limits: Limits) -> Self {
-        Self { backends, profiles, policy, limits, busy: Arc::default(), next_id: AtomicU64::new(1) }
+        Self::with_scheduler(backends, profiles, policy, limits, SchedulerLimits::default())
+    }
+
+    pub fn with_scheduler(backends: Backends, profiles: ProfileSet, policy: ContextPolicy, limits: Limits, scheduler: SchedulerLimits) -> Self {
+        let service = TransformService::new(backends.transcriber, backends.generator, backends.history, profiles, limits, scheduler);
+        Self {
+            context: backends.context,
+            inserter: backends.inserter,
+            service: Arc::new(service),
+            policy,
+            busy: Arc::default(),
+            next_id: AtomicU64::new(1),
+        }
+    }
+
+    /// The engine-side service, shared with the local API and remote devices.
+    pub fn service(&self) -> &Arc<TransformService> {
+        &self.service
     }
 
     pub fn limits(&self) -> &Limits {
-        &self.limits
+        self.service.limits()
     }
 
     pub fn profiles(&self) -> &ProfileSet {
-        &self.profiles
+        self.service.profiles()
     }
 
     /// Captures the target window (and opted-in surrounding text) at hotkey press.
@@ -274,11 +292,11 @@ impl Orchestrator {
             return Err(BeginError::Busy);
         }
         let busy = BusyGuard(self.busy.clone());
-        let target = self.backends.context.identify().map_err(BeginError::Context)?;
-        let profile_id = self.profiles.resolve(&target).id.clone();
+        let target = self.context.identify().map_err(BeginError::Context)?;
+        let profile_id = self.profiles().resolve(&target).id.clone();
         let surrounding = if mode == Mode::Prompt && self.policy.allows_surrounding_text(&target) {
             // Surrounding text is optional context; a read failure must not block the job.
-            match self.backends.context.focused_text(&target.window) {
+            match self.context.focused_text(&target.window) {
                 Ok(Some(focused)) => self.policy.admit(&target, focused),
                 Ok(None) | Err(_) => None,
             }
@@ -298,9 +316,34 @@ impl Orchestrator {
 
     pub fn finish(&self, job: Job, audio: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
         let started = Instant::now();
-        let mut notes = RunNotes::default();
-        let outcome = self.run_stages(&job, audio, &mut notes, on_event);
-        let history_saved = match (&outcome, notes.transcript) {
+        let profiles = self.profiles();
+        let profile = profiles.get(&job.profile_id).unwrap_or_else(|| profiles.resolve(&job.target));
+        let transform = Transform {
+            input: Input::Audio(audio),
+            mode: job.mode,
+            profile,
+            target: &job.target,
+            surrounding: job.surrounding.as_ref(),
+            use_history: true,
+        };
+        // Local jobs go first, but may still wait for a remote job that already holds the engines.
+        let queue_wait = self.limits().generation_timeout;
+        let report = self.service.run_scheduled(Priority::Local, LOCAL_CLIENT, &transform, &job.cancel, queue_wait, on_event);
+        let (outcome, transcript, structure) = match report {
+            Ok(report) => {
+                let outcome = match report.outcome {
+                    TransformOutcome::Ready { text } => self.insert(&job, profile, text, on_event),
+                    TransformOutcome::Truncated { text } => Outcome::Blocked { text, reason: BlockReason::OutputTruncated, detail: None },
+                    TransformOutcome::NoSpeech => Outcome::NoSpeech,
+                    TransformOutcome::Cancelled => Outcome::Cancelled,
+                    TransformOutcome::Failed { reason, detail } => Outcome::Failed { reason, detail },
+                };
+                (outcome, report.transcript, report.structure)
+            }
+            Err(AdmitError::Cancelled) => (Outcome::Cancelled, None, None),
+            Err(error) => (Outcome::Failed { reason: FailReason::EngineBusy, detail: Some(error.to_string()) }, None, None),
+        };
+        let history_saved = match (&outcome, transcript) {
             (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, transcript, text, true),
             (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, transcript, text, false),
             _ => false,
@@ -311,7 +354,7 @@ impl Orchestrator {
             outcome,
             elapsed_ms: started.elapsed().as_millis() as u64,
             history_saved,
-            structure: notes.structure,
+            structure,
         }
     }
 
@@ -325,177 +368,28 @@ impl Orchestrator {
             inserted,
         };
         // A history failure must never change the job outcome; the report carries the receipt.
-        self.backends.history.record(entry).unwrap_or(false)
+        self.service.history().record(entry).unwrap_or(false)
     }
 
-    fn run_stages(&self, job: &Job, audio: &[f32], notes: &mut RunNotes, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
-        let cancel = &job.cancel;
-        if cancel.is_cancelled() {
-            return Outcome::Cancelled;
-        }
-        if audio.len() > self.limits.max_audio_samples {
-            return Outcome::Failed { reason: FailReason::RecordingTooLong, detail: None };
-        }
-        let profile = self.profiles.get(&job.profile_id).unwrap_or_else(|| self.profiles.resolve(&job.target));
-
-        on_event(JobEvent::Stage(Stage::Transcribing));
-        let transcript = match self.backends.transcriber.transcribe(audio, cancel) {
-            Ok(text) => text,
-            Err(_) if cancel.is_cancelled() => return Outcome::Cancelled,
-            Err(err) => return failed(FailReason::TranscriptionFailed, err),
-        };
-        if cancel.is_cancelled() {
-            return Outcome::Cancelled;
-        }
-        let transcript = transcript.trim();
-        if transcript.is_empty() {
-            return Outcome::NoSpeech;
-        }
-        on_event(JobEvent::Transcript(transcript));
-        notes.transcript = Some(transcript.to_owned());
-
-        let (raw, finish) = match job.mode {
-            Mode::Dictation => (remove_fillers(transcript), FinishReason::Stop),
-            Mode::Prompt => {
-                let label = target_label(&job.target);
-                let history = self.backends.history.context(&profile.id, &job.target.app_key());
-                let messages = build_prompt_messages(&PromptRequest {
-                    transcript,
-                    profile,
-                    target_label: &label,
-                    surrounding: job.surrounding.as_ref(),
-                    history: &history,
-                });
-                on_event(JobEvent::Stage(Stage::Generating));
-                let deadline = Instant::now() + self.limits.generation_timeout;
-                let request = GenerationRequest { messages: &messages, max_new_tokens: self.limits.max_new_tokens, deadline };
-                let mut forward = |token: &str| on_event(JobEvent::Token(token));
-                let generation = match self.backends.generator.generate(&request, cancel, &mut forward) {
-                    Ok(generation) => generation,
-                    Err(_) if cancel.is_cancelled() => return Outcome::Cancelled,
-                    Err(_) if Instant::now() > deadline => return Outcome::Failed { reason: FailReason::TimedOut, detail: None },
-                    Err(err) => return failed(FailReason::GenerationFailed, err),
-                };
-                // A result that arrives after the deadline is discarded, never inserted late.
-                if Instant::now() > deadline {
-                    return Outcome::Failed { reason: FailReason::TimedOut, detail: None };
-                }
-                if generation.finish == FinishReason::Stop && profile.structure != Structure::Flat {
-                    match self.check_structure(&messages, generation.text, deadline, cancel, on_event) {
-                        Ok((text, check)) => {
-                            notes.structure = Some(check);
-                            (text, FinishReason::Stop)
-                        }
-                        Err(outcome) => return outcome,
-                    }
-                } else {
-                    (generation.text, generation.finish)
-                }
-            }
-        };
-
-        let text = match sanitize_output(&raw, profile.newlines, self.limits.max_output_chars) {
-            Ok(sanitized) if sanitized.truncated || finish == FinishReason::Length => {
-                return Outcome::Blocked { text: sanitized.text, reason: BlockReason::OutputTruncated, detail: None };
-            }
-            Ok(sanitized) => sanitized.text,
-            Err(_) => return Outcome::Failed { reason: FailReason::EmptyOutput, detail: None },
-        };
-
+    fn insert(&self, job: &Job, profile: &Profile, text: String, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
         on_event(JobEvent::Stage(Stage::Inserting));
-        match self.backends.context.foreground() {
+        match self.context.foreground() {
             Ok(window) if window == job.target.window => {}
             Ok(_) => return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: None },
             Err(err) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(err.0) },
         }
         // Cancellation outranks insertion; this is the last check before the paste effect.
-        if cancel.is_cancelled() {
+        if job.cancel.is_cancelled() {
             return Outcome::Cancelled;
         }
-        match self.backends.inserter.insert(&job.target.window, &text, profile.paste) {
+        match self.inserter.insert(&job.target.window, &text, profile.paste) {
             Ok(()) => Outcome::Inserted { text },
             Err(err) => Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some(err.0) },
         }
     }
-
-    /// Validates the draft's task graph and runs at most `max_structure_repairs` rewrites inside the
-    /// original deadline. Any repair that fails, truncates or arrives late leaves the first draft in place.
-    fn check_structure(
-        &self,
-        messages: &[ChatMessage],
-        draft: String,
-        deadline: Instant,
-        cancel: &CancelToken,
-        on_event: &mut dyn FnMut(JobEvent<'_>),
-    ) -> Result<(String, StructureCheck), Outcome> {
-        let mut error = match validate_structure(&draft) {
-            Ok(summary) if summary.is_structured() => return Ok((draft, StructureCheck::Valid)),
-            Ok(_) => return Ok((draft, StructureCheck::Unstructured)),
-            Err(error) => error,
-        };
-        let mut latest = draft.clone();
-        for _ in 0..self.limits.max_structure_repairs {
-            if cancel.is_cancelled() {
-                return Err(Outcome::Cancelled);
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            on_event(JobEvent::Stage(Stage::Revising));
-            let mut repair = messages.to_vec();
-            repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
-            repair.push(ChatMessage { role: Role::User, content: repair_instruction(error) });
-            let request = GenerationRequest { messages: &repair, max_new_tokens: self.limits.max_new_tokens, deadline };
-            let mut forward = |token: &str| on_event(JobEvent::Token(token));
-            let generation = match self.backends.generator.generate(&request, cancel, &mut forward) {
-                Ok(generation) => generation,
-                Err(_) if cancel.is_cancelled() => return Err(Outcome::Cancelled),
-                Err(_) => break,
-            };
-            if Instant::now() > deadline || generation.finish != FinishReason::Stop {
-                break;
-            }
-            match validate_structure(&generation.text) {
-                Ok(_) => return Ok((generation.text, StructureCheck::Repaired)),
-                Err(next) => {
-                    error = next;
-                    latest = generation.text;
-                }
-            }
-        }
-        if cancel.is_cancelled() {
-            return Err(Outcome::Cancelled);
-        }
-        Ok((draft, StructureCheck::KeptOriginal))
-    }
 }
 
-#[derive(Default)]
-struct RunNotes {
-    transcript: Option<String>,
-    structure: Option<StructureCheck>,
-}
-
-fn repair_instruction(error: GraphError) -> String {
-    format!(
-        "Your prompt has a structural problem: {error}. Rewrite the complete prompt and fix only that problem. \
-Number the steps 1, 2, 3 in order, let each step depend only on earlier steps, and give every loop a step to return to \
-and a limit of at most {} rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" \
-Output only the finished prompt.",
-        crate::structure::MAX_LOOP_ROUNDS
-    )
-}
-
-fn failed(reason: FailReason, err: BackendError) -> Outcome {
-    Outcome::Failed { reason, detail: Some(err.0) }
-}
-
-fn target_label(ctx: &ActiveContext) -> String {
-    match ctx.url_host() {
-        Some(host) => format!("{host} in {}", ctx.normalized_process()),
-        None => ctx.normalized_process(),
-    }
-}
+pub const LOCAL_CLIENT: &str = "local";
 
 #[cfg(test)]
 mod tests {
@@ -503,6 +397,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+    use crate::prompt::Role;
 
     const TARGET: WindowIdentity = WindowIdentity { handle: 42, process_id: 7 };
 
@@ -976,6 +871,21 @@ mod tests {
         assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Cancelled);
         assert_eq!(inserts(&h), 0);
         assert!(records(&h).is_empty());
+    }
+
+    #[test]
+    fn local_job_waits_for_remote_holder_and_fails_closed_when_busy() {
+        let limits = Limits { generation_timeout: Duration::from_millis(40), ..Limits::default() };
+        let h = harness(chat_ctx(), "x", generator("Prompt."), ContextPolicy::default(), limits);
+        let scheduler = h.orchestrator.service().scheduler();
+        let held = scheduler.acquire(Priority::Device, "phone", &CancelToken::default(), Instant::now() + Duration::from_secs(5)).unwrap();
+        let report = run(&h, Mode::Prompt);
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::EngineBusy, .. }));
+        assert!(h.generator.calls.lock().unwrap().is_empty());
+        assert_eq!(inserts(&h), 0);
+        assert!(!report.history_saved);
+        drop(held);
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Prompt.".into() });
     }
 
     #[test]

@@ -31,7 +31,7 @@ Format: a comparison table of the 3 options, then the recommendation in a short 
 [[profile.match]]
 hosts = ["chatgpt.com", "chat.openai.com"]
 [[profile.match]]
-processes = ["chatgpt", "com.openai.chat"]
+processes = ["chatgpt", "com.openai.chat", "com.openai.chatgpt"]
 [[profile.match]]
 processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
 title = '\bchatgpt\b'
@@ -63,7 +63,7 @@ Format: a heading for each part, with the guide in the order I would run the cal
 [[profile.match]]
 hosts = ["claude.ai"]
 [[profile.match]]
-processes = ["claude", "com.anthropic.claudefordesktop"]
+processes = ["claude", "com.anthropic.claudefordesktop", "com.anthropic.claude"]
 [[profile.match]]
 processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
 title = '\bclaude\b'
@@ -77,6 +77,8 @@ The prompt goes to Google Gemini. Open with a fitting expert role, state the tas
 """
 [[profile.match]]
 hosts = ["gemini.google.com", "aistudio.google.com"]
+[[profile.match]]
+processes = ["com.google.android.apps.bard"]
 [[profile.match]]
 processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
 title = '\bgemini\b'
@@ -110,7 +112,7 @@ hosts = ["grok.com"]
 hosts = ["x.com", "twitter.com"]
 title = '\bgrok\b'
 [[profile.match]]
-processes = ["grok"]
+processes = ["grok", "ai.x.grok"]
 [[profile.match]]
 processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
 title = '\bgrok\b'
@@ -124,6 +126,8 @@ The prompt goes to Microsoft Copilot. State the task, context and constraints cl
 """
 [[profile.match]]
 hosts = ["copilot.microsoft.com", "m365.cloud.microsoft"]
+[[profile.match]]
+processes = ["com.microsoft.copilot"]
 [[profile.match]]
 processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
 title = '\bmicrosoft copilot\b'
@@ -140,7 +144,7 @@ Keep it to a few sentences; no role-play.
 [[profile.match]]
 hosts = ["perplexity.ai"]
 [[profile.match]]
-processes = ["perplexity"]
+processes = ["perplexity", "ai.perplexity.app", "ai.perplexity.app.android"]
 [[profile.match]]
 processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
 title = '\bperplexity\b'
