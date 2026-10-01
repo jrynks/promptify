@@ -10,7 +10,7 @@ mod modifier_hook;
 mod remote;
 pub mod settings;
 pub mod stt;
-mod system_context;
+pub mod system_context;
 mod tray;
 
 use std::path::PathBuf;
@@ -118,6 +118,9 @@ pub fn run() {
             commands::clear_history,
             commands::set_history_enabled,
             commands::set_modifier_hold,
+            commands::set_auto_mode,
+            commands::set_vocabulary,
+            commands::set_screen_text_apps,
             mcp::mcp_info,
             mcp::mcp_reload,
             mcp::mcp_test,
@@ -164,13 +167,14 @@ pub fn run() {
                 history: history.clone(),
             };
             let orchestrator = Arc::new(Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), Limits::default()));
+            commands::apply_text_settings(&orchestrator, &settings.read().unwrap());
             let _ = mcp::reload(&data_dir, &orchestrator);
             let cancel = hotkeys.cancel;
             let esc_handle = handle.clone();
             let controller = Controller::spawn(handle.clone(), orchestrator.clone(), move |active| {
                 hotkeys::set_cancel_registered(&esc_handle, cancel, active)
             });
-            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, paused: false };
+            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, answer_error: None, paused: false };
             hotkeys::register_mode_hotkeys(&handle, &mut hotkey_state);
             preload_engines(stt.clone(), llm.clone());
             let tray_hotkeys = hotkey_state.config.clone();

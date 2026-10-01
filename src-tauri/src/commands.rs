@@ -39,6 +39,9 @@ pub struct AppInfo {
     use_gpu: bool,
     gpu_device: Option<String>,
     modifier_hold: bool,
+    auto_mode: bool,
+    vocabulary: promptify_core::dictation::Vocabulary,
+    screen_text_apps: Vec<String>,
 }
 
 #[tauri::command]
@@ -55,6 +58,9 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         use_gpu: settings.use_gpu,
         gpu_device: state.llm.device(),
         modifier_hold: state.modifier_hook.lock().unwrap().is_some(),
+        auto_mode: settings.auto_mode,
+        vocabulary: settings.vocabulary.clone(),
+        screen_text_apps: settings.screen_text_apps.clone(),
     }
 }
 
@@ -217,6 +223,40 @@ pub fn set_modifier_hold(app: AppHandle, state: State<'_, AppState>, enabled: bo
     save_settings(&state)
 }
 
+/// Pushes the text-related settings into the pipeline; called at startup and after each change.
+pub fn apply_text_settings(orchestrator: &promptify_core::pipeline::Orchestrator, settings: &settings::AppSettings) {
+    orchestrator.set_auto_mode(settings.auto_mode);
+    orchestrator.service().set_vocabulary(settings.vocabulary.clone());
+    let apps = settings.screen_text_apps.iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect();
+    orchestrator.set_policy(promptify_core::context::ContextPolicy { surrounding_text_apps: apps, ..Default::default() });
+}
+
+fn update_text_settings(state: &AppState, change: impl FnOnce(&mut settings::AppSettings)) -> Result<(), String> {
+    change(&mut state.settings.write().unwrap());
+    save_settings(state)?;
+    apply_text_settings(&state.orchestrator, &state.settings.read().unwrap());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_auto_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    update_text_settings(&state, |s| s.auto_mode = enabled)
+}
+
+#[tauri::command]
+pub fn set_vocabulary(state: State<'_, AppState>, vocabulary: promptify_core::dictation::Vocabulary) -> Result<promptify_core::dictation::Vocabulary, String> {
+    let clean = vocabulary.sanitized();
+    let saved = clean.clone();
+    update_text_settings(&state, |s| s.vocabulary = clean)?;
+    Ok(saved)
+}
+
+#[tauri::command]
+pub fn set_screen_text_apps(state: State<'_, AppState>, apps: Vec<String>) -> Result<(), String> {
+    let apps: Vec<String> = apps.into_iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty() && a.len() <= 100).take(50).collect();
+    update_text_settings(&state, |s| s.screen_text_apps = apps)
+}
+
 #[tauri::command]
 pub fn set_hotkey(app: AppHandle, state: State<'_, AppState>, mode: Mode, accelerator: String) -> Result<(), String> {
     check_len("hotkey", &accelerator, 64)?;
@@ -227,6 +267,7 @@ pub fn set_hotkey(app: AppHandle, state: State<'_, AppState>, mode: Mode, accele
         match mode {
             Mode::Prompt => settings.prompt_hotkey = Some(accelerator),
             Mode::Dictation => settings.dictation_hotkey = Some(accelerator),
+            Mode::Answer => settings.answer_hotkey = Some(accelerator),
         }
     }
     save_settings(&state)

@@ -227,7 +227,7 @@ fn start(shared: &Arc<Shared>, device_id: &str, pending: &mut PendingJob, text: 
             Some(text) => Input::Text(text),
             None => Input::Audio(&audio),
         };
-        let transform = Transform { input, mode, profile, target: &target, surrounding: None, use_history: false, use_tools: false };
+        let transform = Transform { input, mode, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
         let mut on_event = |event: JobEvent<'_>| {
             let message = match event {
                 JobEvent::Stage(stage) => ServerMessage::Stage { id, stage: serde_json::to_value(stage).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default() },

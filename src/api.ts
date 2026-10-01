@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type Mode = "prompt" | "dictation";
+export type Mode = "prompt" | "dictation" | "answer";
 export type Stage = "transcribing" | "generating" | "revising" | "inserting";
 
 export type Outcome =
   | { kind: "inserted"; text: string }
+  | { kind: "answered"; text: string }
   | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed"; detail: string | null }
   | { kind: "no_speech" }
   | { kind: "cancelled" }
@@ -30,9 +31,14 @@ export type OverlayEvent =
   | { type: "error"; message: string }
   | { type: "cancelled" };
 
+export interface Vocabulary {
+  words: string[];
+  replacements: { from: string; to: string }[];
+}
+
 export interface AppInfo {
   input_device: string | null;
-  hotkeys: { prompt: string; dictation: string; cancel: string };
+  hotkeys: { prompt: string; dictation: string; answer: string | null; cancel: string };
   hotkey_errors: string[];
   engines_ready: boolean;
   history_enabled: boolean;
@@ -40,6 +46,9 @@ export interface AppInfo {
   use_gpu: boolean;
   gpu_device: string | null;
   modifier_hold: boolean;
+  auto_mode: boolean;
+  vocabulary: Vocabulary;
+  screen_text_apps: string[];
 }
 
 export interface ModelStatus {
@@ -168,6 +177,9 @@ export const api = {
   setHotkey: (mode: Mode, accelerator: string) => invoke<void>("set_hotkey", { mode, accelerator }),
   setUseGpu: (enabled: boolean) => invoke<void>("set_use_gpu", { enabled }),
   setModifierHold: (enabled: boolean) => invoke<void>("set_modifier_hold", { enabled }),
+  setAutoMode: (enabled: boolean) => invoke<void>("set_auto_mode", { enabled }),
+  setVocabulary: (vocabulary: Vocabulary) => invoke<Vocabulary>("set_vocabulary", { vocabulary }),
+  setScreenTextApps: (apps: string[]) => invoke<void>("set_screen_text_apps", { apps }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),
   setRemoteSettings: (enabled: boolean, relayUrl: string | null, lanDirect: boolean, lanDiscovery: boolean) =>
     invoke<void>("set_remote_settings", { enabled, relayUrl, lanDirect, lanDiscovery }),

@@ -22,6 +22,8 @@ function describe(outcome: Outcome, capped: boolean): View {
   switch (outcome.kind) {
     case "inserted":
       return { kind: "result", tone: "ok", title: "Prompt ready" + note, canCopy: false };
+    case "answered":
+      return { kind: "result", tone: "ok", title: "Answer" + note, body: outcome.text, canCopy: true };
     case "blocked":
       return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, canCopy: true };
     case "no_speech":
@@ -46,6 +48,7 @@ function Overlay() {
   const [level, setLevel] = useState(0);
   const [preview, setPreview] = useState("");
   const hideTimer = useRef<number | undefined>(undefined);
+  const mode = useRef("prompt");
 
   const scheduleHide = (ms: number) => {
     window.clearTimeout(hideTimer.current);
@@ -61,6 +64,7 @@ function Overlay() {
         case "listening":
           window.clearTimeout(hideTimer.current);
           if (!payload.latched) setPreview("");
+          mode.current = payload.mode;
           setView({ kind: "listening", mode: payload.mode, profile: payload.profile, target: payload.target, latched: payload.latched });
           break;
         case "level":
@@ -71,7 +75,7 @@ function Overlay() {
           break;
         case "stage":
           if (payload.stage === "revising") setPreview("");
-          setView({ kind: "working", label: STAGE_LABELS[payload.stage] });
+          setView({ kind: "working", label: payload.stage === "generating" && mode.current === "answer" ? "Answering…" : STAGE_LABELS[payload.stage] });
           break;
         case "transcript":
           setPreview(payload.text);
@@ -110,7 +114,7 @@ function Overlay() {
             <span style={{ transform: `scaleX(${Math.min(1, level * 8)})` }} />
           </div>
           <div className="text">
-            <strong>{view.mode === "prompt" ? "Listening for a prompt" : "Dictating"}</strong>
+            <strong>{view.mode === "prompt" ? "Listening for a prompt" : view.mode === "answer" ? "Listening for a question" : "Dictating"}</strong>
             <span>
               {view.profile} · {view.target}
               {view.latched ? " · press the hotkey again to finish" : " · release to finish"} · Esc cancels

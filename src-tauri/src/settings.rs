@@ -30,6 +30,7 @@ pub struct AppSettings {
     pub history_enabled: bool,
     pub prompt_hotkey: Option<String>,
     pub dictation_hotkey: Option<String>,
+    pub answer_hotkey: Option<String>,
     pub use_gpu: bool,
     /// Lets paired phones and local tools use this desktop's engines. Off until the user turns it on.
     pub server_enabled: bool,
@@ -41,6 +42,12 @@ pub struct AppSettings {
     pub lan_discovery: bool,
     /// Holding Ctrl+Shift alone starts a prompt recording.
     pub modifier_hold: bool,
+    /// The prompt hotkey writes plain dictation in apps that are not AI tools.
+    pub auto_mode: bool,
+    /// Words to expect and corrections for speech recognition.
+    pub vocabulary: promptify_core::dictation::Vocabulary,
+    /// App keys (e.g. "chatgpt.com", "outlook") whose focused text may be used as context.
+    pub screen_text_apps: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -51,12 +58,16 @@ impl Default for AppSettings {
             history_enabled: true,
             prompt_hotkey: None,
             dictation_hotkey: None,
+            answer_hotkey: None,
             use_gpu: true,
             server_enabled: false,
             relay_url: None,
             lan_direct: false,
             lan_discovery: false,
             modifier_hold: false,
+            auto_mode: false,
+            vocabulary: Default::default(),
+            screen_text_apps: Vec::new(),
         }
     }
 }

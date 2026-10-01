@@ -26,7 +26,8 @@ const USAGE: &str = "usage:
   promptify-cli transcribe <file.wav>
   promptify-cli live-sim <file.wav>   (replays the file as if spoken; compares live chunks with one full pass)
   promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
-  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json]
+  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json] [--mode prompt|dictation|answer] [--auto]
+  promptify-cli screen-text   (reads the focused text box of the foreground app after 3 s, as the app would)
   promptify-cli eval <cases.toml>
   promptify-cli mcp [--api http://127.0.0.1:47821]   (stdio MCP server for Claude Desktop, VS Code, Cursor...)
   promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE] [--discoverable]
@@ -64,6 +65,17 @@ fn rewrite_text(
     text: &str,
     enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
 ) -> Result<promptify_core::pipeline::JobReport, String> {
+    rewrite_with(llm, ctx, text, enricher, Mode::Prompt, false)
+}
+
+fn rewrite_with(
+    llm: &Arc<LlmWorker>,
+    ctx: ActiveContext,
+    text: &str,
+    enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
+    mode: Mode,
+    auto_mode: bool,
+) -> Result<promptify_core::pipeline::JobReport, String> {
     let backends = Backends {
         context: Arc::new(FixedContext(ctx)),
         transcriber: Arc::new(TextTranscriber(text.to_owned())),
@@ -74,7 +86,8 @@ fn rewrite_text(
     let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
     let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
     orchestrator.service().set_enricher(enricher);
-    let job = orchestrator.begin(Mode::Prompt).map_err(|e| e.to_string())?;
+    orchestrator.set_auto_mode(auto_mode);
+    let job = orchestrator.begin(mode).map_err(|e| e.to_string())?;
     Ok(orchestrator.finish(job, &[], &mut |_| {}))
 }
 
@@ -266,7 +279,7 @@ fn run() -> Result<(), String> {
             let tail = &audio[live.committed_samples()..];
             let target = text_context("notepad.exe".into(), None, String::new());
             let profile = service.profiles().resolve(&target);
-            let transform = Transform { input: Input::Live { committed: &committed, tail }, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, use_tools: false };
+            let transform = Transform { input: Input::Live { committed: &committed, tail }, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
             let started = Instant::now();
             let mut live_text = String::new();
             service.run_scheduled(Priority::Local, "local", &transform, &cancel, Duration::from_secs(5), &mut |e| {
@@ -284,6 +297,20 @@ fn run() -> Result<(), String> {
                 tail.len() as f32 / 16000.0,
                 started.elapsed()
             );
+        }
+        Some("screen-text") => {
+            use promptify_core::pipeline::ContextProvider;
+            std::thread::sleep(Duration::from_secs(3));
+            let context = promptify_lib::system_context::SystemContext;
+            let target = context.identify().map_err(|e| e.0)?;
+            let started = Instant::now();
+            let focused = context.focused_text(&target.window).map_err(|e| e.0)?;
+            println!("app={} in {:.0?}", target.app_key(), started.elapsed());
+            match focused {
+                Some(f) if f.is_secure => println!("password field: nothing read"),
+                Some(f) => println!("{} chars: {}", f.text.chars().count(), f.text.chars().take(60).collect::<String>()),
+                None => println!("no readable text"),
+            }
         }
         Some("transcribe") => {
             let wav = PathBuf::from(args.get(1).ok_or(USAGE)?);
@@ -363,7 +390,13 @@ fn run() -> Result<(), String> {
                 None => None,
             };
             llm.preload().map_err(|e| e.0)?;
-            let report = rewrite_text(&llm, ctx, &text, enricher)?;
+            let mode = match flag(&args, "--mode").as_deref() {
+                None | Some("prompt") => Mode::Prompt,
+                Some("dictation") => Mode::Dictation,
+                Some("answer") => Mode::Answer,
+                Some(other) => return Err(format!("unknown mode {other}")),
+            };
+            let report = rewrite_with(&llm, ctx, &text, enricher, mode, args.iter().any(|a| a == "--auto"))?;
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
         }
         Some("eval") => {

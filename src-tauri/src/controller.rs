@@ -265,7 +265,7 @@ impl Worker {
                     report.elapsed_ms,
                     report.history_saved
                 );
-                if let Outcome::Blocked { text, .. } = &report.outcome {
+                if let Outcome::Blocked { text, .. } | Outcome::Answered { text } = &report.outcome {
                     *last_result.lock().unwrap() = Some(text.clone());
                 }
                 if report.history_saved {

@@ -26,7 +26,7 @@ function toAccelerator(e: React.KeyboardEvent): string | null {
   return [...parts, key].join("+");
 }
 
-function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation"; value: string; onSaved: () => void }) {
+function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation" | "answer"; value: string | null; onSaved: () => void }) {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -52,7 +52,8 @@ function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation"; v
         />
       ) : (
         <>
-          <kbd>{formatHotkey(value)}</kbd> <button className="link" onClick={() => setCapturing(true)}>Change</button>
+          {value ? <kbd>{formatHotkey(value)}</kbd> : <span className="hint">Not set</span>}{" "}
+          <button className="link" onClick={() => setCapturing(true)}>{value ? "Change" : "Set"}</button>
         </>
       )}
       {error && <div className="error">{error}</div>}
@@ -94,6 +95,18 @@ function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void
         </dd>
         <dt>Dictation hotkey</dt>
         <dd><HotkeyField mode="dictation" value={info.hotkeys.dictation} onSaved={onChange} /></dd>
+        <dt>Answer hotkey</dt>
+        <dd>
+          <HotkeyField mode="answer" value={info.hotkeys.answer} onSaved={onChange} /> ask a question; the local model's answer is shown, never pasted
+        </dd>
+        <dt>Automatic mode</dt>
+        <dd>
+          <label className="inline">
+            <input type="checkbox" checked={info.auto_mode} onChange={(e) => void api.setAutoMode(e.target.checked).then(onChange)} />
+            Outside AI apps, the prompt hotkey types what you said instead of writing a prompt
+          </label>
+          <span className="hint">Start with “prompt:” or “dictate:” to choose yourself.</span>
+        </dd>
         <dt>Cancel</dt>
         <dd><kbd>{info.hotkeys.cancel}</kbd> while listening or processing</dd>
         <dt>Local models</dt>
@@ -300,6 +313,57 @@ function relayLabel(info: RemoteInfo): string {
   return `Relay error: ${relay.message}`;
 }
 
+function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void }) {
+  const [words, setWords] = useState("");
+  const [fixes, setFixes] = useState("");
+  const [apps, setApps] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!info) return;
+    setWords(info.vocabulary.words.join("\n"));
+    setFixes(info.vocabulary.replacements.map((r) => `${r.from} => ${r.to}`).join("\n"));
+    setApps(info.screen_text_apps.join("\n"));
+  }, [info]);
+
+  if (!info) return null;
+  const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const save = () => {
+    const replacements = lines(fixes).flatMap((l) => {
+      const [from, ...rest] = l.split("=>");
+      return rest.length ? [{ from: from.trim(), to: rest.join("=>").trim() }] : [];
+    });
+    Promise.all([api.setVocabulary({ words: lines(words), replacements }), api.setScreenTextApps(lines(apps))]).then(
+      () => {
+        setStatus("Saved.");
+        onChange();
+      },
+      (err) => setStatus(String(err)),
+    );
+  };
+
+  return (
+    <section>
+      <h2>Your words</h2>
+      <label>
+        Names and terms to expect, one per line
+        <textarea rows={4} value={words} onChange={(e) => setWords(e.target.value)} placeholder={"Promptify\nKubernetes\nPriya"} />
+      </label>
+      <label>
+        Corrections, one per line as <code>heard =&gt; meant</code>
+        <textarea rows={3} value={fixes} onChange={(e) => setFixes(e.target.value)} placeholder="prompt if I => Promptify" />
+      </label>
+      <p className="hint">In dictation, say “new line”, “new paragraph” or “scratch that” as their own sentence.</p>
+      <label>
+        Apps whose on-screen text may be used as context, one per line (for example <code>chatgpt.com</code> or <code>outlook</code>)
+        <textarea rows={3} value={apps} onChange={(e) => setApps(e.target.value)} />
+      </label>
+      <p className="hint">Only the focused text box is read, only when you press a hotkey in one of these apps, and never password fields. It is not saved in history.</p>
+      <button onClick={save}>Save</button> {status && <span className="hint">{status}</span>}
+    </section>
+  );
+}
+
 function Tools() {
   const [info, setInfo] = useState<McpInfo | null>(null);
   const [tests, setTests] = useState<Record<string, string>>({});
@@ -488,6 +552,7 @@ function Settings() {
       <Status info={info} onChange={refreshInfo} />
       <Models onChange={refreshInfo} />
       <History info={info} onChange={refreshInfo} />
+      <Words info={info} onChange={refreshInfo} />
       <Remote />
       <Tools />
       <Playground profiles={profiles} />

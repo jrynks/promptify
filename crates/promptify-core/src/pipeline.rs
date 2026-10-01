@@ -29,6 +29,8 @@ impl CancelToken {
 pub enum Mode {
     Prompt,
     Dictation,
+    /// Answer the spoken question with the local model and show it; nothing is pasted.
+    Answer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -181,6 +183,8 @@ pub enum FailReason {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Outcome {
     Inserted { text: String },
+    /// An answer to show the user; answer jobs never paste.
+    Answered { text: String },
     Blocked { text: String, reason: BlockReason, detail: Option<String> },
     NoSpeech,
     Cancelled,
@@ -192,6 +196,7 @@ impl Outcome {
     pub fn kind(&self) -> &'static str {
         match self {
             Outcome::Inserted { .. } => "inserted",
+            Outcome::Answered { .. } => "answered",
             Outcome::Blocked { .. } => "blocked",
             Outcome::NoSpeech => "no_speech",
             Outcome::Cancelled => "cancelled",
@@ -255,9 +260,10 @@ pub struct Orchestrator {
     context: Arc<dyn ContextProvider>,
     inserter: Arc<dyn Inserter>,
     service: Arc<TransformService>,
-    policy: ContextPolicy,
+    policy: std::sync::RwLock<ContextPolicy>,
     busy: Arc<AtomicBool>,
     next_id: AtomicU64,
+    auto_mode: AtomicBool,
 }
 
 impl Orchestrator {
@@ -271,10 +277,21 @@ impl Orchestrator {
             context: backends.context,
             inserter: backends.inserter,
             service: Arc::new(service),
-            policy,
+            policy: std::sync::RwLock::new(policy),
             busy: Arc::default(),
             next_id: AtomicU64::new(1),
+            auto_mode: AtomicBool::new(false),
         }
+    }
+
+    /// With automatic mode on, the prompt hotkey writes plain dictation outside AI apps.
+    pub fn set_auto_mode(&self, enabled: bool) {
+        self.auto_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Which apps may share their on-screen text; applies from the next hotkey press.
+    pub fn set_policy(&self, policy: ContextPolicy) {
+        *self.policy.write().unwrap_or_else(|p| p.into_inner()) = policy;
     }
 
     /// The engine-side service, shared with the local API and remote devices.
@@ -298,10 +315,11 @@ impl Orchestrator {
         let busy = BusyGuard(self.busy.clone());
         let target = self.context.identify().map_err(BeginError::Context)?;
         let profile_id = self.profiles().resolve(&target).id.clone();
-        let surrounding = if mode == Mode::Prompt && self.policy.allows_surrounding_text(&target) {
+        let policy = self.policy.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let surrounding = if mode != Mode::Dictation && policy.allows_surrounding_text(&target) {
             // Surrounding text is optional context; a read failure must not block the job.
             match self.context.focused_text(&target.window) {
-                Ok(Some(focused)) => self.policy.admit(&target, focused),
+                Ok(Some(focused)) => policy.admit(&target, focused),
                 Ok(None) | Err(_) => None,
             }
         } else {
@@ -339,27 +357,30 @@ impl Orchestrator {
             surrounding: job.surrounding.as_ref(),
             use_history: true,
             use_tools: true,
+            auto_mode: self.auto_mode.load(Ordering::SeqCst),
         };
         // Local jobs go first, but may still wait for a remote job that already holds the engines.
         let queue_wait = self.limits().generation_timeout;
         let report = self.service.run_scheduled(Priority::Local, LOCAL_CLIENT, &transform, &job.cancel, queue_wait, on_event);
-        let (outcome, transcript, structure) = match report {
+        let (outcome, transcript, structure, mode) = match report {
             Ok(report) => {
                 let outcome = match report.outcome {
+                    // Answers are only shown; they never reach the target app.
+                    TransformOutcome::Ready { text } | TransformOutcome::Truncated { text } if report.mode == Mode::Answer => Outcome::Answered { text },
                     TransformOutcome::Ready { text } => self.insert(&job, profile, text, on_event),
                     TransformOutcome::Truncated { text } => Outcome::Blocked { text, reason: BlockReason::OutputTruncated, detail: None },
                     TransformOutcome::NoSpeech => Outcome::NoSpeech,
                     TransformOutcome::Cancelled => Outcome::Cancelled,
                     TransformOutcome::Failed { reason, detail } => Outcome::Failed { reason, detail },
                 };
-                (outcome, report.transcript, report.structure)
+                (outcome, report.transcript, report.structure, report.mode)
             }
-            Err(AdmitError::Cancelled) => (Outcome::Cancelled, None, None),
-            Err(error) => (Outcome::Failed { reason: FailReason::EngineBusy, detail: Some(error.to_string()) }, None, None),
+            Err(AdmitError::Cancelled) => (Outcome::Cancelled, None, None, job.mode),
+            Err(error) => (Outcome::Failed { reason: FailReason::EngineBusy, detail: Some(error.to_string()) }, None, None, job.mode),
         };
         let history_saved = match (&outcome, transcript) {
-            (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, transcript, text, true),
-            (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, transcript, text, false),
+            (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, mode, transcript, text, true),
+            (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, mode, transcript, text, false),
             _ => false,
         };
         JobReport {
@@ -372,9 +393,9 @@ impl Orchestrator {
         }
     }
 
-    fn record(&self, job: &Job, transcript: String, output: &str, inserted: bool) -> bool {
+    fn record(&self, job: &Job, mode: Mode, transcript: String, output: &str, inserted: bool) -> bool {
         let entry = NewHistoryEntry {
-            mode: job.mode,
+            mode,
             profile_id: job.profile_id.clone(),
             app_key: job.target.app_key(),
             transcript,
@@ -912,5 +933,67 @@ mod tests {
         assert_eq!(calls(&h), 1);
         let h = harness(chat_ctx(), "x", generator("unused"), ContextPolicy::default(), Limits::default());
         assert_eq!(run(&h, Mode::Dictation).structure, None);
+    }
+
+    fn notepad_ctx() -> ActiveContext {
+        ActiveContext { window: TARGET, process_name: "notepad.exe".into(), window_title: "notes".into(), url: None }
+    }
+
+    #[test]
+    fn answers_are_shown_never_pasted_or_recorded() {
+        let h = harness(chat_ctx(), "what is a mutex", generator("A lock that allows one owner at a time."), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Answer);
+        assert_eq!(report.outcome, Outcome::Answered { text: "A lock that allows one owner at a time.".into() });
+        assert_eq!(inserts(&h), 0);
+        assert!(!report.history_saved && records(&h).is_empty());
+        assert!(last_user_message(&h).contains("<transcript>\nwhat is a mutex\n</transcript>"));
+        let truncated = harness(chat_ctx(), "x", FakeGenerator { output: "Partial".into(), finish: Some(FinishReason::Length), ..Default::default() }, ContextPolicy::default(), Limits::default());
+        assert!(matches!(run(&truncated, Mode::Answer).outcome, Outcome::Answered { .. }));
+        assert_eq!(inserts(&truncated), 0);
+        let terminal = ActiveContext { window: TARGET, process_name: "WindowsTerminal.exe".into(), window_title: "pwsh".into(), url: None };
+        let h = harness(terminal, "list the steps", generator("1. Build\n2. Test"), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Answer).outcome, Outcome::Answered { text: "1. Build\n2. Test".into() }, "answers keep line breaks in single-line apps");
+    }
+
+    #[test]
+    fn auto_mode_dictates_outside_ai_apps_unless_asked_for_a_prompt() {
+        let h = harness(notepad_ctx(), "um, meeting moved to Friday.", generator("unused"), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_auto_mode(true);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: "Meeting moved to Friday.".into() });
+        assert_eq!(calls(&h), 0, "no prompt is written outside AI apps");
+        assert_eq!(records(&h)[0].mode, Mode::Dictation, "history keeps the mode actually used");
+
+        let cue = harness(notepad_ctx(), "Prompt: plan the launch", generator("Plan the launch."), ContextPolicy::default(), Limits::default());
+        cue.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&cue, Mode::Prompt).outcome, Outcome::Inserted { text: "Plan the launch.".into() });
+        assert!(last_user_message(&cue).contains("<transcript>\nplan the launch\n</transcript>"), "cue word removed");
+
+        let chat = harness(chat_ctx(), "compare pricing", generator("Compare pricing."), ContextPolicy::default(), Limits::default());
+        chat.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&chat, Mode::Prompt).outcome, Outcome::Inserted { text: "Compare pricing.".into() });
+        let dictate = harness(chat_ctx(), "dictate, hello there", generator("unused"), ContextPolicy::default(), Limits::default());
+        dictate.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&dictate, Mode::Prompt).outcome, Outcome::Inserted { text: "Hello there".into() });
+        assert_eq!(calls(&dictate), 0);
+    }
+
+    #[test]
+    fn auto_mode_off_and_explicit_modes_are_unchanged() {
+        let h = harness(notepad_ctx(), "plan the launch", generator("Plan the launch."), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Plan the launch.".into() });
+        let d = harness(chat_ctx(), "Prompt: x", generator("unused"), ContextPolicy::default(), Limits::default());
+        d.orchestrator.set_auto_mode(true);
+        assert_eq!(run(&d, Mode::Dictation).outcome, Outcome::Inserted { text: "Prompt: x".into() }, "dictation hotkey ignores cues");
+    }
+
+    #[test]
+    fn vocabulary_corrects_speech_and_spoken_commands_shape_dictation() {
+        let h = harness(notepad_ctx(), "Ask prompt if I. New line. Thanks.", generator("unused"), ContextPolicy::default(), Limits::default());
+        h.orchestrator.service().set_vocabulary(crate::dictation::Vocabulary {
+            words: vec![],
+            replacements: vec![crate::dictation::Replacement { from: "prompt if I".into(), to: "Promptify".into() }],
+        });
+        assert_eq!(run(&h, Mode::Dictation).outcome, Outcome::Inserted { text: "Ask Promptify.\nThanks.".into() });
     }
 }

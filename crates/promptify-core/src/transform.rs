@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::context::{ActiveContext, AdmittedText, WindowIdentity};
-use crate::dictation::remove_fillers;
+use crate::dictation::{Vocabulary, apply_spoken_commands, remove_fillers};
 use crate::history::HistoryContext;
 use crate::pipeline::{
     CancelToken, FailReason, FinishReason, GenerationRequest, Generator, History, JobEvent, Limits, Mode, Stage,
     StructureCheck, Transcriber,
 };
-use crate::profiles::{Profile, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_prompt_messages, stable_prefix_len};
+use crate::profiles::{NewlinePolicy, Profile, ProfileSet};
+use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_answer_messages, build_prompt_messages, choose_mode, stable_prefix_len};
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
@@ -112,6 +112,9 @@ pub struct Transform<'a> {
     pub use_history: bool,
     /// Fetch reference text from the user's connected tools (MCP servers) before writing the prompt.
     pub use_tools: bool,
+    /// For a prompt job: write plain dictation instead when the target is not an AI app, unless the
+    /// user says "prompt:" first.
+    pub auto_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -131,6 +134,8 @@ pub struct TransformReport {
     #[serde(skip)]
     pub transcript: Option<String>,
     pub structure: Option<StructureCheck>,
+    /// The mode actually used; differs from the request only with automatic mode.
+    pub mode: Mode,
 }
 
 pub struct TransformService {
@@ -141,6 +146,7 @@ pub struct TransformService {
     limits: Limits,
     scheduler: EngineScheduler,
     enricher: std::sync::RwLock<Option<Arc<dyn ContextEnricher>>>,
+    vocabulary: std::sync::RwLock<Vocabulary>,
 }
 
 impl TransformService {
@@ -152,7 +158,21 @@ impl TransformService {
         limits: Limits,
         scheduler: SchedulerLimits,
     ) -> Self {
-        Self { transcriber, generator, history, profiles, limits, scheduler: EngineScheduler::new(scheduler), enricher: Default::default() }
+        Self {
+            transcriber,
+            generator,
+            history,
+            profiles,
+            limits,
+            scheduler: EngineScheduler::new(scheduler),
+            enricher: Default::default(),
+            vocabulary: Default::default(),
+        }
+    }
+
+    /// Replacements the user set for speech recognition mistakes; applied to every spoken transcript.
+    pub fn set_vocabulary(&self, vocabulary: Vocabulary) {
+        *self.vocabulary.write().unwrap_or_else(|p| p.into_inner()) = vocabulary.sanitized();
     }
 
     pub fn set_enricher(&self, enricher: Option<Arc<dyn ContextEnricher>>) {
@@ -190,7 +210,7 @@ impl TransformService {
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<TransformReport, AdmitError> {
         if let Err(reason) = self.check_input(transform) {
-            return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None });
+            return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, mode: transform.mode });
         }
         let _permit = self.scheduler.acquire(priority, client, cancel, Instant::now() + queue_wait)?;
         Ok(self.run(transform, cancel, on_event))
@@ -217,8 +237,8 @@ impl TransformService {
 
     /// Callers must hold a scheduler permit; use [`Self::run_scheduled`] unless already holding one.
     fn run(&self, t: &Transform<'_>, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>)) -> TransformReport {
-        let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None };
-        report.outcome = self.stages(t, cancel, &mut report.transcript, &mut report.structure, on_event);
+        let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, mode: t.mode };
+        report.outcome = self.stages(t, cancel, &mut report.transcript, &mut report.structure, &mut report.mode, on_event);
         report
     }
 
@@ -228,6 +248,7 @@ impl TransformService {
         cancel: &CancelToken,
         saved_transcript: &mut Option<String>,
         structure: &mut Option<StructureCheck>,
+        resolved_mode: &mut Mode,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> TransformOutcome {
         if cancel.is_cancelled() {
@@ -261,6 +282,13 @@ impl TransformService {
         if cancel.is_cancelled() {
             return TransformOutcome::Cancelled;
         }
+        // Corrections are for speech recognition mistakes; typed text is left as written.
+        let transcript = match t.input {
+            Input::Text(_) => transcript,
+            Input::Audio(_) | Input::Live { .. } => self.vocabulary.read().unwrap_or_else(|p| p.into_inner()).apply(&transcript),
+        };
+        let (mode, transcript) = if t.auto_mode && t.mode == Mode::Prompt { choose_mode(profile, &transcript) } else { (t.mode, transcript.as_str()) };
+        *resolved_mode = mode;
         let transcript = transcript.trim();
         if transcript.is_empty() {
             return TransformOutcome::NoSpeech;
@@ -268,8 +296,22 @@ impl TransformService {
         on_event(JobEvent::Transcript(transcript));
         *saved_transcript = Some(transcript.to_owned());
 
-        let (raw, finish) = match t.mode {
-            Mode::Dictation => (remove_fillers(transcript), FinishReason::Stop),
+        let (raw, finish) = match mode {
+            Mode::Dictation => (apply_spoken_commands(&remove_fillers(transcript)), FinishReason::Stop),
+            Mode::Answer => {
+                let messages = build_answer_messages(transcript, t.surrounding);
+                on_event(JobEvent::Stage(Stage::Generating));
+                let deadline = Instant::now() + self.limits.generation_timeout;
+                let request = GenerationRequest { messages: &messages, stable_prefix: 1, max_new_tokens: self.limits.max_new_tokens, deadline };
+                let mut forward = |token: &str| on_event(JobEvent::Token(token));
+                match self.generator.generate(&request, cancel, &mut forward) {
+                    Ok(_) if Instant::now() > deadline => return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None },
+                    Ok(generation) => (generation.text, generation.finish),
+                    Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
+                    Err(_) if Instant::now() > deadline => return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None },
+                    Err(err) => return failed(FailReason::GenerationFailed, err.0),
+                }
+            }
             Mode::Prompt => {
                 let label = target_label(t.target);
                 let history = if t.use_history { self.history.context(&profile.id, &t.target.app_key()) } else { HistoryContext::default() };
@@ -332,7 +374,9 @@ impl TransformService {
             }
         };
 
-        match sanitize_output(&raw, profile.newlines, self.limits.max_output_chars) {
+        // Answers are shown in the overlay, never pasted into a shell, so their line breaks stay.
+        let newlines = if mode == Mode::Answer { NewlinePolicy::Keep } else { profile.newlines };
+        match sanitize_output(&raw, newlines, self.limits.max_output_chars) {
             Ok(sanitized) if sanitized.truncated || finish == FinishReason::Length => TransformOutcome::Truncated { text: sanitized.text },
             Ok(sanitized) => TransformOutcome::Ready { text: sanitized.text },
             Err(_) => TransformOutcome::Failed { reason: FailReason::EmptyOutput, detail: None },
@@ -522,7 +566,7 @@ mod tests {
     fn run_text(f: &Fixture, client: &ClientContext, text: &str, use_history: bool) -> TransformReport {
         let target = client.to_active();
         let profile = f.service.profiles().resolve(&target);
-        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history, use_tools: false };
+        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history, use_tools: false, auto_mode: false };
         f.service.run_scheduled(Priority::Device, "phone", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
     }
 
@@ -584,7 +628,7 @@ mod tests {
         let target = ActiveContext::default();
         let profile = f.service.profiles().resolve(&target);
         let run = |use_tools: bool, mode: Mode| {
-            let transform = Transform { input: Input::Text("plan the launch"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools };
+            let transform = Transform { input: Input::Text("plan the launch"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools, auto_mode: false };
             f.service.run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
         };
         run(false, Mode::Prompt);
@@ -659,7 +703,7 @@ mod tests {
         service.set_enricher(Some(tools.clone()));
         let target = ActiveContext::default();
         let profile = service.profiles().resolve(&target);
-        let transform = Transform { input: Input::Text("check the rate limits"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools: true };
+        let transform = Transform { input: Input::Text("check the rate limits"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools: true, auto_mode: false };
         let report = service.run_scheduled(Priority::Local, "local", &transform, &cancel, Duration::from_secs(5), &mut |_| {}).unwrap();
         (tools, generator, report.outcome)
     }
@@ -698,6 +742,26 @@ mod tests {
     }
 
     #[test]
+    fn vocabulary_never_changes_typed_text() {
+        let f = fixture(Duration::ZERO);
+        f.service.set_vocabulary(Vocabulary { words: vec![], replacements: vec![crate::dictation::Replacement { from: "spoken".into(), to: "CHANGED".into() }] });
+        let target = ActiveContext::default();
+        let profile = f.service.profiles().resolve(&target);
+        let mut seen = Vec::new();
+        for input in [Input::Text("typed spoken words"), Input::Audio(&[0.0; 16])] {
+            let transform = Transform { input, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
+            f.service
+                .run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
+                    if let JobEvent::Transcript(t) = e {
+                        seen.push(t.to_owned());
+                    }
+                })
+                .unwrap();
+        }
+        assert_eq!(seen, vec!["typed spoken words".to_string(), "CHANGED words".to_string()]);
+    }
+
+    #[test]
     fn live_input_transcribes_only_the_tail_after_committed_text() {
         #[derive(Default)]
         struct Lengths(Mutex<Vec<usize>>);
@@ -727,6 +791,7 @@ mod tests {
             surrounding: None,
             use_history: false,
             use_tools: false,
+            auto_mode: false,
         };
         let mut transcript = String::new();
         service
@@ -786,7 +851,7 @@ mod tests {
                 std::thread::spawn(move || {
                     let target = ActiveContext::default();
                     let profile = f.service.profiles().resolve(&target);
-                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, use_tools: false };
+                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
                     let client = format!("c{i}");
                     f.service.run_scheduled(Priority::Device, &client, &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
                 })
