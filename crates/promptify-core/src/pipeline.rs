@@ -325,6 +325,7 @@ impl Orchestrator {
             target: &job.target,
             surrounding: job.surrounding.as_ref(),
             use_history: true,
+            use_tools: true,
         };
         // Local jobs go first, but may still wait for a remote job that already holds the engines.
         let queue_wait = self.limits().generation_timeout;

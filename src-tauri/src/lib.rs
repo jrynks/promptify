@@ -70,6 +70,19 @@ pub fn ensure_selection(manifest: &Manifest, models_dir: &std::path::Path, setti
     changed
 }
 
+/// Loads optional MCP context hooks from `mcp.json`; a broken file is logged and ignored.
+fn load_context_hooks(data_dir: &std::path::Path, orchestrator: &Orchestrator) {
+    use promptify_mcp::client::{McpConfig, McpEnricher};
+    match McpConfig::load(&data_dir.join("mcp.json")).and_then(McpEnricher::from_config) {
+        Ok(Some(enricher)) => {
+            orchestrator.service().set_enricher(Some(Arc::new(enricher)));
+            log::info!("mcp: context hooks enabled");
+        }
+        Ok(None) => {}
+        Err(e) => log::warn!("mcp: {e}"),
+    }
+}
+
 /// Warms both engines off the UI thread so the first dictation is fast.
 pub fn preload_engines(stt: Arc<WhisperEngine>, llm: Arc<LlmWorker>) {
     std::thread::spawn(move || {
@@ -96,7 +109,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_settings(app)))
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
+        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).level_for("rmcp", log::LevelFilter::Warn).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -157,6 +170,7 @@ pub fn run() {
                 history: history.clone(),
             };
             let orchestrator = Arc::new(Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), Limits::default()));
+            load_context_hooks(&data_dir, &orchestrator);
             let cancel = hotkeys.cancel;
             let esc_handle = handle.clone();
             let controller = Controller::spawn(handle.clone(), orchestrator.clone(), move |active| {

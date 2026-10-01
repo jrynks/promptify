@@ -25,8 +25,9 @@ const USAGE: &str = "usage:
   promptify-cli download <model-id>...
   promptify-cli transcribe <file.wav>
   promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
-  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE]
+  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json]
   promptify-cli eval <cases.toml>
+  promptify-cli mcp [--api http://127.0.0.1:47821]   (stdio MCP server for Claude Desktop, VS Code, Cursor...)
   promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE]
   promptify-cli remote pair <pairing-link> [--name NAME] [--direct] [--identity FILE]
   promptify-cli remote send <text> [--app APP] [--url URL] [--dictation] [--direct] [--identity FILE]";
@@ -56,7 +57,12 @@ fn text_context(process: String, url: Option<String>, title: String) -> ActiveCo
     ActiveContext { window: WindowIdentity { handle: 1, process_id: 1 }, process_name: process, window_title: title, url }
 }
 
-fn rewrite_text(llm: &Arc<LlmWorker>, ctx: ActiveContext, text: &str) -> Result<promptify_core::pipeline::JobReport, String> {
+fn rewrite_text(
+    llm: &Arc<LlmWorker>,
+    ctx: ActiveContext,
+    text: &str,
+    enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
+) -> Result<promptify_core::pipeline::JobReport, String> {
     let backends = Backends {
         context: Arc::new(FixedContext(ctx)),
         transcriber: Arc::new(TextTranscriber(text.to_owned())),
@@ -66,6 +72,7 @@ fn rewrite_text(llm: &Arc<LlmWorker>, ctx: ActiveContext, text: &str) -> Result<
     };
     let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
     let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
+    orchestrator.service().set_enricher(enricher);
     let job = orchestrator.begin(Mode::Prompt).map_err(|e| e.to_string())?;
     Ok(orchestrator.finish(job, &[], &mut |_| {}))
 }
@@ -122,7 +129,7 @@ struct StderrLogger;
 
 impl log::Log for StderrLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
+        metadata.level() <= log::Level::Info && !(metadata.target().starts_with("rmcp") && metadata.level() > log::Level::Warn)
     }
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
@@ -299,8 +306,15 @@ fn run() -> Result<(), String> {
                 flag(&args, "--title").unwrap_or_default(),
             );
             let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
+            let enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>> = match flag(&args, "--mcp") {
+                Some(path) => {
+                    let config = promptify_mcp::client::McpConfig::load(Path::new(&path))?;
+                    promptify_mcp::client::McpEnricher::from_config(config)?.map(|e| Arc::new(e) as _)
+                }
+                None => None,
+            };
             llm.preload().map_err(|e| e.0)?;
-            let report = rewrite_text(&llm, ctx, &text)?;
+            let report = rewrite_text(&llm, ctx, &text, enricher)?;
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
         }
         Some("eval") => {
@@ -312,7 +326,7 @@ fn run() -> Result<(), String> {
             let (mut graph_pass, mut graph_total, mut flat_pass, mut flat_total, mut repaired) = (0, 0, 0, 0, 0);
             for case in &cases {
                 let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
-                let report = rewrite_text(&llm, ctx, &case.said)?;
+                let report = rewrite_text(&llm, ctx, &case.said, None)?;
                 let score = eval::score(case.expect, outcome_text(&report.outcome));
                 if report.structure == Some(promptify_core::pipeline::StructureCheck::Repaired) {
                     repaired += 1;
@@ -332,6 +346,12 @@ fn run() -> Result<(), String> {
             println!("graph: {graph_pass}/{graph_total}  flat: {flat_pass}/{flat_total}  repaired: {repaired}");
         }
         Some("remote") => remote(&args, &data_dir)?,
+        Some("mcp") => {
+            // stdout carries the MCP protocol; diagnostics go to stderr only.
+            let base = flag(&args, "--api").unwrap_or_else(|| "http://127.0.0.1:47821".into());
+            let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())?;
+            runtime.block_on(promptify_mcp::server::serve_stdio(base, promptify_server::api_token_path(&data_dir)))?;
+        }
         Some("serve") => {
             use promptify_core::scheduler::SchedulerLimits;
             use promptify_core::transform::TransformService;

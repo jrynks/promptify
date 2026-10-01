@@ -14,12 +14,42 @@ use crate::pipeline::{
     StructureCheck, Transcriber,
 };
 use crate::profiles::{Profile, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, build_prompt_messages};
+use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_prompt_messages};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
 use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_structure};
 
 pub const MAX_TEXT_INPUT_CHARS: usize = 8000;
+pub const MAX_TOOL_CONTEXTS: usize = 4;
+pub const MAX_TOOL_CONTEXT_CHARS: usize = 2000;
+pub const MAX_TOOL_CONTEXT_TOTAL_CHARS: usize = 6000;
+pub const TOOL_CONTEXT_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Fetches reference text from connected tools before generation. Implementations must return by
+/// `deadline`; anything they fail to fetch is simply left out.
+pub trait ContextEnricher: Send + Sync {
+    fn enrich(&self, profile_id: &str, transcript: &str, target: &ActiveContext, deadline: Instant, cancel: &CancelToken) -> Vec<ToolContext>;
+}
+
+/// Applies the size caps here, at the core, whatever the enricher returned.
+pub fn cap_tool_context(contexts: Vec<ToolContext>) -> Vec<ToolContext> {
+    let mut total = 0;
+    let mut out = Vec::new();
+    for mut context in contexts.into_iter().take(MAX_TOOL_CONTEXTS) {
+        let budget = MAX_TOOL_CONTEXT_CHARS.min(MAX_TOOL_CONTEXT_TOTAL_CHARS - total);
+        if budget == 0 || context.text.trim().is_empty() {
+            continue;
+        }
+        if context.text.chars().count() > budget {
+            context.text = context.text.chars().take(budget).collect();
+            context.truncated = true;
+        }
+        context.source = context.source.chars().take(80).collect();
+        total += context.text.chars().count();
+        out.push(context);
+    }
+    out
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Input<'a> {
@@ -60,6 +90,8 @@ pub struct Transform<'a> {
     pub surrounding: Option<&'a AdmittedText>,
     /// Use the user's past prompts as examples. Off for remote clients unless the owner allows it.
     pub use_history: bool,
+    /// Fetch reference text from the user's connected tools (MCP servers) before writing the prompt.
+    pub use_tools: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -88,6 +120,7 @@ pub struct TransformService {
     profiles: ProfileSet,
     limits: Limits,
     scheduler: EngineScheduler,
+    enricher: std::sync::RwLock<Option<Arc<dyn ContextEnricher>>>,
 }
 
 impl TransformService {
@@ -99,7 +132,15 @@ impl TransformService {
         limits: Limits,
         scheduler: SchedulerLimits,
     ) -> Self {
-        Self { transcriber, generator, history, profiles, limits, scheduler: EngineScheduler::new(scheduler) }
+        Self { transcriber, generator, history, profiles, limits, scheduler: EngineScheduler::new(scheduler), enricher: Default::default() }
+    }
+
+    pub fn set_enricher(&self, enricher: Option<Arc<dyn ContextEnricher>>) {
+        *self.enricher.write().unwrap_or_else(|p| p.into_inner()) = enricher;
+    }
+
+    fn enricher(&self) -> Option<Arc<dyn ContextEnricher>> {
+        self.enricher.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     pub fn profiles(&self) -> &ProfileSet {
@@ -192,12 +233,26 @@ impl TransformService {
             Mode::Prompt => {
                 let label = target_label(t.target);
                 let history = if t.use_history { self.history.context(&profile.id, &t.target.app_key()) } else { HistoryContext::default() };
+                let tool_context = match self.enricher() {
+                    Some(enricher) if t.use_tools => {
+                        let contexts = cap_tool_context(enricher.enrich(&profile.id, transcript, t.target, Instant::now() + TOOL_CONTEXT_TIMEOUT, cancel));
+                        if !contexts.is_empty() {
+                            log::info!("tool context: {} items, {} chars", contexts.len(), contexts.iter().map(|c| c.text.chars().count()).sum::<usize>());
+                        }
+                        contexts
+                    }
+                    _ => Vec::new(),
+                };
+                if cancel.is_cancelled() {
+                    return TransformOutcome::Cancelled;
+                }
                 let messages = build_prompt_messages(&PromptRequest {
                     transcript,
                     profile,
                     target_label: &label,
                     surrounding: t.surrounding,
                     history: &history,
+                    tool_context: &tool_context,
                 });
                 on_event(JobEvent::Stage(Stage::Generating));
                 let deadline = Instant::now() + self.limits.generation_timeout;
@@ -387,7 +442,7 @@ mod tests {
     fn run_text(f: &Fixture, client: &ClientContext, text: &str, use_history: bool) -> TransformReport {
         let target = client.to_active();
         let profile = f.service.profiles().resolve(&target);
-        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history };
+        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history, use_tools: false };
         f.service.run_scheduled(Priority::Device, "phone", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
     }
 
@@ -435,6 +490,37 @@ mod tests {
     }
 
     #[test]
+    fn enricher_output_is_capped_gated_and_delimited() {
+        struct Flood(AtomicUsize);
+        impl ContextEnricher for Flood {
+            fn enrich(&self, _: &str, _: &str, _: &ActiveContext, _: Instant, _: &CancelToken) -> Vec<ToolContext> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                (0..10).map(|i| ToolContext { source: format!("tool{i}"), text: "TOOL-SENTINEL ".repeat(500), truncated: false }).collect()
+            }
+        }
+        let f = fixture(Duration::ZERO);
+        let flood = Arc::new(Flood(AtomicUsize::new(0)));
+        f.service.set_enricher(Some(flood.clone()));
+        let target = ActiveContext::default();
+        let profile = f.service.profiles().resolve(&target);
+        let run = |use_tools: bool, mode: Mode| {
+            let transform = Transform { input: Input::Text("plan the launch"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools };
+            f.service.run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
+        };
+        run(false, Mode::Prompt);
+        run(true, Mode::Dictation);
+        assert_eq!(flood.0.load(Ordering::SeqCst), 0, "tools called without permission or for dictation");
+        run(true, Mode::Prompt);
+        assert_eq!(flood.0.load(Ordering::SeqCst), 1);
+        let calls = f.generator.calls.lock().unwrap();
+        let last = &calls.last().unwrap().last().unwrap().content;
+        assert_eq!(last.matches("<tool_context>").count(), MAX_TOOL_CONTEXT_TOTAL_CHARS / MAX_TOOL_CONTEXT_CHARS);
+        let tool_chars: usize = last.split("<tool_context>\n").skip(1).map(|s| s.split("\n</tool_context>").next().unwrap().chars().count()).sum();
+        assert!(tool_chars <= MAX_TOOL_CONTEXT_TOTAL_CHARS, "{tool_chars}");
+        assert!(last.contains("truncated"));
+    }
+
+    #[test]
     fn engine_is_never_shared_between_concurrent_clients() {
         let f = Arc::new(fixture(Duration::from_millis(30)));
         let handles: Vec<_> = (0..4)
@@ -443,7 +529,7 @@ mod tests {
                 std::thread::spawn(move || {
                     let target = ActiveContext::default();
                     let profile = f.service.profiles().resolve(&target);
-                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false };
+                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, use_tools: false };
                     let client = format!("c{i}");
                     f.service.run_scheduled(Priority::Device, &client, &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
                 })

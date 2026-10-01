@@ -131,7 +131,7 @@ async fn transform(State(shared): State<Arc<Shared>>, ConnectInfo(peer): Connect
             WireMode::Prompt => Mode::Prompt,
             WireMode::Dictation => Mode::Dictation,
         };
-        let transform = Transform { input: Input::Text(&body.text), mode, profile, target: &target, surrounding: None, use_history: false };
+        let transform = Transform { input: Input::Text(&body.text), mode, profile, target: &target, surrounding: None, use_history: false, use_tools: false };
         let report = service.run_scheduled(Priority::Tool, LOCAL_API_CLIENT, &transform, &CancelToken::default(), Duration::from_secs(30), &mut |_| {});
         (profile.id.clone(), report)
     })
