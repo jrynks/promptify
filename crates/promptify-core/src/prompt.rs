@@ -153,8 +153,12 @@ pub fn choose_mode<'a>(profile: &Profile, transcript: &'a str) -> (crate::pipeli
     use crate::pipeline::Mode;
     let trimmed = transcript.trim_start();
     for (cue, mode) in [("prompt", Mode::Prompt), ("dictate", Mode::Dictation), ("dictation", Mode::Dictation)] {
-        if trimmed.len() > cue.len() && trimmed[..cue.len()].eq_ignore_ascii_case(cue) && trimmed[cue.len()..].starts_with([',', ':', '.']) {
-            return (mode, trimmed[cue.len() + 1..].trim_start());
+        // Checked slicing: a transcript may start with multi-byte characters.
+        if let (Some(head), Some(rest)) = (trimmed.get(..cue.len()), trimmed.get(cue.len()..))
+            && head.eq_ignore_ascii_case(cue)
+            && let Some(after) = rest.strip_prefix([',', ':', '.'])
+        {
+            return (mode, after.trim_start());
         }
     }
     if profile.id == crate::profiles::FALLBACK_PROFILE_ID { (Mode::Dictation, transcript) } else { (Mode::Prompt, transcript) }
@@ -283,6 +287,19 @@ mod tests {
         }
         assert!(last.contains("(truncated, most recent part)"));
         assert!(last.contains("(2 more tool results were left out to fit the size limit.)"));
+    }
+
+    #[test]
+    fn mode_cues_never_panic_on_multibyte_text() {
+        use crate::pipeline::Mode;
+        let set = ProfileSet::bundled();
+        let generic = set.get("generic").unwrap();
+        for text in ["aéééé, hello", "ééééééé: x", "日本語のテキストです", "prompt", "prompté", "", "promptly, do it"] {
+            let (mode, rest) = choose_mode(generic, text);
+            assert_eq!(mode, Mode::Dictation, "{text}");
+            assert_eq!(rest, text);
+        }
+        assert_eq!(choose_mode(generic, "PROMPT: plan it"), (Mode::Prompt, "plan it"));
     }
 
     #[test]

@@ -974,7 +974,7 @@ mod tests {
         assert_eq!(run(&chat, Mode::Prompt).outcome, Outcome::Inserted { text: "Compare pricing.".into() });
         let dictate = harness(chat_ctx(), "dictate, hello there", generator("unused"), ContextPolicy::default(), Limits::default());
         dictate.orchestrator.set_auto_mode(true);
-        assert_eq!(run(&dictate, Mode::Prompt).outcome, Outcome::Inserted { text: "Hello there".into() });
+        assert_eq!(run(&dictate, Mode::Prompt).outcome, Outcome::Inserted { text: "hello there".into() });
         assert_eq!(calls(&dictate), 0);
     }
 

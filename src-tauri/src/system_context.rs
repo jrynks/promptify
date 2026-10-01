@@ -48,13 +48,21 @@ mod focused {
     const MAX_READ_CHARS: i32 = 20_000;
 
     pub fn read(process_id: u32) -> Result<Option<FocusedText>, BackendError> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // A hung app keeps its reader thread blocked; never stack up more readers behind it.
+        static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+        if IN_FLIGHT.swap(true, Ordering::SeqCst) {
+            return Ok(None);
+        }
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name("focused-text".into())
-            .spawn(move || {
-                let _ = tx.send(read_on_this_thread(process_id));
-            })
-            .map_err(|e| BackendError(e.to_string()))?;
+        let spawned = std::thread::Builder::new().name("focused-text".into()).spawn(move || {
+            let _ = tx.send(read_on_this_thread(process_id));
+            IN_FLIGHT.store(false, Ordering::SeqCst);
+        });
+        if let Err(e) = spawned {
+            IN_FLIGHT.store(false, Ordering::SeqCst);
+            return Err(BackendError(e.to_string()));
+        }
         // Screen text is optional context: a slow app simply contributes nothing.
         Ok(rx.recv_timeout(TIMEOUT).ok().and_then(Result::ok).flatten())
     }

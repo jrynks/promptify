@@ -221,7 +221,11 @@ pub fn apply_spoken_commands(text: &str) -> String {
                 }
             }
         }
-        let starts_sentence = out.last().is_none_or(|t| t.starts_with('\n') || (scratched && t.ends_with(TERMINAL)));
+        // Dictation can continue a sentence already on screen, so the first word keeps its case.
+        let starts_sentence = match out.last() {
+            Some(t) => t.starts_with('\n') || (scratched && t.ends_with(TERMINAL)),
+            None => scratched,
+        };
         scratched = false;
         out.push(if starts_sentence { capitalize(tokens[i]) } else { tokens[i].to_owned() });
         i += 1;
@@ -335,6 +339,8 @@ mod tests {
 
     #[test]
     fn command_words_inside_sentences_are_kept() {
+        assert_eq!(apply_spoken_commands("and then we ship it"), "and then we ship it", "first word keeps its case");
+        assert_eq!(apply_spoken_commands("Scratch that. send it"), "Send it");
         for text in [
             "Please delete that file before Friday.",
             "We need a new line of credit.",
