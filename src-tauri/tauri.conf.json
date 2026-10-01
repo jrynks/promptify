@@ -16,6 +16,7 @@
         "label": "settings",
         "title": "Promptify",
         "url": "index.html",
+        "visible": false,
         "width": 960,
         "height": 760,
         "minWidth": 640,

@@ -26,11 +26,12 @@ pub struct AppSettings {
     pub history_enabled: bool,
     pub prompt_hotkey: Option<String>,
     pub dictation_hotkey: Option<String>,
+    pub use_gpu: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { stt_model: None, llm_model: None, history_enabled: true, prompt_hotkey: None, dictation_hotkey: None }
+        Self { stt_model: None, llm_model: None, history_enabled: true, prompt_hotkey: None, dictation_hotkey: None, use_gpu: true }
     }
 }
 

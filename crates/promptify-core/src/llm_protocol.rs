@@ -7,7 +7,7 @@ use crate::prompt::{ChatMessage, Role};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequest {
-    Load { model_path: String, n_ctx: u32 },
+    Load { model_path: String, n_ctx: u32, use_gpu: bool },
     Generate { id: u64, prompt: String, max_new_tokens: u32 },
     Cancel { id: u64 },
 }
@@ -23,7 +23,8 @@ pub enum WireFinish {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerEvent {
-    Loaded { model_path: String },
+    /// `device` names the GPU the model was offloaded to, or is `None` when it runs on the CPU.
+    Loaded { model_path: String, device: Option<String> },
     Token { id: u64, text: String },
     Done { id: u64, finish: WireFinish },
     Error { id: Option<u64>, message: String },

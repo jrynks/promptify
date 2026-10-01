@@ -1,30 +1,39 @@
-# Target profiles. The most specific matching rule wins (host/process/title each add one);
-# ties go to the profile listed first. The "generic" profile is the fallback.
+# Target profiles. The most specific matching rule wins: a site (host) match outranks a
+# process + window-title match, which outranks a process or title alone. Ties go to the
+# profile listed first. The "generic" profile is the fallback.
+# Browser title rules cover browsers whose address bar cannot be read (e.g. Zen, or any
+# browser on Linux); window titles end with the page title, such as "Grok — Zen Browser".
 
 [[profile]]
 id = "chatgpt"
 name = "ChatGPT"
 kind = "ai_chat"
 style = """
-The prompt goes to ChatGPT. Open with the role or expertise that fits the task only when it clearly helps.
+The prompt goes to ChatGPT. Open with the role or expertise that fits the task.
 State the goal, then the context and constraints, then the exact output format (for example a table, bullet list, or numbered steps).
 Use short paragraphs or bullets; Markdown is fine.
 """
 [[profile.examples]]
 said = "okay help me think through pricing for the team plan um three options maybe what could go wrong with each and how we'd test them"
 prompt = """
-Act as a SaaS pricing strategist. Propose 3 pricing options for our new team plan.
+Act as a SaaS pricing strategist. I need to choose a pricing model for our new team plan.
 
-For each option, give:
-- Price point and target customer
+Propose 3 distinct pricing options. For each option, cover:
+- How it is priced and who it suits best
+- Expected effect on conversion and expansion revenue
 - The biggest risk
-- One cheap experiment to validate it
+- One cheap experiment we could run in 2 weeks to validate it
 
-End with your recommendation."""
+Before you start, ask me up to 3 questions about our product, current customers and competitors if the answer depends on them.
+
+Format: a comparison table of the 3 options, then a short recommendation with the 2 metrics to watch in the first 30 days."""
 [[profile.match]]
 hosts = ["chatgpt.com", "chat.openai.com"]
 [[profile.match]]
 processes = ["chatgpt", "com.openai.chat"]
+[[profile.match]]
+processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
+title = '\bchatgpt\b'
 
 [[profile]]
 id = "claude"
@@ -38,26 +47,71 @@ Ask for the desired format explicitly. Markdown is fine.
 [[profile.examples]]
 said = "help me plan customer interviews for the new onboarding flow goals questions and a way to synthesize the calls"
 prompt = """
-Create a customer interview plan for our redesigned onboarding flow.
+Act as a senior UX researcher. Create a customer interview plan for our redesigned onboarding flow.
 
 Include:
-- 3 learning goals
-- A 30-minute discussion guide with neutral follow-up probes
-- A lightweight framework for synthesizing the calls"""
+- 3 learning goals, each tied to a decision we could make from the answers
+- A 30-minute discussion guide with open, neutral questions and follow-up probes
+- Screening criteria for who to recruit
+- A lightweight framework for synthesizing the calls into themes and next steps
+
+If you need details about the product or the changes we made, ask me before writing the guide.
+
+Format: use headings for each part and keep the guide in the order I would run the call."""
 [[profile.match]]
 hosts = ["claude.ai"]
 [[profile.match]]
 processes = ["claude", "com.anthropic.claudefordesktop"]
+[[profile.match]]
+processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
+title = '\bclaude\b'
 
 [[profile]]
 id = "gemini"
 name = "Gemini"
 kind = "ai_chat"
 style = """
-The prompt goes to Google Gemini. State the task, context and constraints clearly, and specify the output format.
+The prompt goes to Google Gemini. Open with a fitting expert role, state the task, context and constraints clearly, and specify the output format.
 """
 [[profile.match]]
 hosts = ["gemini.google.com", "aistudio.google.com"]
+[[profile.match]]
+processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
+title = '\bgemini\b'
+
+[[profile]]
+id = "grok"
+name = "Grok"
+kind = "ai_chat"
+style = """
+The prompt goes to xAI's Grok, which can search the web and X for current information.
+Open with a fitting expert role, state the goal, the context and constraints, and the output format.
+When the answer depends on current prices, availability, news or posts, ask it to search and cite sources.
+"""
+[[profile.examples]]
+said = "um i want to buy a used car for my son he just got his license something safe and not too expensive"
+prompt = """
+Act as an experienced car buyer's advisor. Help me choose a safe, affordable used car for my son, who just got his driver's license.
+
+Before recommending anything, ask me up to 3 short questions about my budget, where we live and what he will mainly drive it for.
+
+Then:
+- Shortlist 5 models and model years with strong safety ratings and reliability records for new drivers
+- For each, show typical current used prices, insurance considerations for a teen driver and common problems to check
+- Explain the safety features that matter most for a new driver
+- Give me a short checklist for inspecting and test-driving a used car
+
+Use current listings and safety ratings, cite your sources, and present the shortlist as a comparison table."""
+[[profile.match]]
+hosts = ["grok.com"]
+[[profile.match]]
+hosts = ["x.com", "twitter.com"]
+title = '\bgrok\b'
+[[profile.match]]
+processes = ["grok"]
+[[profile.match]]
+processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
+title = '\bgrok\b'
 
 [[profile]]
 id = "copilot"
@@ -68,6 +122,9 @@ The prompt goes to Microsoft Copilot. State the task, context and constraints cl
 """
 [[profile.match]]
 hosts = ["copilot.microsoft.com", "m365.cloud.microsoft"]
+[[profile.match]]
+processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
+title = '\bmicrosoft copilot\b'
 
 [[profile]]
 id = "perplexity"
@@ -82,6 +139,9 @@ Keep it to a few sentences; no role-play.
 hosts = ["perplexity.ai"]
 [[profile.match]]
 processes = ["perplexity"]
+[[profile.match]]
+processes = ["zen", "firefox", "librewolf", "floorp", "waterfox", "chrome", "google chrome", "chromium", "msedge", "microsoft edge", "brave", "brave browser", "vivaldi", "opera", "arc", "safari", "thorium", "comet"]
+title = '\bperplexity\b'
 
 [[profile]]
 id = "cursor"
@@ -175,5 +235,18 @@ id = "generic"
 name = "AI assistant"
 kind = "ai_chat"
 style = """
-The prompt goes to a general-purpose AI assistant. State the goal, relevant context and constraints, and the desired output format.
+The prompt goes to a general-purpose AI assistant. Open with a fitting expert role, state the goal, the relevant context and constraints, the specific points to cover, and the desired output format.
 """
+[[profile.examples]]
+said = "so i need to plan a birthday party for my daughter she's turning eight and she loves science stuff"
+prompt = """
+Act as a creative kids' party planner. Help me plan a science-themed birthday party for my daughter, who is turning 8.
+
+Before you start, ask me up to 3 short questions about the number of guests, budget, and whether it will be at home or at a venue.
+
+Then give me:
+- 3 party concept options with a name and a one-line pitch each
+- For the concept I pick: a 2-hour schedule, 4 hands-on experiments that are safe for 8-year-olds with the supplies needed, food and decoration ideas, and a take-home favor idea
+- A shopping checklist and a prep timeline for the week before
+
+Keep it practical and kid-safe, and format each part under its own heading."""

@@ -8,6 +8,7 @@ pub mod llm_client;
 pub mod settings;
 pub mod stt;
 mod system_context;
+mod tray;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -17,8 +18,6 @@ use promptify_core::history::{HistoryLimits, HistoryLog};
 use promptify_core::models::{Manifest, ModelKind, ModelTier, is_installed};
 use promptify_core::pipeline::{Backends, Limits, Orchestrator};
 use promptify_core::profiles::ProfileSet;
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, PhysicalPosition, WindowEvent};
 
 use crate::controller::Controller;
@@ -81,14 +80,6 @@ pub fn preload_engines(stt: Arc<WhisperEngine>, llm: Arc<LlmWorker>) {
     });
 }
 
-fn show_settings(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-}
-
 fn place_overlay(app: &AppHandle) {
     let Some(overlay) = app.get_webview_window("overlay") else { return };
     let Ok(Some(monitor)) = overlay.primary_monitor() else { return };
@@ -101,7 +92,8 @@ fn place_overlay(app: &AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_settings(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_settings(app)))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
         .invoke_handler(tauri::generate_handler![
@@ -121,6 +113,7 @@ pub fn run() {
             commands::clear_history,
             commands::set_history_enabled,
             commands::set_hotkey,
+            commands::set_use_gpu,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -161,9 +154,11 @@ pub fn run() {
             let controller = Controller::spawn(handle.clone(), orchestrator.clone(), move |active| {
                 hotkeys::set_cancel_registered(&esc_handle, cancel, active)
             });
-            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None };
+            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, paused: false };
             hotkeys::register_mode_hotkeys(&handle, &mut hotkey_state);
             preload_engines(stt.clone(), llm.clone());
+            let tray_hotkeys = hotkey_state.config.clone();
+            let engines_ready = [&settings.read().unwrap().stt_model, &settings.read().unwrap().llm_model].iter().all(|m| m.is_some());
             app.manage(AppState {
                 orchestrator,
                 controller,
@@ -178,22 +173,12 @@ pub fn run() {
                 llm,
             });
 
-            let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Promptify", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings, &quit])?;
-            let icon = app.default_window_icon().cloned().ok_or("missing app icon")?;
-            TrayIconBuilder::new()
-                .icon(icon)
-                .tooltip("Promptify")
-                .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "settings" => show_settings(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .build(app)?;
-
+            tray::build(&handle, &tray_hotkeys)?;
             place_overlay(&handle);
+            // Promptify lives in the tray; settings only open by themselves until models are set up.
+            if !engines_ready {
+                tray::show_settings(&handle);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

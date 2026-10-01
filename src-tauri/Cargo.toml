@@ -25,8 +25,16 @@ reqwest = { version = "0.13.5", default-features = false, features = ["blocking"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
-whisper-rs = "0.16.0"
+whisper-rs = { version = "0.16.0", features = ["raw-api"] }
 x-win = "5.8.0"
+
+# GPU by default; whisper.cpp falls back to the CPU when no capable device exists.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }

@@ -76,6 +76,14 @@ function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void
         <dd><kbd>{info.hotkeys.cancel}</kbd> while listening or processing</dd>
         <dt>Local models</dt>
         <dd>{info.engines_ready ? "Ready" : "Download a speech model and a prompt model below to start."}</dd>
+        <dt>Acceleration</dt>
+        <dd>
+          <label className="inline">
+            <input type="checkbox" checked={info.use_gpu} onChange={(e) => void api.setUseGpu(e.target.checked).then(() => window.setTimeout(onChange, 4000))} />
+            Use the GPU when available
+          </label>
+          <span className="hint">{info.gpu_device ? `Prompt model running on ${info.gpu_device}` : "Prompt model running on the CPU"}</span>
+        </dd>
       </dl>
       {info.hotkey_errors.map((e) => (
         <p key={e} className="error">{e}</p>
@@ -275,7 +283,7 @@ function Settings() {
   return (
     <main>
       <h1>Promptify</h1>
-      <p className="hint">Hold the hotkey anywhere, say what you want, and a structured prompt for the app you're in is written locally on this device.</p>
+      <p className="hint">Hold the hotkey anywhere, say what you want, and a structured prompt for the app you're in is written locally on this device. Promptify keeps running in the system tray when you close this window.</p>
       <Status info={info} onChange={refreshInfo} />
       <Models onChange={refreshInfo} />
       <History info={info} onChange={refreshInfo} />

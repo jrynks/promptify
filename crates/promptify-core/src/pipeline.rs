@@ -59,7 +59,7 @@ impl Default for Limits {
         Self {
             max_audio_samples: crate::audio::TARGET_SAMPLE_RATE as usize * 120,
             max_new_tokens: 768,
-            generation_timeout: Duration::from_secs(45),
+            generation_timeout: Duration::from_secs(60),
             max_output_chars: 6000,
         }
     }

@@ -29,6 +29,17 @@ pub enum OverlayEvent {
 }
 
 pub fn emit(app: &AppHandle, event: OverlayEvent) {
+    let status = match &event {
+        OverlayEvent::Listening { .. } => Some("listening\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::Transcribing } => Some("transcribing\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::Generating } => Some("writing prompt\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
+        OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),
+        OverlayEvent::Level { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } => None,
+    };
+    if let Some(status) = status {
+        crate::tray::set_status(app, status);
+    }
     let _ = app.emit_to("overlay", "overlay-event", event);
 }
 

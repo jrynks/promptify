@@ -34,6 +34,8 @@ export interface AppInfo {
   engines_ready: boolean;
   history_enabled: boolean;
   data_dir: string;
+  use_gpu: boolean;
+  gpu_device: string | null;
 }
 
 export interface ModelStatus {
@@ -112,4 +114,5 @@ export const api = {
   clearHistory: () => invoke<void>("clear_history"),
   setHistoryEnabled: (enabled: boolean) => invoke<void>("set_history_enabled", { enabled }),
   setHotkey: (mode: Mode, accelerator: string) => invoke<void>("set_hotkey", { mode, accelerator }),
+  setUseGpu: (enabled: boolean) => invoke<void>("set_use_gpu", { enabled }),
 };

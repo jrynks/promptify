@@ -13,6 +13,7 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::{LlamaBackendDevice, LlamaBackendDeviceType, list_llama_ggml_backend_devices};
 use promptify_core::llm_protocol::{WireFinish, WorkerEvent, WorkerRequest};
 
 fn send(event: &WorkerEvent) {
@@ -25,7 +26,21 @@ fn send(event: &WorkerEvent) {
 struct Loaded {
     path: String,
     n_ctx: u32,
+    use_gpu: bool,
+    device: Option<String>,
     model: LlamaModel,
+}
+
+/// Never equals a real request id (they start at 1) or the "nothing cancelled" value 0.
+const WARMUP_ID: u64 = u64::MAX;
+
+const WARMUP_PROMPT: &str = "<|im_start|>system\nYou rewrite spoken requests into clear prompts for an AI assistant, keeping every detail the speaker gave.<|im_end|>\n<|im_start|>user\nhelp me plan a short weekend trip with a few ideas for things to do<|im_end|>\n<|im_start|>assistant\n";
+
+/// Prefers a discrete GPU over an integrated one (e.g. an RTX card over the CPU's iGPU).
+fn pick_gpu() -> Option<LlamaBackendDevice> {
+    let devices = list_llama_ggml_backend_devices();
+    let of = |kind: LlamaBackendDeviceType| devices.iter().filter(|d| d.device_type == kind).max_by_key(|d| d.memory_total).cloned();
+    of(LlamaBackendDeviceType::Gpu).or_else(|| of(LlamaBackendDeviceType::IntegratedGpu))
 }
 
 fn main() {
@@ -61,17 +76,26 @@ fn main() {
     let mut loaded: Option<Loaded> = None;
     for request in rx {
         match request {
-            WorkerRequest::Load { model_path, n_ctx } => {
-                if loaded.as_ref().is_some_and(|l| l.path == model_path && l.n_ctx == n_ctx) {
-                    send(&WorkerEvent::Loaded { model_path });
+            WorkerRequest::Load { model_path, n_ctx, use_gpu } => {
+                if let Some(l) = loaded.as_ref().filter(|l| l.path == model_path && l.n_ctx == n_ctx && l.use_gpu == use_gpu) {
+                    send(&WorkerEvent::Loaded { model_path, device: l.device.clone() });
                     continue;
                 }
                 loaded = None;
-                let params = LlamaModelParams::default().with_n_gpu_layers(if cfg!(target_os = "macos") { 999 } else { 0 });
+                let gpu = if use_gpu { pick_gpu() } else { None };
+                let base = || LlamaModelParams::default().with_n_gpu_layers(if gpu.is_some() { 999 } else { 0 });
+                let params = match &gpu {
+                    Some(device) => base().with_devices(&[device.index]).unwrap_or_else(|_| base()),
+                    None => base(),
+                };
+                let device = gpu.map(|d| d.description);
                 match LlamaModel::load_from_file(&backend, &model_path, &params) {
                     Ok(model) => {
-                        loaded = Some(Loaded { path: model_path.clone(), n_ctx, model });
-                        send(&WorkerEvent::Loaded { model_path });
+                        let l = Loaded { path: model_path.clone(), n_ctx, use_gpu, device: device.clone(), model };
+                        // Compiles GPU kernels now instead of during the user's first request.
+                        let _ = generate(&backend, &l, WARMUP_ID, WARMUP_PROMPT, 1, &cancelled);
+                        loaded = Some(l);
+                        send(&WorkerEvent::Loaded { model_path, device });
                     }
                     Err(e) => send(&WorkerEvent::Error { id: None, message: format!("could not load model: {e}") }),
                 }
@@ -107,7 +131,7 @@ fn generate(
     if tokens.len() + max_new_tokens as usize > loaded.n_ctx as usize {
         return Err(format!("prompt of {} tokens does not fit the {}-token context", tokens.len(), loaded.n_ctx));
     }
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8) as i32;
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16) as i32;
     let params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(loaded.n_ctx))
         .with_n_batch(loaded.n_ctx)

@@ -38,6 +38,8 @@ pub struct HotkeyState {
     pub hotkeys: Hotkeys,
     pub prompt_error: Option<String>,
     pub dictation_error: Option<String>,
+    /// Paused from the tray: mode hotkeys are released so other apps can use them.
+    pub paused: bool,
 }
 
 impl HotkeyState {
@@ -90,6 +92,11 @@ pub fn rebind<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, mode: Mod
     if shortcut.id() == other.id() || shortcut.id() == state.hotkeys.cancel.id() {
         return Err("that hotkey is already used by Promptify".into());
     }
+    if state.paused {
+        // Claimed when hotkeys resume.
+        apply_binding(state, mode, shortcut, accelerator);
+        return Ok(());
+    }
     let shortcuts = app.global_shortcut();
     let had_current = shortcuts.is_registered(current);
     if had_current && shortcut.id() != current.id() {
@@ -104,6 +111,11 @@ pub fn rebind<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, mode: Mod
         let label = if mode == Mode::Prompt { "prompt" } else { "dictation" };
         return Err(unavailable(label, accelerator, e));
     }
+    apply_binding(state, mode, shortcut, accelerator);
+    Ok(())
+}
+
+fn apply_binding(state: &mut HotkeyState, mode: Mode, shortcut: Shortcut, accelerator: &str) {
     match mode {
         Mode::Prompt => {
             state.hotkeys.prompt = shortcut;
@@ -116,7 +128,28 @@ pub fn rebind<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, mode: Mod
             state.dictation_error = None;
         }
     }
-    Ok(())
+}
+
+/// Releases or reclaims the mode hotkeys.
+pub fn set_paused<R: Runtime>(app: &AppHandle<R>, paused: bool) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let mut hotkeys = state.hotkeys.write().unwrap();
+    if hotkeys.paused == paused {
+        return;
+    }
+    hotkeys.paused = paused;
+    let shortcuts = app.global_shortcut();
+    if paused {
+        for shortcut in [hotkeys.hotkeys.prompt, hotkeys.hotkeys.dictation] {
+            if shortcuts.is_registered(shortcut) {
+                let _ = shortcuts.unregister(shortcut);
+            }
+        }
+    } else {
+        hotkeys.prompt_error = None;
+        hotkeys.dictation_error = None;
+        register_mode_hotkeys(app, &mut hotkeys);
+    }
 }
 
 /// Escape is only claimed while a job is active so it keeps working in other apps.
@@ -136,7 +169,13 @@ pub fn set_cancel_registered<R: Runtime>(app: &AppHandle<R>, cancel: Shortcut, a
 
 pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: ShortcutEvent) {
     let Some(state) = app.try_state::<AppState>() else { return };
-    let hotkeys = state.hotkeys.read().unwrap().hotkeys;
+    let (hotkeys, paused) = {
+        let guard = state.hotkeys.read().unwrap();
+        (guard.hotkeys, guard.paused)
+    };
+    if paused {
+        return;
+    }
     let pressed = event.state() == ShortcutState::Pressed;
     let command = if shortcut.id() == hotkeys.cancel.id() {
         if !pressed {

@@ -9,3 +9,11 @@ license.workspace = true
 llama-cpp-2 = { version = "0.1.157", default-features = false, features = ["openmp"] }
 promptify-core = { path = "../promptify-core" }
 serde_json = "1.0.151"
+
+# GPU by default; llama.cpp falls back to the CPU when no capable device exists.
+# llama-cpp-2 does not re-export the Vulkan feature, so enable it on the sys crate.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+llama-cpp-sys-2 = { version = "=0.1.157", features = ["vulkan"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "0.1.157", default-features = false, features = ["openmp", "metal"] }

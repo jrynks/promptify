@@ -24,7 +24,7 @@ struct Worker {
     child: Child,
     stdin: ChildStdin,
     events: mpsc::Receiver<WorkerEvent>,
-    loaded: Option<String>,
+    loaded: Option<(String, bool)>,
 }
 
 impl Worker {
@@ -49,6 +49,7 @@ pub struct LlmWorker {
     settings: SharedSettings,
     worker: Mutex<Option<Worker>>,
     next_id: AtomicU64,
+    device: Mutex<Option<String>>,
 }
 
 pub fn worker_exe() -> PathBuf {
@@ -61,7 +62,12 @@ pub fn worker_exe() -> PathBuf {
 
 impl LlmWorker {
     pub fn new(exe: PathBuf, manifest: Manifest, models_dir: PathBuf, settings: SharedSettings) -> Self {
-        Self { exe, manifest, models_dir, settings, worker: Mutex::new(None), next_id: AtomicU64::new(1) }
+        Self { exe, manifest, models_dir, settings, worker: Mutex::new(None), next_id: AtomicU64::new(1), device: Mutex::new(None) }
+    }
+
+    /// The GPU the loaded model runs on, or `None` for CPU.
+    pub fn device(&self) -> Option<String> {
+        self.device.lock().unwrap().clone()
     }
 
     fn selected_path(&self) -> Result<String, BackendError> {
@@ -106,6 +112,7 @@ impl LlmWorker {
     /// Returns a live worker with the selected model loaded.
     fn ready<'a>(&self, slot: &'a mut Option<Worker>, deadline: Instant) -> Result<&'a mut Worker, BackendError> {
         let path = self.selected_path()?;
+        let use_gpu = self.settings.read().unwrap().use_gpu;
         if slot.as_mut().is_some_and(|w| !matches!(w.child.try_wait(), Ok(None))) {
             *slot = None;
         }
@@ -113,19 +120,24 @@ impl LlmWorker {
             *slot = Some(self.spawn()?);
         }
         let worker = slot.as_mut().expect("spawned");
-        if worker.loaded.as_deref() != Some(path.as_str()) {
+        let wanted = (path.clone(), use_gpu);
+        if worker.loaded.as_ref() != Some(&wanted) {
             worker.loaded = None;
-            worker.send(&WorkerRequest::Load { model_path: path.clone(), n_ctx: N_CTX })?;
+            worker.send(&WorkerRequest::Load { model_path: path.clone(), n_ctx: N_CTX, use_gpu })?;
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 match worker.events.recv_timeout(remaining) {
-                    Ok(WorkerEvent::Loaded { model_path }) if model_path == path => break,
+                    Ok(WorkerEvent::Loaded { model_path, device }) if model_path == path => {
+                        log::info!("language model loaded on {}", device.as_deref().unwrap_or("CPU"));
+                        *self.device.lock().unwrap() = device;
+                        break;
+                    }
                     Ok(WorkerEvent::Error { id: None, message }) => return Err(err(message)),
                     Ok(_) => {}
                     Err(_) => return Err(err("the language model did not load in time")),
                 }
             }
-            worker.loaded = Some(path);
+            worker.loaded = Some(wanted);
         }
         Ok(worker)
     }

@@ -81,10 +81,9 @@ struct Rule {
 }
 
 impl Rule {
+    /// A known site (4) outranks process + title (3), which outranks process (2) or title (1).
     fn specificity(&self) -> usize {
-        usize::from(!self.hosts.is_empty())
-            + usize::from(!self.processes.is_empty())
-            + usize::from(self.title.is_some())
+        4 * usize::from(!self.hosts.is_empty()) + 2 * usize::from(!self.processes.is_empty()) + usize::from(self.title.is_some())
     }
 
     fn matches(&self, host: Option<&str>, process: &str, title: &str) -> bool {
@@ -250,6 +249,13 @@ mod tests {
         assert_eq!(id(ctx("firefox", "Claude", Some("claude.ai/new"))), "claude");
         assert_eq!(id(ctx("Claude.exe", "Claude", None)), "claude");
         assert_eq!(id(ctx("Cursor.exe", "main.rs - app - Cursor", None)), "cursor");
+        assert_eq!(id(ctx("chrome.exe", "Grok", Some("https://grok.com/c/1"))), "grok");
+        assert_eq!(id(ctx("chrome.exe", "Grok / X", Some("https://x.com/i/grok"))), "grok");
+        assert_eq!(id(ctx("chrome.exe", "Home / X", Some("https://x.com/home"))), FALLBACK_PROFILE_ID);
+        assert_eq!(id(ctx("zen.exe", "Grok — Zen Browser", None)), "grok");
+        assert_eq!(id(ctx("zen.exe", "Trip ideas - Claude — Zen Browser", None)), "claude");
+        assert_eq!(id(ctx("zen.exe", "Weather — Zen Browser", None)), FALLBACK_PROFILE_ID);
+        assert_eq!(id(ctx("chrome.exe", "Claude vs Grok", Some("https://chatgpt.com/c/1"))), "chatgpt", "site outranks title");
         assert_eq!(id(ctx("WindowsTerminal.exe", "✳ Claude Code", None)), "claude_code");
         assert_eq!(id(ctx("WindowsTerminal.exe", "pwsh in repo", None)), "terminal");
         assert_eq!(id(ctx("chrome.exe", "Inbox", Some("https://mail.google.com"))), FALLBACK_PROFILE_ID);

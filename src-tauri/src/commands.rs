@@ -36,6 +36,8 @@ pub struct AppInfo {
     engines_ready: bool,
     history_enabled: bool,
     data_dir: String,
+    use_gpu: bool,
+    gpu_device: Option<String>,
 }
 
 #[tauri::command]
@@ -49,6 +51,8 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         engines_ready: ready(&settings.stt_model) && ready(&settings.llm_model),
         history_enabled: state.history.is_enabled(),
         data_dir: state.data_dir.to_string_lossy().into_owned(),
+        use_gpu: settings.use_gpu,
+        gpu_device: state.llm.device(),
     }
 }
 
@@ -197,9 +201,18 @@ pub fn set_history_enabled(state: State<'_, AppState>, enabled: bool) -> Result<
 }
 
 #[tauri::command]
+pub fn set_use_gpu(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    state.settings.write().unwrap().use_gpu = enabled;
+    save_settings(&state)?;
+    preload_engines(state.stt.clone(), state.llm.clone());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_hotkey(app: AppHandle, state: State<'_, AppState>, mode: Mode, accelerator: String) -> Result<(), String> {
     check_len("hotkey", &accelerator, 64)?;
     crate::hotkeys::rebind(&app, &mut state.hotkeys.write().unwrap(), mode, &accelerator)?;
+    crate::tray::refresh(&app);
     {
         let mut settings = state.settings.write().unwrap();
         match mode {
