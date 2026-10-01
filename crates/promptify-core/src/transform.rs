@@ -14,7 +14,7 @@ use crate::pipeline::{
     StructureCheck, Transcriber,
 };
 use crate::profiles::{Profile, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_prompt_messages};
+use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_prompt_messages, stable_prefix_len};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
 use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_structure};
@@ -256,7 +256,8 @@ impl TransformService {
                 });
                 on_event(JobEvent::Stage(Stage::Generating));
                 let deadline = Instant::now() + self.limits.generation_timeout;
-                let request = GenerationRequest { messages: &messages, max_new_tokens: self.limits.max_new_tokens, deadline };
+                let stable_prefix = stable_prefix_len(profile);
+                let request = GenerationRequest { messages: &messages, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
                 let mut forward = |token: &str| on_event(JobEvent::Token(token));
                 let generation = match self.generator.generate(&request, cancel, &mut forward) {
                     Ok(generation) => generation,
@@ -269,7 +270,7 @@ impl TransformService {
                     return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None };
                 }
                 if generation.finish == FinishReason::Stop && profile.structure != Structure::Flat {
-                    match self.check_structure(&messages, generation.text, deadline, cancel, on_event) {
+                    match self.check_structure(&messages, stable_prefix, generation.text, deadline, cancel, on_event) {
                         Ok((text, check)) => {
                             *structure = Some(check);
                             (text, FinishReason::Stop)
@@ -294,6 +295,7 @@ impl TransformService {
     fn check_structure(
         &self,
         messages: &[ChatMessage],
+        stable_prefix: usize,
         draft: String,
         deadline: Instant,
         cancel: &CancelToken,
@@ -316,7 +318,7 @@ impl TransformService {
             let mut repair = messages.to_vec();
             repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
             repair.push(ChatMessage { role: Role::User, content: repair_instruction(error) });
-            let request = GenerationRequest { messages: &repair, max_new_tokens: self.limits.max_new_tokens, deadline };
+            let request = GenerationRequest { messages: &repair, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
             let generation = match self.generator.generate(&request, cancel, &mut forward) {
                 Ok(generation) => generation,

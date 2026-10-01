@@ -7,6 +7,7 @@ pub mod hotkey;
 pub mod llm_protocol;
 pub mod models;
 pub mod pipeline;
+pub mod prefix_cache;
 pub mod profiles;
 pub mod prompt;
 pub mod sanitize;

@@ -123,6 +123,12 @@ pub struct PromptRequest<'a> {
     pub tool_context: &'a [ToolContext],
 }
 
+/// Messages at the start of [`build_prompt_messages`] that depend only on the profile: the system
+/// prompt and the bundled examples. History examples change after each job, so they are excluded.
+pub fn stable_prefix_len(profile: &Profile) -> usize {
+    1 + 2 * profile.examples.len()
+}
+
 pub fn build_prompt_messages(req: &PromptRequest<'_>) -> Vec<ChatMessage> {
     let guide = match req.profile.structure {
         Structure::Graph => format!("\n\n{GRAPH_GUIDE}"),

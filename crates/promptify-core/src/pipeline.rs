@@ -89,6 +89,8 @@ pub struct Generation {
 
 pub struct GenerationRequest<'a> {
     pub messages: &'a [ChatMessage],
+    /// Leading messages that repeat across requests for this profile; backends may cache them.
+    pub stable_prefix: usize,
     pub max_new_tokens: u32,
     pub deadline: Instant,
 }
