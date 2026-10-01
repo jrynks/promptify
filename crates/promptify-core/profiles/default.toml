@@ -248,10 +248,30 @@ newlines = "collapse"
 style = """
 The prompt goes to an image generation model. Write one descriptive paragraph:
 subject, setting, composition, lighting, style or medium, mood and color palette, using only details the speaker gave or clearly implied.
-No instructions to an assistant, no bullets.
 """
+[[profile.examples]]
+said = "um a fox in a forest at night kind of magical with like glowing mushrooms"
+prompt = "A red fox standing among glowing mushrooms on a mossy forest floor at night, soft blue and green bioluminescent light, low eye-level view with the fox in sharp focus, mist between the trees, magical and quiet mood, digital painting."
+[[profile.examples]]
+said = "design a logo for my coffee shop then make a few color versions and pick the one that works best on our menu"
+prompt = "A simple, memorable logo for a coffee shop built around a coffee cup or bean motif, flat vector style with clean lines on a plain background, shown in three color variations side by side, then the variation that stays clearest at small sizes on a printed menu, presented larger."
 [[profile.match]]
-hosts = ["midjourney.com", "ideogram.ai", "leonardo.ai", "firefly.adobe.com"]
+hosts = ["midjourney.com", "ideogram.ai", "leonardo.ai", "firefly.adobe.com", "krea.ai", "playground.com", "recraft.ai", "dreamstudio.ai", "openart.ai", "nightcafe.studio", "designer.microsoft.com"]
+
+[[profile]]
+id = "video_gen"
+name = "Video generator"
+kind = "video_gen"
+newlines = "collapse"
+style = """
+The prompt goes to a video generation model. Write one descriptive paragraph:
+subject and action, setting, camera framing and movement, motion and pacing, lighting, style, mood and color palette, using only details the speaker gave or clearly implied.
+"""
+[[profile.examples]]
+said = "a drone shot over a lighthouse at sunset with waves crashing slow and cinematic"
+prompt = "A slow aerial drone shot circling a white lighthouse on a rocky cliff at sunset, waves crashing against the rocks below and throwing spray, warm golden light fading to orange, gentle steady camera movement, cinematic and calm."
+[[profile.match]]
+hosts = ["sora.com", "sora.chatgpt.com", "runwayml.com", "pika.art", "klingai.com", "hailuoai.video", "dream-machine.lumalabs.ai"]
 
 [[profile]]
 id = "generic"

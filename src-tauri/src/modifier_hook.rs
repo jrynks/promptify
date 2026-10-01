@@ -110,15 +110,8 @@ mod platform {
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         }
                         // Key-ups can be missed (secure desktop, lock screen); trust the physical state.
-                        let (ctrl, shift) = chord.held();
-                        if ctrl && !physically_down(VK_CONTROL) {
-                            let action = chord.key_up(ChordKey::Ctrl);
-                            dispatch(&app, action, &mut pressed);
-                        }
-                        if shift && !physically_down(VK_SHIFT) {
-                            let action = chord.key_up(ChordKey::Shift);
-                            dispatch(&app, action, &mut pressed);
-                        }
+                        let action = chord.reconcile(Instant::now(), physically_down(VK_CONTROL), physically_down(VK_SHIFT));
+                        dispatch(&app, action, &mut pressed);
                         let action = chord.tick(Instant::now());
                         dispatch(&app, action, &mut pressed);
                     }

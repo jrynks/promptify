@@ -13,6 +13,14 @@ pub enum ProfileKind {
     CodeAgent,
     Search,
     ImageGen,
+    VideoGen,
+}
+
+impl ProfileKind {
+    /// Generators take a description, not instructions: they cannot ask or answer questions.
+    pub fn is_media(self) -> bool {
+        matches!(self, Self::ImageGen | Self::VideoGen)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,17 +96,16 @@ impl Rule {
         4 * usize::from(!self.hosts.is_empty()) + 2 * usize::from(!self.processes.is_empty()) + usize::from(self.title.is_some())
     }
 
-    fn matches(&self, host: Option<&str>, process: &str, title: &str) -> bool {
+    /// Some(length of the matched host pattern, 0 without hosts) when the rule applies.
+    fn matches(&self, host: Option<&str>, process: &str, title: &str) -> Option<usize> {
+        let mut host_len = 0;
         if !self.hosts.is_empty() {
-            match host {
-                Some(h) if self.hosts.iter().any(|p| host_matches(h, p)) => {}
-                _ => return false,
-            }
+            host_len = self.hosts.iter().filter(|p| host.is_some_and(|h| host_matches(h, p))).map(String::len).max()?;
         }
         if !self.processes.is_empty() && !self.processes.iter().any(|p| p == process) {
-            return false;
+            return None;
         }
-        self.title.as_ref().is_none_or(|re| re.is_match(title))
+        self.title.as_ref().is_none_or(|re| re.is_match(title)).then_some(host_len)
     }
 }
 
@@ -116,6 +123,8 @@ pub struct Profile {
     pub newlines: NewlinePolicy,
     pub structure: Structure,
     pub examples: Vec<Example>,
+    /// False for image and video generator sites, which can never answer a question.
+    pub can_reply: bool,
     #[serde(skip)]
     rules: Vec<Rule>,
 }
@@ -156,7 +165,7 @@ impl ProfileSet {
                 return Err(invalid("style must not be empty"));
             }
             let structure = p.structure.unwrap_or(match (p.kind, p.newlines) {
-                (ProfileKind::Search | ProfileKind::ImageGen, _) => Structure::Flat,
+                (ProfileKind::Search | ProfileKind::ImageGen | ProfileKind::VideoGen, _) => Structure::Flat,
                 (_, NewlinePolicy::Collapse) => Structure::Inline,
                 _ => Structure::Graph,
             });
@@ -194,6 +203,7 @@ impl ProfileSet {
                 newlines: p.newlines,
                 structure,
                 examples: p.examples,
+                can_reply: !p.kind.is_media(),
                 rules,
             });
         }
@@ -204,17 +214,16 @@ impl ProfileSet {
         Ok(Self { profiles, fallback })
     }
 
-    /// Most specific matching rule wins; ties go to the profile listed first.
+    /// Most specific matching rule wins (a longer site pattern beats a shorter one, so
+    /// sora.chatgpt.com beats chatgpt.com); ties go to the profile listed first.
     pub fn resolve(&self, ctx: &ActiveContext) -> &Profile {
         let host = ctx.url_host();
         let process = ctx.normalized_process();
-        let mut best: Option<(usize, usize)> = None;
+        let mut best: Option<(usize, (usize, usize))> = None;
         for (index, profile) in self.profiles.iter().enumerate() {
             for rule in &profile.rules {
-                if !rule.matches(host.as_deref(), &process, &ctx.window_title) {
-                    continue;
-                }
-                let score = rule.specificity();
+                let Some(host_len) = rule.matches(host.as_deref(), &process, &ctx.window_title) else { continue };
+                let score = (rule.specificity(), host_len);
                 if best.is_none_or(|(_, s)| score > s) {
                     best = Some((index, score));
                 }
@@ -225,6 +234,25 @@ impl ProfileSet {
 
     pub fn get(&self, id: &str) -> Option<&Profile> {
         self.profiles.iter().find(|p| p.id == id)
+    }
+
+    /// For a chat assistant asked to create an image or video: the generator profile, phrased as a
+    /// request the assistant passes on to its image or video tool.
+    pub fn media_request(&self, target: &Profile, media: ProfileKind) -> Option<Profile> {
+        let (id, what, opener) = match media {
+            ProfileKind::ImageGen => ("image_gen", "an image", "Create an image:"),
+            ProfileKind::VideoGen => ("video_gen", "a video", "Create a video:"),
+            _ => return None,
+        };
+        let mut profile = self.get(id)?.clone();
+        profile.name = format!("{} (creating {what})", target.name);
+        profile.style = format!("{}\nThe prompt is typed into {}, a chat assistant, so start with \"{opener}\" followed by the description.", profile.style, target.name);
+        profile.paste = target.paste;
+        profile.can_reply = target.can_reply;
+        for example in &mut profile.examples {
+            example.prompt = format!("{opener} {}", example.prompt.trim());
+        }
+        Some(profile)
     }
 
     pub fn all(&self) -> &[Profile] {
@@ -272,6 +300,9 @@ mod tests {
         assert_eq!(id(ctx("WindowsTerminal.exe", "pwsh in repo", None)), "terminal");
         assert_eq!(id(ctx("chrome.exe", "Inbox", Some("https://mail.google.com"))), FALLBACK_PROFILE_ID);
         assert_eq!(id(ctx("notepad.exe", "Untitled", None)), FALLBACK_PROFILE_ID);
+        assert_eq!(id(ctx("chrome.exe", "Krea", Some("https://www.krea.ai/image"))), "image_gen");
+        assert_eq!(id(ctx("chrome.exe", "Sora", Some("https://sora.chatgpt.com/explore"))), "video_gen", "outranks chatgpt.com");
+        assert_eq!(id(ctx("chrome.exe", "Runway", Some("https://app.runwayml.com/video-tools"))), "video_gen");
     }
 
     #[test]

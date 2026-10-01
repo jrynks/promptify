@@ -26,6 +26,33 @@ pub enum Shape {
     MultiStep,
 }
 
+/// Whether the finished prompt may ask the user clarifying questions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowUp {
+    /// Go ahead with what was said.
+    Simple,
+    /// Ask up to 3 short questions when details that matter are missing.
+    Advanced,
+}
+
+/// Personal plans and decisions usually hinge on details the speaker did not give (budget, dates, who).
+const DECISION_STEMS: &[&str] =
+    &["plan", "buy", "purchas", "choos", "pick", "recommend", "decid", "compar", "budget", "trip", "travel", "vacation", "party", "hire", "invest", "strateg", "shortlist", "should"];
+
+fn words(transcript: &str) -> Vec<String> {
+    transcript.split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// Multi-step work, or a longer request to plan, buy or decide something, is advanced; the rest is simple.
+pub fn follow_up_hint(transcript: &str) -> FollowUp {
+    if complexity_hint(transcript) == Shape::MultiStep {
+        return FollowUp::Advanced;
+    }
+    let words = words(transcript);
+    let decision = words.iter().any(|w| DECISION_STEMS.iter().any(|stem| w.starts_with(stem) && w.len() <= stem.len() + 4));
+    if words.len() >= 12 && decision { FollowUp::Advanced } else { FollowUp::Simple }
+}
+
 const TASK_VERBS: &[&str] = &[
     "plan", "research", "compar", "build", "writ", "draft", "design", "implement", "refactor", "analy", "creat", "migrat",
     "fix", "debug", "test", "review", "evaluat", "organiz", "organis", "prepar", "outlin", "summar", "shortlist", "pick",
@@ -41,11 +68,7 @@ const ITERATION_WORDS: &[&str] = &[
 
 /// Cheap heuristic so a small model does not have to judge request complexity itself.
 pub fn complexity_hint(transcript: &str) -> Shape {
-    let words: Vec<String> = transcript
-        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect();
+    let words = words(transcript);
     if words.len() < 8 {
         return Shape::SingleTask;
     }
@@ -269,6 +292,29 @@ Done when: the suite passes 5 times in a row.";
         }
         for m in multi {
             assert_eq!(complexity_hint(m), Shape::MultiStep, "{m}");
+        }
+    }
+
+    #[test]
+    fn follow_up_only_for_advanced_requests() {
+        let simple = [
+            "what's the capital of france",
+            "write a haiku about autumn leaves for my mom's birthday card",
+            "make me a picture of a fox in a snowy forest at night",
+            "create a short cinematic video of waves crashing at sunset with warm light",
+            "translate this paragraph into formal german please",
+        ];
+        let advanced = [
+            "um i want to buy a used car for my son he just got his license something safe and not too expensive",
+            "so i need to plan a birthday party for my daughter she's turning eight and she loves science stuff",
+            "research the top three crm tools compare their pricing and then recommend one for a five person team",
+            "design a logo for my startup then create three variations and pick the best one for the website",
+        ];
+        for s in simple {
+            assert_eq!(follow_up_hint(s), FollowUp::Simple, "{s}");
+        }
+        for a in advanced {
+            assert_eq!(follow_up_hint(a), FollowUp::Advanced, "{a}");
         }
     }
 }

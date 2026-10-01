@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 /// Both modifiers must be held, with no other key, for this long before recording starts.
 pub const ARM_DELAY: Duration = Duration::from_millis(350);
 
+/// A low-level keyboard hook sees a key-down before Windows updates the key's physical state, so a
+/// key pressed this recently is not checked against it.
+pub const KEY_STATE_GRACE: Duration = Duration::from_millis(200);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordKey {
     Ctrl,
@@ -34,19 +38,29 @@ enum State {
 pub struct ModifierChord {
     ctrl: bool,
     shift: bool,
+    ctrl_down_at: Option<Instant>,
+    shift_down_at: Option<Instant>,
     state: State,
 }
 
 impl ModifierChord {
-    /// Which modifiers the chord believes are down, so the platform layer can repair missed key-ups.
-    pub fn held(&self) -> (bool, bool) {
-        (self.ctrl, self.shift)
+    /// Repairs key-ups the hook missed (secure desktop, lock screen) from the physical key state.
+    pub fn reconcile(&mut self, now: Instant, ctrl_physically_down: bool, shift_physically_down: bool) -> ChordAction {
+        let settled = |down_at: Option<Instant>| down_at.is_none_or(|at| now.saturating_duration_since(at) >= KEY_STATE_GRACE);
+        let mut action = ChordAction::None;
+        if self.ctrl && !ctrl_physically_down && settled(self.ctrl_down_at) && self.key_up(ChordKey::Ctrl) == ChordAction::Release {
+            action = ChordAction::Release;
+        }
+        if self.shift && !shift_physically_down && settled(self.shift_down_at) && self.key_up(ChordKey::Shift) == ChordAction::Release {
+            action = ChordAction::Release;
+        }
+        action
     }
 
     pub fn key_down(&mut self, key: ChordKey, now: Instant) -> ChordAction {
         match key {
-            ChordKey::Ctrl => self.ctrl = true,
-            ChordKey::Shift => self.shift = true,
+            ChordKey::Ctrl => (self.ctrl, self.ctrl_down_at) = (true, Some(now)),
+            ChordKey::Shift => (self.shift, self.shift_down_at) = (true, Some(now)),
             ChordKey::Other => {
                 if matches!(self.state, State::Pending { .. }) || (self.state == State::Idle && (self.ctrl || self.shift)) {
                     self.state = State::Spoiled;
@@ -92,6 +106,32 @@ mod tests {
     use super::*;
 
     const AFTER: Duration = Duration::from_millis(400);
+
+    #[test]
+    fn fresh_key_downs_are_not_undone_by_stale_physical_state() {
+        let t = Instant::now();
+        let mut c = ModifierChord::default();
+        c.key_down(ChordKey::Ctrl, t);
+        assert_eq!(c.reconcile(t, false, false), ChordAction::None, "state not updated yet");
+        c.key_down(ChordKey::Shift, t + Duration::from_millis(60));
+        assert_eq!(c.reconcile(t + Duration::from_millis(60), true, false), ChordAction::None);
+        assert_eq!(c.reconcile(t + Duration::from_millis(300), true, true), ChordAction::None);
+        assert_eq!(c.tick(t + AFTER + Duration::from_millis(60)), ChordAction::Press);
+    }
+
+    #[test]
+    fn missed_key_ups_are_repaired_once_settled() {
+        let t = Instant::now();
+        let mut c = ModifierChord::default();
+        c.key_down(ChordKey::Ctrl, t);
+        c.key_down(ChordKey::Shift, t);
+        assert_eq!(c.tick(t + AFTER), ChordAction::Press);
+        assert_eq!(c.reconcile(t + AFTER, true, false), ChordAction::Release, "Shift came up on the lock screen");
+        assert_eq!(c.reconcile(t + AFTER, false, false), ChordAction::None);
+        c.key_down(ChordKey::Ctrl, t + AFTER * 2);
+        c.key_down(ChordKey::Shift, t + AFTER * 2);
+        assert_eq!(c.tick(t + AFTER * 3), ChordAction::Press, "re-arms after the repair");
+    }
 
     #[test]
     fn holding_both_modifiers_alone_presses_then_releases() {

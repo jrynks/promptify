@@ -13,8 +13,8 @@ use crate::pipeline::{
     CancelToken, FailReason, FinishReason, GenerationRequest, Generator, History, JobEvent, Limits, Mode, Stage,
     StructureCheck, Transcriber,
 };
-use crate::profiles::{NewlinePolicy, Profile, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_answer_messages, build_prompt_messages, choose_mode, stable_prefix_len};
+use crate::profiles::{NewlinePolicy, Profile, ProfileKind, ProfileSet};
+use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_answer_messages, build_prompt_messages, choose_mode, media_request, stable_prefix_len};
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
@@ -293,6 +293,12 @@ impl TransformService {
         if transcript.is_empty() {
             return TransformOutcome::NoSpeech;
         }
+        // "Make me a picture of..." in a chat app needs a generator prompt, not questions and steps.
+        let media_profile = match (mode, profile.kind) {
+            (Mode::Prompt, ProfileKind::AiChat) => media_request(transcript).and_then(|kind| self.profiles.media_request(profile, kind)),
+            _ => None,
+        };
+        let profile = media_profile.as_ref().unwrap_or(profile);
         on_event(JobEvent::Transcript(transcript));
         *saved_transcript = Some(transcript.to_owned());
 
@@ -598,6 +604,28 @@ mod tests {
         assert_eq!(id("", Some("https://claude.ai/new")), "claude");
         assert_eq!(id("com.example.notes", None), "generic");
         assert_eq!(target_label(&ClientContext { url: Some("claude.ai".into()), ..Default::default() }.to_active()), "claude.ai");
+    }
+
+    #[test]
+    fn chat_requests_for_images_or_videos_get_generator_prompts() {
+        let f = fixture(Duration::ZERO);
+        let chatgpt = ClientContext { app: "com.openai.chatgpt".into(), ..Default::default() };
+        run_text(&f, &chatgpt, "make me a picture of a fox in a snowy forest", false);
+        run_text(&f, &chatgpt, "create a short cinematic video of waves at sunset", false);
+        run_text(&f, &chatgpt, "write a video script for our product launch then review it", false);
+        run_text(&f, &chatgpt, "design a logo for my startup then create three variations and pick the best one for the website", false);
+        let calls = f.generator.calls.lock().unwrap();
+        let system = |i: usize| calls[i][0].content.clone();
+        let last = |i: usize| calls[i].last().unwrap().content.clone();
+        for (i, what, opener) in [(0, "an image", "Create an image:"), (1, "a video", "Create a video:")] {
+            let system = system(i);
+            assert!(system.contains(&format!("Target: ChatGPT (creating {what}).")), "{system}");
+            assert!(system.contains(opener) && system.contains("Describe, do not instruct") && !system.contains("Task structure:"));
+            assert!(last(i).contains("Follow-up: simple request.") && !last(i).contains("Request shape:"));
+        }
+        assert!(system(2).contains("Target: ChatGPT.") && last(2).contains("Follow-up: advanced request."), "a script is text");
+        assert!(system(3).contains("Target: ChatGPT (creating an image)."));
+        assert!(last(3).contains("Follow-up: advanced request."), "an advanced image request may ask");
     }
 
     #[test]
