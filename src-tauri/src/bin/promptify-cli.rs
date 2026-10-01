@@ -24,6 +24,7 @@ const USAGE: &str = "usage:
   promptify-cli models
   promptify-cli download <model-id>...
   promptify-cli transcribe <file.wav>
+  promptify-cli live-sim <file.wav>   (replays the file as if spoken; compares live chunks with one full pass)
   promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
   promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json]
   promptify-cli eval <cases.toml>
@@ -235,6 +236,54 @@ fn run() -> Result<(), String> {
             if ensure_selection(&manifest, &models_dir, &mut app_settings) {
                 settings::save(&data_dir, &app_settings).map_err(|e| e.to_string())?;
             }
+        }
+        Some("live-sim") => {
+            use promptify_core::live::{ChunkPolicy, LiveTranscript, next_cut};
+            use promptify_core::scheduler::{Priority, SchedulerLimits};
+            use promptify_core::transform::{Input, Transform, TransformService};
+            let audio = read_wav(Path::new(args.get(1).ok_or(USAGE)?))?;
+            let shared: SharedSettings = Arc::new(RwLock::new(app_settings));
+            let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
+            stt.preload().map_err(|e| e.0)?;
+            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
+            let service = TransformService::new(stt.clone(), llm, Arc::new(NoHistory), ProfileSet::bundled(), Limits::default(), SchedulerLimits::default());
+            let cancel = CancelToken::default();
+            let policy = ChunkPolicy::default();
+            let mut live = LiveTranscript::default();
+            let step = TARGET_SAMPLE_RATE as usize / 5;
+            let mut end = 0;
+            while end < audio.len() {
+                end = (end + step).min(audio.len());
+                let tail = &audio[live.committed_samples()..end];
+                if let Some(cut) = next_cut(tail, &policy) {
+                    let started = Instant::now();
+                    let text = service.transcribe_chunk(&tail[..cut], &cancel, Duration::from_secs(1)).unwrap_or_default();
+                    eprintln!("chunk at {:.1}s: {:.1}s of audio in {:.0?}: {text}", end as f32 / 16000.0, cut as f32 / 16000.0, started.elapsed());
+                    live.commit(cut, &text);
+                }
+            }
+            let committed = live.text();
+            let tail = &audio[live.committed_samples()..];
+            let target = text_context("notepad.exe".into(), None, String::new());
+            let profile = service.profiles().resolve(&target);
+            let transform = Transform { input: Input::Live { committed: &committed, tail }, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, use_tools: false };
+            let started = Instant::now();
+            let mut live_text = String::new();
+            service.run_scheduled(Priority::Local, "local", &transform, &cancel, Duration::from_secs(5), &mut |e| {
+                if let JobEvent::Transcript(t) = e {
+                    live_text = t.to_owned();
+                }
+            }).map_err(|e| e.to_string())?;
+            let after_stop = started.elapsed();
+            let started = Instant::now();
+            let full = stt.transcribe(&audio, &cancel).map_err(|e| e.0)?;
+            println!("live: {live_text}\nfull: {}", full.trim());
+            println!(
+                "audio {:.1}s; tail {:.1}s; after stop: live {after_stop:.0?} vs full {:.0?}",
+                audio.len() as f32 / 16000.0,
+                tail.len() as f32 / 16000.0,
+                started.elapsed()
+            );
         }
         Some("transcribe") => {
             let wav = PathBuf::from(args.get(1).ok_or(USAGE)?);

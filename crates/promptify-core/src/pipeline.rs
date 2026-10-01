@@ -317,11 +317,20 @@ impl Orchestrator {
     }
 
     pub fn finish(&self, job: Job, audio: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
+        self.finish_input(job, Input::Audio(audio), on_event)
+    }
+
+    /// Finishes a recording whose start was already transcribed while the user spoke.
+    pub fn finish_live(&self, job: Job, committed: &str, tail: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
+        self.finish_input(job, Input::Live { committed, tail }, on_event)
+    }
+
+    fn finish_input(&self, job: Job, input: Input<'_>, on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
         let started = Instant::now();
         let profiles = self.profiles();
         let profile = profiles.get(&job.profile_id).unwrap_or_else(|| profiles.resolve(&job.target));
         let transform = Transform {
-            input: Input::Audio(audio),
+            input,
             mode: job.mode,
             profile,
             target: &job.target,

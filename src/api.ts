@@ -22,6 +22,7 @@ export interface JobReport {
 export type OverlayEvent =
   | { type: "listening"; mode: Mode; profile: string; target: string; latched: boolean }
   | { type: "level"; level: number }
+  | { type: "partial"; text: string }
   | { type: "stage"; stage: Stage }
   | { type: "transcript"; text: string }
   | { type: "token"; text: string }

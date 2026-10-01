@@ -59,11 +59,14 @@ function Overlay() {
       switch (payload.type) {
         case "listening":
           window.clearTimeout(hideTimer.current);
-          setPreview("");
+          if (!payload.latched) setPreview("");
           setView({ kind: "listening", mode: payload.mode, profile: payload.profile, target: payload.target, latched: payload.latched });
           break;
         case "level":
           setLevel(payload.level);
+          break;
+        case "partial":
+          setPreview(payload.text);
           break;
         case "stage":
           if (payload.stage === "revising") setPreview("");
@@ -111,6 +114,7 @@ function Overlay() {
               {view.profile} · {view.target}
               {view.latched ? " · press the hotkey again to finish" : " · release to finish"} · Esc cancels
             </span>
+            {preview && <span className="preview">{preview}</span>}
           </div>
         </>
       )}

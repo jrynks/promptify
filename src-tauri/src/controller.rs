@@ -1,13 +1,17 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use promptify_core::hotkey::{Gesture, GestureAction};
+use promptify_core::live::{ChunkPolicy, LiveTranscript, next_cut};
 use promptify_core::pipeline::{BeginError, CancelToken, Job, JobEvent, JobReport, Mode, Orchestrator, Outcome, Stage};
+use promptify_core::transform::TransformService;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::audio::Recording;
+use crate::audio::{LiveAudio, Recording};
 
 pub enum Command {
     Press(Mode),
@@ -20,6 +24,8 @@ pub enum Command {
 pub enum OverlayEvent {
     Listening { mode: Mode, profile: String, target: String, latched: bool },
     Level { level: f32 },
+    /// Speech transcribed so far while still recording.
+    Partial { text: String },
     Stage { stage: Stage },
     Transcript { text: String },
     Token { text: String },
@@ -36,7 +42,7 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
         OverlayEvent::Stage { stage: Stage::Revising } => Some("revising prompt\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
         OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),
-        OverlayEvent::Level { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } => None,
+        OverlayEvent::Level { .. } | OverlayEvent::Partial { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } => None,
     };
     if let Some(status) = status {
         crate::tray::set_status(app, status);
@@ -46,8 +52,47 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
 
 enum Phase {
     Idle,
-    Recording { job: Box<Job>, recording: Recording },
+    Recording { job: Box<Job>, recording: Recording, live: LiveLoop },
     Processing { cancel: CancelToken },
+}
+
+/// How often the live loop looks for a finished chunk, and how long a chunk may wait for the engines.
+const LIVE_POLL: Duration = Duration::from_millis(200);
+const LIVE_ENGINE_WAIT: Duration = Duration::from_millis(150);
+
+/// Transcribes finished chunks in the background while the user is still speaking.
+struct LiveLoop {
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<LiveTranscript>,
+}
+
+impl LiveLoop {
+    fn spawn(app: AppHandle, service: Arc<TransformService>, audio: LiveAudio, cancel: CancelToken) -> std::io::Result<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::Builder::new().name("live-transcription".into()).spawn(move || {
+            let policy = ChunkPolicy::default();
+            let mut live = LiveTranscript::default();
+            while !flag.load(Ordering::SeqCst) && !cancel.is_cancelled() {
+                std::thread::sleep(LIVE_POLL);
+                let tail = audio.copy_from(live.committed_samples());
+                let Some(cut) = next_cut(&tail, &policy) else { continue };
+                // A chunk that could not run now is transcribed with the rest at the end.
+                if let Some(text) = service.transcribe_chunk(&tail[..cut], &cancel, LIVE_ENGINE_WAIT) {
+                    live.commit(cut, &text);
+                    emit(&app, OverlayEvent::Partial { text: live.text() });
+                }
+            }
+            live
+        })?;
+        Ok(Self { stop, thread })
+    }
+
+    /// Stops looking for new chunks; a chunk already being transcribed still completes.
+    fn finish(self) -> LiveTranscript {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.join().unwrap_or_default()
+    }
 }
 
 /// Serializes hotkey commands on one worker thread; processing runs on its own thread so
@@ -154,7 +199,18 @@ impl Worker {
         (self.on_active)(true);
         self.show_overlay();
         emit(&self.app, listening(&self.orchestrator, &job, false));
-        *phase = Phase::Recording { job: Box::new(job), recording };
+        let live = match LiveLoop::spawn(self.app.clone(), self.orchestrator.service().clone(), recording.live(), job.cancel_token()) {
+            Ok(live) => live,
+            Err(e) => {
+                let _ = recording.stop();
+                drop(job);
+                self.gesture.reset();
+                (self.on_active)(false);
+                emit(&self.app, OverlayEvent::Error { message: format!("could not start live transcription: {e}") });
+                return;
+            }
+        };
+        *phase = Phase::Recording { job: Box::new(job), recording, live };
     }
 
     fn relisten(&self, latched: bool) {
@@ -165,12 +221,14 @@ impl Worker {
 
     fn stop(&mut self) {
         let mut phase = self.phase.lock().unwrap();
-        let Phase::Recording { job, recording } = std::mem::replace(&mut *phase, Phase::Idle) else {
+        let Phase::Recording { job, recording, live } = std::mem::replace(&mut *phase, Phase::Idle) else {
             return;
         };
         let audio = match recording.stop() {
             Ok(audio) => audio,
             Err(message) => {
+                job.cancel_token().cancel();
+                let _ = live.finish();
                 drop(job);
                 (self.on_active)(false);
                 emit(&self.app, OverlayEvent::Error { message });
@@ -188,7 +246,9 @@ impl Worker {
         std::thread::Builder::new()
             .name("job-processing".into())
             .spawn(move || {
-                let report = orchestrator.finish(*job, &audio.samples, &mut |event| {
+                let live = live.finish();
+                let tail = audio.samples.get(live.committed_samples()..).unwrap_or_default();
+                let report = orchestrator.finish_live(*job, &live.text(), tail, &mut |event| {
                     let payload = match event {
                         JobEvent::Stage(stage) => OverlayEvent::Stage { stage },
                         JobEvent::Transcript(text) => OverlayEvent::Transcript { text: text.to_owned() },
@@ -220,8 +280,10 @@ impl Worker {
     fn cancel(&mut self) {
         let mut phase = self.phase.lock().unwrap();
         match std::mem::replace(&mut *phase, Phase::Idle) {
-            Phase::Recording { job, recording } => {
+            Phase::Recording { job, recording, live } => {
+                job.cancel_token().cancel();
                 let _ = recording.stop();
+                drop(live);
                 drop(job);
                 self.gesture.reset();
                 (self.on_active)(false);

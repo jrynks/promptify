@@ -15,6 +15,7 @@ use crate::pipeline::{
 };
 use crate::profiles::{Profile, ProfileSet};
 use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_prompt_messages, stable_prefix_len};
+use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
 use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_structure};
@@ -56,6 +57,8 @@ pub enum Input<'a> {
     Audio(&'a [f32]),
     /// Typed or client-transcribed text; skips speech recognition.
     Text(&'a str),
+    /// Speech already transcribed while recording, plus the audio after it.
+    Live { committed: &'a str, tail: &'a [f32] },
 }
 
 /// Where a remote client's text will go, declared by the client itself.
@@ -176,9 +179,20 @@ impl TransformService {
         Ok(self.run(transform, cancel, on_event))
     }
 
+    /// Transcribes one finished chunk while the user is still speaking. Gives up rather than wait
+    /// long for the engines; the chunk is then simply transcribed with the rest at the end.
+    pub fn transcribe_chunk(&self, audio: &[f32], cancel: &CancelToken, wait: Duration) -> Option<String> {
+        if audio.len() > self.limits.max_audio_samples {
+            return None;
+        }
+        let _permit = self.scheduler.acquire(Priority::Local, "local", cancel, Instant::now() + wait).ok()?;
+        self.transcriber.transcribe(audio, cancel).ok().filter(|_| !cancel.is_cancelled())
+    }
+
     fn check_input(&self, transform: &Transform<'_>) -> Result<(), FailReason> {
         match transform.input {
             Input::Audio(audio) if audio.len() > self.limits.max_audio_samples => Err(FailReason::RecordingTooLong),
+            Input::Live { tail, .. } if tail.len() > self.limits.max_audio_samples => Err(FailReason::RecordingTooLong),
             Input::Text(text) if text.chars().count() > MAX_TEXT_INPUT_CHARS => Err(FailReason::RecordingTooLong),
             _ => Ok(()),
         }
@@ -217,6 +231,15 @@ impl TransformService {
                 }
             }
             Input::Text(text) => text.to_owned(),
+            Input::Live { committed, tail } => {
+                on_event(JobEvent::Stage(Stage::Transcribing));
+                let tail_text = if has_speech(tail, &ChunkPolicy::default()) { self.transcriber.transcribe(tail, cancel) } else { Ok(String::new()) };
+                match tail_text {
+                    Ok(text) => [committed.trim(), text.trim()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" "),
+                    Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
+                    Err(err) => return failed(FailReason::TranscriptionFailed, err.0),
+                }
+            }
         };
         if cancel.is_cancelled() {
             return TransformOutcome::Cancelled;
@@ -520,6 +543,86 @@ mod tests {
         let tool_chars: usize = last.split("<tool_context>\n").skip(1).map(|s| s.split("\n</tool_context>").next().unwrap().chars().count()).sum();
         assert!(tool_chars <= MAX_TOOL_CONTEXT_TOTAL_CHARS, "{tool_chars}");
         assert!(last.contains("truncated"));
+    }
+
+    #[test]
+    fn live_input_transcribes_only_the_tail_after_committed_text() {
+        #[derive(Default)]
+        struct Lengths(Mutex<Vec<usize>>);
+        impl Transcriber for Lengths {
+            fn transcribe(&self, audio: &[f32], _: &CancelToken) -> Result<String, BackendError> {
+                self.0.lock().unwrap().push(audio.len());
+                Ok(" the tail ".into())
+            }
+        }
+        let lengths = Arc::new(Lengths::default());
+        let service = TransformService::new(
+            lengths.clone(),
+            Arc::new(EchoGenerator::default()),
+            Arc::new(SentinelHistory::default()),
+            ProfileSet::bundled(),
+            Limits::default(),
+            SchedulerLimits::default(),
+        );
+        let target = ActiveContext::default();
+        let profile = service.profiles().resolve(&target);
+        let tail: Vec<f32> = (0..1234).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        let transform = Transform {
+            input: Input::Live { committed: " already said ", tail: &tail },
+            mode: Mode::Dictation,
+            profile,
+            target: &target,
+            surrounding: None,
+            use_history: false,
+            use_tools: false,
+        };
+        let mut transcript = String::new();
+        service
+            .run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
+                if let JobEvent::Transcript(t) = e {
+                    transcript = t.to_owned();
+                }
+            })
+            .unwrap();
+        assert_eq!(*lengths.0.lock().unwrap(), vec![1234]);
+        assert_eq!(transcript, "already said the tail");
+
+        let silent = vec![0.0; 16_000];
+        let transform = Transform { input: Input::Live { committed: "only this", tail: &silent }, ..transform };
+        service
+            .run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
+                if let JobEvent::Transcript(t) = e {
+                    transcript = t.to_owned();
+                }
+            })
+            .unwrap();
+        assert_eq!(lengths.0.lock().unwrap().len(), 1, "a silent tail is not transcribed");
+        assert_eq!(transcript, "only this");
+
+        let too_long = vec![0.5; Limits::default().max_audio_samples + 1];
+        let transform = Transform { input: Input::Live { committed: "x", tail: &too_long }, ..transform };
+        let report = service.run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap();
+        assert_eq!(report.outcome, TransformOutcome::Failed { reason: FailReason::RecordingTooLong, detail: None });
+        assert_eq!(lengths.0.lock().unwrap().len(), 1, "an oversized tail never reaches the engine");
+    }
+
+    #[test]
+    fn live_chunks_never_wait_long_for_busy_engines_or_run_when_cancelled() {
+        let f = fixture(Duration::ZERO);
+        let audio = vec![0.0; 16_000];
+        let held = f.service.scheduler().acquire(Priority::Device, "phone", &CancelToken::default(), Instant::now() + Duration::from_secs(1)).unwrap();
+        let started = Instant::now();
+        assert_eq!(f.service.transcribe_chunk(&audio, &CancelToken::default(), Duration::from_millis(60)), None);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(held);
+        let cancelled = CancelToken::default();
+        cancelled.cancel();
+        assert_eq!(f.service.transcribe_chunk(&audio, &cancelled, Duration::from_millis(60)), None);
+        assert_eq!(f.transcriber.0.load(Ordering::SeqCst), 0, "no engine work while busy or cancelled");
+        assert_eq!(f.service.transcribe_chunk(&audio, &CancelToken::default(), Duration::from_millis(60)).as_deref(), Some("spoken words"));
+        let too_long = vec![0.0; Limits::default().max_audio_samples + 1];
+        assert_eq!(f.service.transcribe_chunk(&too_long, &CancelToken::default(), Duration::from_millis(60)), None);
+        assert_eq!(f.transcriber.0.load(Ordering::SeqCst), 1);
     }
 
     #[test]

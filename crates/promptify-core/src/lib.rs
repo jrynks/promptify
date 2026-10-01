@@ -4,6 +4,7 @@ pub mod dictation;
 pub mod eval;
 pub mod history;
 pub mod hotkey;
+pub mod live;
 pub mod llm_protocol;
 pub mod models;
 pub mod pipeline;
