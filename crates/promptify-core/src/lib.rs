@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod context;
 pub mod dictation;
+pub mod eval;
 pub mod history;
 pub mod hotkey;
 pub mod llm_protocol;
@@ -9,3 +10,4 @@ pub mod pipeline;
 pub mod profiles;
 pub mod prompt;
 pub mod sanitize;
+pub mod structure;

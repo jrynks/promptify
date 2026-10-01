@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 
 use promptify_core::audio::{CaptureBuffer, TARGET_SAMPLE_RATE};
 use promptify_core::context::{ActiveContext, ContextPolicy, FocusedText, WindowIdentity};
-use promptify_core::history::{HistoryLimits, HistoryLog};
+use promptify_core::eval::{self, Expect};
+use promptify_core::history::{HistoryContext, HistoryLimits, HistoryLog, NewHistoryEntry};
 use promptify_core::models::Manifest;
 use promptify_core::pipeline::{
-    BackendError, Backends, CancelToken, ContextProvider, Inserter, JobEvent, Limits, Mode, Orchestrator, Transcriber,
+    BackendError, Backends, CancelToken, ContextProvider, History, Inserter, JobEvent, Limits, Mode, Orchestrator, Outcome,
+    Transcriber,
 };
 use promptify_core::profiles::{PasteChord, ProfileSet};
 use promptify_lib::llm_client::{LlmWorker, worker_exe};
@@ -22,7 +24,55 @@ const USAGE: &str = "usage:
   promptify-cli models
   promptify-cli download <model-id>...
   promptify-cli transcribe <file.wav>
-  promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]";
+  promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
+  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE]
+  promptify-cli eval <cases.toml>";
+
+/// Feeds typed text through the pipeline in place of speech.
+struct TextTranscriber(String);
+
+impl Transcriber for TextTranscriber {
+    fn transcribe(&self, _: &[f32], _: &CancelToken) -> Result<String, BackendError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Evaluation and typed rewrites must neither read nor write the user's history.
+struct NoHistory;
+
+impl History for NoHistory {
+    fn context(&self, _: &str, _: &str) -> HistoryContext {
+        HistoryContext::default()
+    }
+    fn record(&self, _: NewHistoryEntry) -> Result<bool, BackendError> {
+        Ok(false)
+    }
+}
+
+fn text_context(process: String, url: Option<String>, title: String) -> ActiveContext {
+    ActiveContext { window: WindowIdentity { handle: 1, process_id: 1 }, process_name: process, window_title: title, url }
+}
+
+fn rewrite_text(llm: &Arc<LlmWorker>, ctx: ActiveContext, text: &str) -> Result<promptify_core::pipeline::JobReport, String> {
+    let backends = Backends {
+        context: Arc::new(FixedContext(ctx)),
+        transcriber: Arc::new(TextTranscriber(text.to_owned())),
+        generator: llm.clone(),
+        inserter: Arc::new(PrintInserter),
+        history: Arc::new(NoHistory),
+    };
+    let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
+    let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
+    let job = orchestrator.begin(Mode::Prompt).map_err(|e| e.to_string())?;
+    Ok(orchestrator.finish(job, &[], &mut |_| {}))
+}
+
+fn outcome_text(outcome: &Outcome) -> Option<&str> {
+    match outcome {
+        Outcome::Inserted { text } | Outcome::Blocked { text, .. } => Some(text),
+        _ => None,
+    }
+}
 
 struct FixedContext(ActiveContext);
 
@@ -190,6 +240,46 @@ fn run() -> Result<(), String> {
                 JobEvent::Token(_) => {}
             });
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+        }
+        Some("rewrite") => {
+            let text = args.get(1).ok_or(USAGE)?.clone();
+            let ctx = text_context(
+                flag(&args, "--process").unwrap_or_else(|| "chrome.exe".into()),
+                flag(&args, "--url"),
+                flag(&args, "--title").unwrap_or_default(),
+            );
+            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
+            llm.preload().map_err(|e| e.0)?;
+            let report = rewrite_text(&llm, ctx, &text)?;
+            println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+        }
+        Some("eval") => {
+            let path = PathBuf::from(args.get(1).ok_or(USAGE)?);
+            let source = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {path:?}: {e}"))?;
+            let cases = eval::load_cases(&source)?;
+            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
+            llm.preload().map_err(|e| e.0)?;
+            let (mut graph_pass, mut graph_total, mut flat_pass, mut flat_total, mut repaired) = (0, 0, 0, 0, 0);
+            for case in &cases {
+                let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
+                let report = rewrite_text(&llm, ctx, &case.said)?;
+                let score = eval::score(case.expect, outcome_text(&report.outcome));
+                if report.structure == Some(promptify_core::pipeline::StructureCheck::Repaired) {
+                    repaired += 1;
+                }
+                match case.expect {
+                    Expect::Graph => (graph_total, graph_pass) = (graph_total + 1, graph_pass + usize::from(score.pass)),
+                    Expect::Flat => (flat_total, flat_pass) = (flat_total + 1, flat_pass + usize::from(score.pass)),
+                }
+                println!(
+                    "{} profile={} outcome={} structure={:?} valid={} pass={} {}ms",
+                    case.id, report.profile_id, report.outcome.kind(), report.structure, score.valid, score.pass, report.elapsed_ms
+                );
+                if std::env::var_os("PROMPTIFY_EVAL_SHOW").is_some() {
+                    println!("{}\n---", outcome_text(&report.outcome).unwrap_or(""));
+                }
+            }
+            println!("graph: {graph_pass}/{graph_total}  flat: {flat_pass}/{flat_total}  repaired: {repaired}");
         }
         _ => return Err(USAGE.into()),
     }

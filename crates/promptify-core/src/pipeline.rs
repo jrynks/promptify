@@ -8,8 +8,9 @@ use crate::context::{ActiveContext, AdmittedText, ContextPolicy, FocusedText, Wi
 use crate::dictation::remove_fillers;
 use crate::history::{HistoryContext, HistoryLog, NewHistoryEntry};
 use crate::profiles::{PasteChord, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, build_prompt_messages};
+use crate::prompt::{ChatMessage, PromptRequest, Role, build_prompt_messages};
 use crate::sanitize::sanitize_output;
+use crate::structure::{GraphError, Structure, validate_structure};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -36,6 +37,8 @@ pub enum Mode {
 pub enum Stage {
     Transcribing,
     Generating,
+    /// Rewriting a draft whose task graph was malformed.
+    Revising,
     Inserting,
 }
 
@@ -52,6 +55,8 @@ pub struct Limits {
     pub max_new_tokens: u32,
     pub generation_timeout: Duration,
     pub max_output_chars: usize,
+    /// Extra generations allowed to fix a malformed task graph; all share `generation_timeout`.
+    pub max_structure_repairs: u32,
 }
 
 impl Default for Limits {
@@ -61,6 +66,7 @@ impl Default for Limits {
             max_new_tokens: 768,
             generation_timeout: Duration::from_secs(60),
             max_output_chars: 6000,
+            max_structure_repairs: 1,
         }
     }
 }
@@ -189,6 +195,18 @@ impl Outcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructureCheck {
+    /// No numbered steps or loops in the output.
+    Unstructured,
+    Valid,
+    /// The first draft was malformed and a repair passed validation.
+    Repaired,
+    /// No repair passed validation; the first draft was kept.
+    KeptOriginal,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct JobReport {
     pub job_id: u64,
@@ -196,6 +214,7 @@ pub struct JobReport {
     pub outcome: Outcome,
     pub elapsed_ms: u64,
     pub history_saved: bool,
+    pub structure: Option<StructureCheck>,
 }
 
 struct BusyGuard(Arc<AtomicBool>);
@@ -279,8 +298,9 @@ impl Orchestrator {
 
     pub fn finish(&self, job: Job, audio: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> JobReport {
         let started = Instant::now();
-        let (outcome, transcript) = self.run(&job, audio, on_event);
-        let history_saved = match (&outcome, transcript) {
+        let mut notes = RunNotes::default();
+        let outcome = self.run_stages(&job, audio, &mut notes, on_event);
+        let history_saved = match (&outcome, notes.transcript) {
             (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, transcript, text, true),
             (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, transcript, text, false),
             _ => false,
@@ -291,6 +311,7 @@ impl Orchestrator {
             outcome,
             elapsed_ms: started.elapsed().as_millis() as u64,
             history_saved,
+            structure: notes.structure,
         }
     }
 
@@ -307,13 +328,7 @@ impl Orchestrator {
         self.backends.history.record(entry).unwrap_or(false)
     }
 
-    fn run(&self, job: &Job, audio: &[f32], on_event: &mut dyn FnMut(JobEvent<'_>)) -> (Outcome, Option<String>) {
-        let mut transcript = None;
-        let outcome = self.run_stages(job, audio, &mut transcript, on_event);
-        (outcome, transcript)
-    }
-
-    fn run_stages(&self, job: &Job, audio: &[f32], saved_transcript: &mut Option<String>, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
+    fn run_stages(&self, job: &Job, audio: &[f32], notes: &mut RunNotes, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
         let cancel = &job.cancel;
         if cancel.is_cancelled() {
             return Outcome::Cancelled;
@@ -337,7 +352,7 @@ impl Orchestrator {
             return Outcome::NoSpeech;
         }
         on_event(JobEvent::Transcript(transcript));
-        *saved_transcript = Some(transcript.to_owned());
+        notes.transcript = Some(transcript.to_owned());
 
         let (raw, finish) = match job.mode {
             Mode::Dictation => (remove_fillers(transcript), FinishReason::Stop),
@@ -365,7 +380,17 @@ impl Orchestrator {
                 if Instant::now() > deadline {
                     return Outcome::Failed { reason: FailReason::TimedOut, detail: None };
                 }
-                (generation.text, generation.finish)
+                if generation.finish == FinishReason::Stop && profile.structure != Structure::Flat {
+                    match self.check_structure(&messages, generation.text, deadline, cancel, on_event) {
+                        Ok((text, check)) => {
+                            notes.structure = Some(check);
+                            (text, FinishReason::Stop)
+                        }
+                        Err(outcome) => return outcome,
+                    }
+                } else {
+                    (generation.text, generation.finish)
+                }
             }
         };
 
@@ -392,6 +417,73 @@ impl Orchestrator {
             Err(err) => Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some(err.0) },
         }
     }
+
+    /// Validates the draft's task graph and runs at most `max_structure_repairs` rewrites inside the
+    /// original deadline. Any repair that fails, truncates or arrives late leaves the first draft in place.
+    fn check_structure(
+        &self,
+        messages: &[ChatMessage],
+        draft: String,
+        deadline: Instant,
+        cancel: &CancelToken,
+        on_event: &mut dyn FnMut(JobEvent<'_>),
+    ) -> Result<(String, StructureCheck), Outcome> {
+        let mut error = match validate_structure(&draft) {
+            Ok(summary) if summary.is_structured() => return Ok((draft, StructureCheck::Valid)),
+            Ok(_) => return Ok((draft, StructureCheck::Unstructured)),
+            Err(error) => error,
+        };
+        let mut latest = draft.clone();
+        for _ in 0..self.limits.max_structure_repairs {
+            if cancel.is_cancelled() {
+                return Err(Outcome::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            on_event(JobEvent::Stage(Stage::Revising));
+            let mut repair = messages.to_vec();
+            repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
+            repair.push(ChatMessage { role: Role::User, content: repair_instruction(error) });
+            let request = GenerationRequest { messages: &repair, max_new_tokens: self.limits.max_new_tokens, deadline };
+            let mut forward = |token: &str| on_event(JobEvent::Token(token));
+            let generation = match self.backends.generator.generate(&request, cancel, &mut forward) {
+                Ok(generation) => generation,
+                Err(_) if cancel.is_cancelled() => return Err(Outcome::Cancelled),
+                Err(_) => break,
+            };
+            if Instant::now() > deadline || generation.finish != FinishReason::Stop {
+                break;
+            }
+            match validate_structure(&generation.text) {
+                Ok(_) => return Ok((generation.text, StructureCheck::Repaired)),
+                Err(next) => {
+                    error = next;
+                    latest = generation.text;
+                }
+            }
+        }
+        if cancel.is_cancelled() {
+            return Err(Outcome::Cancelled);
+        }
+        Ok((draft, StructureCheck::KeptOriginal))
+    }
+}
+
+#[derive(Default)]
+struct RunNotes {
+    transcript: Option<String>,
+    structure: Option<StructureCheck>,
+}
+
+fn repair_instruction(error: GraphError) -> String {
+    format!(
+        "Your prompt has a structural problem: {error}. Rewrite the complete prompt and fix only that problem. \
+Number the steps 1, 2, 3 in order, let each step depend only on earlier steps, and give every loop a step to return to \
+and a limit of at most {} rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" \
+Output only the finished prompt.",
+        crate::structure::MAX_LOOP_ROUNDS
+    )
 }
 
 fn failed(reason: FailReason, err: BackendError) -> Outcome {
@@ -455,11 +547,30 @@ mod tests {
         cancel_during: bool,
         error: Option<String>,
         calls: Mutex<Vec<Vec<ChatMessage>>>,
+        /// Outputs for later calls (the repair rounds), consumed in order after the first call.
+        later: Mutex<Vec<String>>,
+        later_delay: Duration,
+        cancel_on_later: bool,
     }
 
     impl Generator for FakeGenerator {
         fn generate(&self, req: &GenerationRequest<'_>, cancel: &CancelToken, on_token: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
-            self.calls.lock().unwrap().push(req.messages.to_vec());
+            let call = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.push(req.messages.to_vec());
+                calls.len()
+            };
+            if call > 1 {
+                std::thread::sleep(self.later_delay);
+                if self.cancel_on_later {
+                    cancel.cancel();
+                    return Err(BackendError("worker killed".into()));
+                }
+                let mut later = self.later.lock().unwrap();
+                let text = if later.is_empty() { self.output.clone() } else { later.remove(0) };
+                on_token(&text);
+                return Ok(Generation { text, finish: FinishReason::Stop });
+            }
             std::thread::sleep(self.delay);
             if self.cancel_during {
                 cancel.cancel();
@@ -794,5 +905,88 @@ mod tests {
         let messages = h.generator.calls.lock().unwrap()[0].clone();
         assert!(messages.iter().any(|m| m.role == crate::prompt::Role::Assistant && m.content == "PAST-PROMPT"));
         assert!(messages.last().unwrap().content.contains("<previous_prompt>\nPREVIOUS-PROMPT\n</previous_prompt>"));
+    }
+
+    const BAD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 3): Build.\nStep 3: Test.";
+    const GOOD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 1): Build.\nLoop: if it fails, return to Step 2 (max 2 rounds).";
+
+    fn scripted(first: &str, later: &[&str]) -> FakeGenerator {
+        FakeGenerator { output: first.into(), later: Mutex::new(later.iter().map(|s| s.to_string()).collect()), ..Default::default() }
+    }
+
+    fn calls(h: &Harness) -> usize {
+        h.generator.calls.lock().unwrap().len()
+    }
+
+    #[test]
+    fn valid_graph_is_inserted_without_repair() {
+        let h = harness(chat_ctx(), "x", generator(GOOD_GRAPH), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::Valid));
+        assert_eq!(calls(&h), 1);
+        let h = harness(chat_ctx(), "x", generator("Plain prompt."), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::Unstructured));
+    }
+
+    #[test]
+    fn malformed_graph_is_repaired_once() {
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let mut stages = Vec::new();
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        let report = h.orchestrator.finish(job, &[0.0; 16], &mut |e| if let JobEvent::Stage(s) = e { stages.push(s) });
+        assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert_eq!(stages, vec![Stage::Transcribing, Stage::Generating, Stage::Revising, Stage::Inserting]);
+        let calls = h.generator.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let repair = &calls[1];
+        assert_eq!(&repair[..calls[0].len()], &calls[0][..]);
+        assert_eq!(repair[repair.len() - 2], ChatMessage { role: Role::Assistant, content: BAD_GRAPH.into() });
+        assert!(repair.last().unwrap().content.contains("Step 2 depends on step 3"));
+    }
+
+    #[test]
+    fn failed_repair_keeps_first_draft_and_stays_bounded() {
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert_eq!(calls(&h), 2);
+        let limits = Limits { max_structure_repairs: 0, ..Limits::default() };
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), limits);
+        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::KeptOriginal));
+        assert_eq!(calls(&h), 1);
+    }
+
+    #[test]
+    fn late_repair_is_discarded_for_the_in_time_draft() {
+        let limits = Limits { generation_timeout: Duration::from_millis(30), ..Limits::default() };
+        let generator = FakeGenerator { later_delay: Duration::from_millis(60), ..scripted(BAD_GRAPH, &[GOOD_GRAPH]) };
+        let h = harness(chat_ctx(), "x", generator, ContextPolicy::default(), limits);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+    }
+
+    #[test]
+    fn cancel_during_repair_prevents_insertion() {
+        let generator = FakeGenerator { cancel_on_later: true, ..scripted(BAD_GRAPH, &[GOOD_GRAPH]) };
+        let h = harness(chat_ctx(), "x", generator, ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Cancelled);
+        assert_eq!(inserts(&h), 0);
+        assert!(records(&h).is_empty());
+    }
+
+    #[test]
+    fn flat_profiles_and_dictation_skip_structure_checks() {
+        let ctx = ActiveContext { window: TARGET, process_name: "chrome.exe".into(), url: Some("https://www.perplexity.ai/".into()), ..Default::default() };
+        let h = harness(ctx, "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.profile_id, "perplexity");
+        assert_eq!(report.structure, None);
+        assert_eq!(calls(&h), 1);
+        let h = harness(chat_ctx(), "x", generator("unused"), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Dictation).structure, None);
     }
 }

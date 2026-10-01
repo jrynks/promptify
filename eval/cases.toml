@@ -1,0 +1,125 @@
+# Prompt-structure evaluation set, run with `promptify-cli eval eval/cases.toml`.
+# "graph" means the finished prompt should contain a valid task graph; "flat" means no steps or loops.
+
+[[case]]
+id = "c01"
+said = "research the top three project management tools for a ten person design agency compare their pricing and integrations and then recommend one"
+expect = "graph"
+url = "https://chatgpt.com/"
+
+[[case]]
+id = "c02"
+said = "what's the difference between a roth ira and a traditional ira"
+expect = "flat"
+url = "https://chatgpt.com/"
+
+[[case]]
+id = "c03"
+said = "um so the checkout page is slow can you profile it figure out the slowest query fix it and run the benchmarks again until it's under two hundred milliseconds"
+expect = "graph"
+process = "Cursor.exe"
+
+[[case]]
+id = "c04"
+said = "write a short thank you note to my neighbor for watering my plants"
+expect = "flat"
+url = "https://claude.ai/new"
+
+[[case]]
+id = "c05"
+said = "i need to plan a product launch for next month draft the announcement email build a timeline and then review everything with the team before we ship"
+expect = "graph"
+url = "https://claude.ai/new"
+
+[[case]]
+id = "c06"
+said = "find recent studies on intermittent fasting and longevity in adults over fifty"
+expect = "flat"
+url = "https://www.perplexity.ai/"
+
+[[case]]
+id = "c07"
+said = "a cozy cabin in snowy mountains at dusk warm light in the windows painted in watercolor"
+expect = "flat"
+url = "https://www.midjourney.com/imagine"
+
+[[case]]
+id = "c08"
+said = "migrate the user service from rest to grpc update the client calls add tests for every endpoint and make sure the old api keeps working until we switch over"
+expect = "graph"
+process = "Code.exe"
+
+[[case]]
+id = "c09"
+said = "explain how a heat pump works like i'm twelve"
+expect = "flat"
+url = "https://gemini.google.com/app"
+
+[[case]]
+id = "c10"
+said = "the integration tests are failing on the auth module debug what broke fix it and then rerun the suite until it's green"
+expect = "graph"
+process = "WindowsTerminal.exe"
+title = "Claude Code"
+
+[[case]]
+id = "c11"
+said = "summarize this article in three bullet points for my boss"
+expect = "flat"
+url = "https://chatgpt.com/"
+
+[[case]]
+id = "c12"
+said = "help me write a cover letter for a senior data analyst job then review it against the job posting and keep tightening it until it fits on one page"
+expect = "graph"
+url = "https://chatgpt.com/"
+
+[[case]]
+id = "c13"
+said = "what time zone is tokyo in"
+expect = "flat"
+url = "https://grok.com/"
+
+[[case]]
+id = "c14"
+said = "design a database schema for a recipe app then write the migrations and add seed data for testing"
+expect = "graph"
+process = "Cursor.exe"
+
+[[case]]
+id = "c15"
+said = "give me a catchy name for a coffee shop that also sells used books"
+expect = "flat"
+url = "https://claude.ai/new"
+
+[[case]]
+id = "c16"
+said = "plan a two week trip to japan for a family of four research where to stay in tokyo and kyoto compare rail passes and then build a day by day itinerary"
+expect = "graph"
+url = "https://grok.com/"
+
+[[case]]
+id = "c17"
+said = "rename the variable count to total in the stats module"
+expect = "flat"
+process = "Cursor.exe"
+
+[[case]]
+id = "c18"
+said = "analyze our churn data find the top three reasons customers leave estimate the revenue impact of each and recommend fixes"
+expect = "graph"
+url = "https://chatgpt.com/"
+
+[[case]]
+id = "c19"
+said = "how do i undo my last git commit but keep the changes"
+expect = "flat"
+process = "WindowsTerminal.exe"
+title = "pwsh"
+
+[[case]]
+id = "c20"
+said = "refactor the payment module into smaller services add unit tests for each one and then run the whole suite and fix anything that breaks"
+expect = "graph"
+process = "WindowsTerminal.exe"
+title = "pwsh"

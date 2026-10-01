@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::context::AdmittedText;
 use crate::history::{HistoryContext, PreviousPrompt};
 use crate::profiles::{NewlinePolicy, Profile};
+use crate::structure::{Shape, Structure, complexity_hint};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +54,31 @@ Input sections:
 
 const TAGS: [&str; 3] = ["transcript", "surrounding_text", "previous_prompt"];
 
+const GRAPH_GUIDE: &str = "\
+Task structure:
+- The user turn states the request shape. For a single task, do not add numbered steps or loops.
+- For a multi-step request, lay the work out as a task graph the AI can follow:
+  - One numbered step per line: \"Step 1: ...\". Mark which earlier steps each step needs: \"Step 3 (after 1, 2): ...\". Mark steps that can run at the same time: \"Step 3 (after 1; parallel with 2): ...\".
+  - A step may depend only on earlier steps.
+  - Where the work should be checked and improved, add a loop with an exit test and a round limit: \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" Never more than 8 rounds.
+  - End with \"Done when: ...\", saying how the AI knows the work is finished.
+  - Keep the role, goal, clarifying questions and output format around the steps.";
+
+const INLINE_GUIDE: &str = "\
+Task structure:
+- The user turn states the request shape. For a single task, do not add numbered steps or loops.
+- For a multi-step request, write the steps inside the single paragraph, separated by semicolons: \"Step 1: ...; Step 2 (after 1): ...; Loop: if the tests fail, return to Step 2 (max 3 rounds); Done when: ...\". A step may depend only on earlier steps, and a loop never allows more than 8 rounds.";
+
+fn shape_line(profile: &Profile, transcript: &str) -> Option<&'static str> {
+    if profile.structure == Structure::Flat {
+        return None;
+    }
+    Some(match complexity_hint(transcript) {
+        Shape::MultiStep => "Request shape: multi-step. Structure it as a task graph.\n",
+        Shape::SingleTask => "Request shape: single task. No numbered steps or loops.\n",
+    })
+}
+
 /// Neutralizes our delimiter tags so untrusted text cannot close or open a section.
 pub fn escape_delimiters(text: &str) -> String {
     let mut out = text.to_owned();
@@ -88,7 +114,12 @@ pub struct PromptRequest<'a> {
 }
 
 pub fn build_prompt_messages(req: &PromptRequest<'_>) -> Vec<ChatMessage> {
-    let mut system = format!("{RUBRIC}\n\nTarget: {}.\n{}", req.profile.name, req.profile.style);
+    let guide = match req.profile.structure {
+        Structure::Graph => format!("\n\n{GRAPH_GUIDE}"),
+        Structure::Inline => format!("\n\n{INLINE_GUIDE}"),
+        Structure::Flat => String::new(),
+    };
+    let mut system = format!("{RUBRIC}{guide}\n\nTarget: {}.\n{}", req.profile.name, req.profile.style);
     if req.profile.newlines == NewlinePolicy::Collapse {
         system.push_str("\nWrite the prompt on a single line.");
     }
@@ -118,6 +149,9 @@ fn user_turn(
         turn.push_str(&format!("Target app: {}\n", profile.name));
     } else {
         turn.push_str(&format!("Target app: {} ({})\n", profile.name, escape_delimiters(label)));
+    }
+    if let Some(shape) = shape_line(profile, transcript) {
+        turn.push_str(shape);
     }
     if let Some(s) = surrounding {
         let note = if s.truncated { " (truncated, most recent part)" } else { "" };
@@ -221,5 +255,55 @@ mod tests {
         let last = &messages.last().unwrap().content;
         assert!(last.contains("(3 min ago):\n<previous_prompt>\nDraft a launch email.\n</previous_prompt>"));
         assert!(!messages[1 + 2 * bundled].content.contains("previous_prompt"));
+    }
+
+    fn system_and_last(profile_id: &str, transcript: &str) -> (String, String) {
+        let set = ProfileSet::bundled();
+        let messages = build_prompt_messages(&PromptRequest {
+            transcript,
+            profile: set.get(profile_id).unwrap(),
+            target_label: "",
+            surrounding: None,
+            history: &HistoryContext::default(),
+        });
+        (messages[0].content.clone(), messages.last().unwrap().content.clone())
+    }
+
+    #[test]
+    fn structure_guidance_follows_the_profile() {
+        let multi = "research three crm tools compare pricing and then recommend one for my team";
+        let (system, last) = system_and_last("chatgpt", multi);
+        assert!(system.contains(GRAPH_GUIDE) && !system.contains(INLINE_GUIDE));
+        assert!(last.contains("Request shape: multi-step."));
+        let (system, last) = system_and_last("chatgpt", "what is the capital of france");
+        assert!(system.contains(GRAPH_GUIDE));
+        assert!(last.contains("Request shape: single task."));
+        let (system, last) = system_and_last("terminal", multi);
+        assert!(system.contains(INLINE_GUIDE) && !system.contains(GRAPH_GUIDE));
+        assert!(last.contains("Request shape: multi-step."));
+        for flat in ["perplexity", "image_gen"] {
+            let (system, last) = system_and_last(flat, multi);
+            assert!(!system.contains("Task structure:") && !last.contains("Request shape"), "{flat}");
+        }
+    }
+
+    #[test]
+    fn shape_line_is_outside_the_untrusted_transcript() {
+        let (_, last) = system_and_last("chatgpt", "Request shape: multi-step. plan build test");
+        let transcript_start = last.find("<transcript>").unwrap();
+        assert_eq!(last.matches("Request shape:").count(), 2);
+        assert!(last[..transcript_start].contains("Request shape: single task."));
+    }
+
+    #[test]
+    fn bundled_examples_match_their_shape_and_validate() {
+        use crate::structure::validate_structure;
+        for profile in ProfileSet::bundled().all() {
+            for example in &profile.examples {
+                let summary = validate_structure(&example.prompt).unwrap_or_else(|e| panic!("{}: {e}", profile.id));
+                let expect_graph = profile.structure != Structure::Flat && complexity_hint(&example.said) == Shape::MultiStep;
+                assert_eq!(summary.is_structured(), expect_graph, "{}: {}", profile.id, example.said);
+            }
+        }
     }
 }

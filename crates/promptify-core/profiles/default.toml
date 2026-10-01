@@ -14,19 +14,20 @@ State the goal, then the context and constraints, then the exact output format (
 Use short paragraphs or bullets; Markdown is fine.
 """
 [[profile.examples]]
-said = "okay help me think through pricing for the team plan um three options maybe what could go wrong with each and how we'd test them"
+said = "okay help me think through pricing for the team plan um come up with three options figure out what could go wrong with each and how we'd test them then recommend one"
 prompt = """
 Act as a SaaS pricing strategist. I need to choose a pricing model for our new team plan.
 
-Propose 3 distinct pricing options. For each option, cover:
-- How it is priced and who it suits best
-- Expected effect on conversion and expansion revenue
-- The biggest risk
-- One cheap experiment we could run in 2 weeks to validate it
-
 Before you start, ask me up to 3 questions about our product, current customers and competitors if the answer depends on them.
 
-Format: a comparison table of the 3 options, then a short recommendation with the 2 metrics to watch in the first 30 days."""
+Step 1: Propose 3 distinct pricing options, with how each is priced and who it suits best.
+Step 2 (after 1): For each option, estimate the effect on conversion and expansion revenue and name its biggest risk.
+Step 3 (after 1; parallel with 2): For each option, design one cheap experiment we could run in 2 weeks to validate it.
+Step 4 (after 2, 3): Recommend one option and the 2 metrics to watch in the first 30 days.
+Loop: if the recommended option's biggest risk has no way to test it, return to Step 3 (max 2 rounds).
+Done when: every option has a risk and an experiment, and the recommendation follows from them.
+
+Format: a comparison table of the 3 options, then the recommendation in a short paragraph."""
 [[profile.match]]
 hosts = ["chatgpt.com", "chat.openai.com"]
 [[profile.match]]
@@ -49,15 +50,16 @@ said = "help me plan customer interviews for the new onboarding flow goals quest
 prompt = """
 Act as a senior UX researcher. Create a customer interview plan for our redesigned onboarding flow.
 
-Include:
-- 3 learning goals, each tied to a decision we could make from the answers
-- A 30-minute discussion guide with open, neutral questions and follow-up probes
-- Screening criteria for who to recruit
-- A lightweight framework for synthesizing the calls into themes and next steps
-
 If you need details about the product or the changes we made, ask me before writing the guide.
 
-Format: use headings for each part and keep the guide in the order I would run the call."""
+Step 1: Define 3 learning goals, each tied to a decision we could make from the answers.
+Step 2 (after 1): Write a 30-minute discussion guide with open, neutral questions and follow-up probes that cover every goal.
+Step 3 (after 1; parallel with 2): Set screening criteria for who to recruit.
+Step 4 (after 2): Describe a lightweight way to synthesize the calls into themes and next steps.
+Loop: if any learning goal has no question in the guide, return to Step 2 (max 2 rounds).
+Done when: every goal maps to questions in the guide and to a decision.
+
+Format: a heading for each part, with the guide in the order I would run the call."""
 [[profile.match]]
 hosts = ["claude.ai"]
 [[profile.match]]
@@ -158,8 +160,12 @@ said = "the login button thing um when you click it twice it sends two requests 
 prompt = """
 Fix the login button so double-clicking it sends only one login request.
 
-- Ignore further clicks while a login request is in flight.
-- Add a test that clicks the button twice and asserts a single request is sent."""
+Step 1: Find where the login button sends its request and why a second click sends another one.
+Step 2 (after 1): Ignore further clicks while a login request is in flight.
+Step 3 (after 1; parallel with 2): Add a test that clicks the button twice and asserts a single request is sent.
+Step 4 (after 2, 3): Run the test suite.
+Loop: if any test fails, return to Step 2 (max 3 rounds).
+Done when: the new test passes and no existing test fails."""
 [[profile.match]]
 processes = ["cursor"]
 
@@ -185,6 +191,16 @@ The prompt goes to Claude Code, an AI coding agent running in a terminal.
 State the task, the relevant files or commands (only those the speaker named), constraints, and how to verify the result.
 Keep it compact: one short paragraph or a few hyphen bullets. No Markdown headings or code fences.
 """
+[[profile.examples]]
+said = "the build is broken after the dependency update figure out what changed fix it and then run the tests until they pass"
+prompt = """
+The build fails after the latest dependency update. Find the cause and fix it.
+
+Step 1: Identify which dependency change breaks the build.
+Step 2 (after 1): Fix the code to work with the updated dependency.
+Step 3 (after 2): Run the build and the full test suite.
+Loop: if the build or any test fails, return to Step 1 with the new error (max 3 rounds), then stop and tell me what still fails.
+Done when: the build succeeds and all tests pass."""
 [[profile.match]]
 processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
 title = '\bclaude\b'
@@ -214,6 +230,9 @@ The prompt is pasted into a terminal, most likely into an AI command-line agent.
 Write it as a single compact paragraph with no line breaks, Markdown, bullets or code fences.
 State the task, the relevant files or commands the speaker named, and how to verify the result.
 """
+[[profile.examples]]
+said = "the api tests are flaky figure out which ones fail fix them and then run the suite until it passes"
+prompt = "Fix the flaky API tests. Step 1: run the API test suite several times and list the tests that fail only some of the time; Step 2 (after 1): find the cause of each flaky failure and fix it; Step 3 (after 2): run the full test suite; Loop: if any test fails, return to Step 2 (max 3 rounds); Done when: the full suite passes on every run."
 [[profile.match]]
 processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
 

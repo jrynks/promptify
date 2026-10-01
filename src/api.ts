@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Mode = "prompt" | "dictation";
-export type Stage = "transcribing" | "generating" | "inserting";
+export type Stage = "transcribing" | "generating" | "revising" | "inserting";
 
 export type Outcome =
   | { kind: "inserted"; text: string }
@@ -15,6 +15,8 @@ export interface JobReport {
   profile_id: string;
   outcome: Outcome;
   elapsed_ms: number;
+  history_saved: boolean;
+  structure: "unstructured" | "valid" | "repaired" | "kept_original" | null;
 }
 
 export type OverlayEvent =

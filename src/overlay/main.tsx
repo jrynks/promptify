@@ -36,6 +36,7 @@ function describe(outcome: Outcome, capped: boolean): View {
 const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing…",
   generating: "Writing your prompt…",
+  revising: "Fixing the prompt's step structure…",
   inserting: "Pasting…",
 };
 
@@ -65,6 +66,7 @@ function Overlay() {
           setLevel(payload.level);
           break;
         case "stage":
+          if (payload.stage === "revising") setPreview("");
           setView({ kind: "working", label: STAGE_LABELS[payload.stage] });
           break;
         case "transcript":
