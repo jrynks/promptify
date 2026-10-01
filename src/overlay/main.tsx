@@ -17,6 +17,15 @@ const BLOCK_MESSAGES: Record<string, string> = {
   insert_failed: "Couldn't paste into the app.",
 };
 
+const FAIL_MESSAGES: Record<string, string> = {
+  recording_too_long: "That recording was too long. Try a shorter request.",
+  transcription_failed: "Couldn't transcribe the recording.",
+  generation_failed: "The prompt model stopped unexpectedly.",
+  timed_out: "The prompt model took too long. Try a shorter request or a smaller model.",
+  empty_output: "The prompt model returned nothing.",
+  engine_busy: "Promptify is busy with another request. Try again in a moment.",
+};
+
 function describe(outcome: Outcome, capped: boolean): View {
   const note = capped ? " Recording hit the length limit; later speech was dropped." : "";
   switch (outcome.kind) {
@@ -31,7 +40,13 @@ function describe(outcome: Outcome, capped: boolean): View {
     case "cancelled":
       return { kind: "result", tone: "warn", title: "Cancelled.", canCopy: false };
     case "failed":
-      return { kind: "result", tone: "error", title: outcome.detail ?? outcome.reason.replace(/_/g, " "), canCopy: false };
+      return {
+        kind: "result",
+        tone: "error",
+        title: FAIL_MESSAGES[outcome.reason] ?? "Something went wrong.",
+        body: outcome.detail ?? undefined,
+        canCopy: false,
+      };
   }
 }
 
@@ -49,6 +64,8 @@ function Overlay() {
   const [preview, setPreview] = useState("");
   const hideTimer = useRef<number | undefined>(undefined);
   const mode = useRef("prompt");
+  // The transcript is shown until the first token arrives; then the draft replaces it.
+  const streaming = useRef(false);
 
   const scheduleHide = (ms: number) => {
     window.clearTimeout(hideTimer.current);
@@ -75,18 +92,25 @@ function Overlay() {
           break;
         case "stage":
           if (payload.stage === "revising") setPreview("");
+          if (payload.stage === "generating" || payload.stage === "revising") streaming.current = false;
           setView({ kind: "working", label: payload.stage === "generating" && mode.current === "answer" ? "Answering…" : STAGE_LABELS[payload.stage] });
           break;
         case "transcript":
+          streaming.current = false;
           setPreview(payload.text);
           break;
         case "token":
-          setPreview((prev) => prev + payload.text);
+          if (streaming.current) {
+            setPreview((prev) => prev + payload.text);
+          } else {
+            streaming.current = true;
+            setPreview(payload.text);
+          }
           break;
         case "finished": {
           const next = describe(payload.report.outcome, payload.capped);
           setView(next);
-          if (next.kind === "result" && !next.canCopy) scheduleHide(next.tone === "ok" ? 1200 : 3500);
+          if (next.kind === "result" && !next.canCopy) scheduleHide(next.tone === "ok" ? 1200 : next.tone === "error" ? 6000 : 3500);
           break;
         }
         case "error":

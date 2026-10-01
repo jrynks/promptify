@@ -1,7 +1,7 @@
 //! Settings page support for MCP context hooks: show the configured servers, test one, reload.
 
 use promptify_core::pipeline::Orchestrator;
-use promptify_mcp::client::{McpConfig, McpEnricher, probe_server};
+use promptify_mcp::client::{McpConfig, McpEnricher, STARTUP_TIMEOUT, probe_server};
 use serde::Serialize;
 use tauri::State;
 
@@ -87,5 +87,49 @@ pub fn mcp_reload(state: State<'_, AppState>) -> McpInfo {
 pub async fn mcp_test(state: State<'_, AppState>, name: String) -> Result<Vec<String>, String> {
     let config = McpConfig::load(&config_path(&state))?;
     let server = config.servers.get(&name).cloned().ok_or("no server with that name in mcp.json")?;
-    tauri::async_runtime::spawn_blocking(move || probe_server(&server, std::time::Duration::from_secs(10))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || probe_server(&server, STARTUP_TIMEOUT)).await.map_err(|e| e.to_string())?
+}
+
+const TEMPLATE: &str = r#"{
+  "mcpServers": {
+    "docs": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["some-mcp-server"],
+      "profiles": ["cursor", "claude_code"],
+      "timeout_ms": 3000,
+      "hooks": [{ "tool": "search", "arguments": { "query": "{transcript}" } }]
+    }
+  }
+}
+"#;
+
+#[derive(Serialize)]
+pub struct McpFile {
+    /// The file as it is on disk; empty when it does not exist yet.
+    text: String,
+    exists: bool,
+    template: &'static str,
+}
+
+#[tauri::command]
+pub fn mcp_read(state: State<'_, AppState>) -> Result<McpFile, String> {
+    match std::fs::read_to_string(config_path(&state)) {
+        Ok(text) => Ok(McpFile { text, exists: true, template: TEMPLATE }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(McpFile { text: String::new(), exists: false, template: TEMPLATE }),
+        Err(e) => Err(format!("cannot read mcp.json: {e}")),
+    }
+}
+
+/// Checks text exactly as loading would, without touching the file. Returns the number of servers.
+#[tauri::command]
+pub fn mcp_validate(text: String) -> Result<usize, String> {
+    McpConfig::parse(&text).map(|c| c.servers.len())
+}
+
+/// Saves valid text over the version the editor opened, then applies it right away.
+#[tauri::command]
+pub fn mcp_save(state: State<'_, AppState>, text: String, original: String) -> Result<McpInfo, String> {
+    McpConfig::save(&config_path(&state), &text, &original)?;
+    Ok(info(&state, reload(&state.data_dir, &state.orchestrator)))
 }

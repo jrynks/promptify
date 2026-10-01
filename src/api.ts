@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Mode = "prompt" | "dictation" | "answer";
-export type Stage = "transcribing" | "generating" | "revising" | "inserting";
+export type Stage = "transcribing" | "researching" | "generating" | "revising" | "inserting";
 
 export type Outcome =
   | { kind: "inserted"; text: string }
@@ -158,6 +158,12 @@ export interface McpInfo {
   servers: McpServerInfo[];
 }
 
+export interface McpFile {
+  text: string;
+  exists: boolean;
+  template: string;
+}
+
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   listProfiles: () => invoke<ProfileSummary[]>("list_profiles"),
@@ -190,4 +196,7 @@ export const api = {
   mcpInfo: () => invoke<McpInfo>("mcp_info"),
   mcpReload: () => invoke<McpInfo>("mcp_reload"),
   mcpTest: (name: string) => invoke<string[]>("mcp_test", { name }),
+  mcpRead: () => invoke<McpFile>("mcp_read"),
+  mcpValidate: (text: string) => invoke<number>("mcp_validate", { text }),
+  mcpSave: (text: string, original: string) => invoke<McpInfo>("mcp_save", { text, original }),
 };
