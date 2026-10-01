@@ -38,6 +38,7 @@ pub struct AppInfo {
     data_dir: String,
     use_gpu: bool,
     gpu_device: Option<String>,
+    modifier_hold: bool,
 }
 
 #[tauri::command]
@@ -53,6 +54,7 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         data_dir: state.data_dir.to_string_lossy().into_owned(),
         use_gpu: settings.use_gpu,
         gpu_device: state.llm.device(),
+        modifier_hold: state.modifier_hook.lock().unwrap().is_some(),
     }
 }
 
@@ -206,6 +208,13 @@ pub fn set_use_gpu(state: State<'_, AppState>, enabled: bool) -> Result<(), Stri
     save_settings(&state)?;
     preload_engines(state.stt.clone(), state.llm.clone());
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_modifier_hold(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    crate::modifier_hook::apply(&app, &state.modifier_hook, enabled)?;
+    state.settings.write().unwrap().modifier_hold = enabled;
+    save_settings(&state)
 }
 
 #[tauri::command]

@@ -60,6 +60,24 @@ function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation"; v
   );
 }
 
+function ModifierHold({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <label className="inline">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => void api.setModifierHold(e.target.checked).then(() => { setError(null); onChange(); }, (err) => setError(String(err)))}
+        />
+        Also start a prompt by holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> on their own
+      </label>
+      <span className="hint">Shortcuts like Ctrl+Shift+T and the quick Ctrl+Shift layout switch are ignored.</span>
+      {error && <div className="error">{error}</div>}
+    </>
+  );
+}
+
 function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void }) {
   if (!info) return <p>Loading…</p>;
   return (
@@ -70,6 +88,10 @@ function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void
         <dd>{info.input_device ? `${info.input_device} (system default)` : "No default microphone found"}</dd>
         <dt>Prompt hotkey</dt>
         <dd><HotkeyField mode="prompt" value={info.hotkeys.prompt} onSaved={onChange} /> hold to talk, or tap to start and tap again to finish</dd>
+        <dt></dt>
+        <dd>
+          <ModifierHold enabled={info.modifier_hold} onChange={onChange} />
+        </dd>
         <dt>Dictation hotkey</dt>
         <dd><HotkeyField mode="dictation" value={info.hotkeys.dictation} onSaved={onChange} /></dd>
         <dt>Cancel</dt>

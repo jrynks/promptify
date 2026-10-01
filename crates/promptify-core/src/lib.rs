@@ -7,6 +7,7 @@ pub mod hotkey;
 pub mod live;
 pub mod llm_protocol;
 pub mod models;
+pub mod modifier_chord;
 pub mod pipeline;
 pub mod prefix_cache;
 pub mod profiles;

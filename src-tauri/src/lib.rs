@@ -5,6 +5,7 @@ pub mod download;
 mod hotkeys;
 pub mod insert;
 pub mod llm_client;
+mod modifier_hook;
 mod remote;
 pub mod settings;
 pub mod stt;
@@ -41,6 +42,7 @@ pub struct AppState {
     pub stt: Arc<WhisperEngine>,
     pub llm: Arc<LlmWorker>,
     pub remote: remote::RemoteState,
+    pub modifier_hook: std::sync::Mutex<Option<modifier_hook::Hook>>,
 }
 
 /// Selects an installed model for any kind that has none, preferring the balanced tier.
@@ -127,6 +129,7 @@ pub fn run() {
             commands::delete_history_entry,
             commands::clear_history,
             commands::set_history_enabled,
+            commands::set_modifier_hold,
             commands::set_hotkey,
             commands::set_use_gpu,
             remote::remote_info,
@@ -194,8 +197,16 @@ pub fn run() {
                 stt,
                 llm,
                 remote: remote::RemoteState::default(),
+                modifier_hook: Default::default(),
             });
             remote::apply(&app.state::<AppState>());
+            {
+                let state = app.state::<AppState>();
+                let enabled = state.settings.read().unwrap().modifier_hold;
+                if let Err(e) = modifier_hook::apply(&handle, &state.modifier_hook, enabled) {
+                    log::warn!("Ctrl+Shift hold hotkey: {e}");
+                }
+            }
 
             tray::build(&handle, &tray_hotkeys)?;
             place_overlay(&handle);

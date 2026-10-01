@@ -39,6 +39,7 @@ export interface AppInfo {
   data_dir: string;
   use_gpu: boolean;
   gpu_device: string | null;
+  modifier_hold: boolean;
 }
 
 export interface ModelStatus {
@@ -148,6 +149,7 @@ export const api = {
   setHistoryEnabled: (enabled: boolean) => invoke<void>("set_history_enabled", { enabled }),
   setHotkey: (mode: Mode, accelerator: string) => invoke<void>("set_hotkey", { mode, accelerator }),
   setUseGpu: (enabled: boolean) => invoke<void>("set_use_gpu", { enabled }),
+  setModifierHold: (enabled: boolean) => invoke<void>("set_modifier_hold", { enabled }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),
   setRemoteSettings: (enabled: boolean, relayUrl: string | null, lanDirect: boolean) =>
     invoke<void>("set_remote_settings", { enabled, relayUrl, lanDirect }),

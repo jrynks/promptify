@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub relay_url: Option<String>,
     /// Accept direct (still end-to-end encrypted) connections from the local network.
     pub lan_direct: bool,
+    /// Holding Ctrl+Shift alone starts a prompt recording.
+    pub modifier_hold: bool,
 }
 
 impl Default for AppSettings {
@@ -51,6 +53,7 @@ impl Default for AppSettings {
             server_enabled: false,
             relay_url: None,
             lan_direct: false,
+            modifier_hold: false,
         }
     }
 }
