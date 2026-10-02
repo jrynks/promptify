@@ -22,6 +22,14 @@ use tokio::sync::watch;
 
 pub use store::{Device, DeviceRegistry, Identity, now_unix};
 
+pub const MOBILE_NETWORKING_AVAILABLE: bool = cfg!(feature = "mobile-networking");
+pub const MOBILE_NETWORKING_DISABLED: &str =
+    "Phone networking is disabled while the iOS and Android apps are in development. Enable the mobile-networking build feature for phone-client development.";
+
+pub fn require_mobile_networking() -> Result<(), String> {
+    if MOBILE_NETWORKING_AVAILABLE { Ok(()) } else { Err(MOBILE_NETWORKING_DISABLED.into()) }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub data_dir: PathBuf,
@@ -35,9 +43,25 @@ pub struct ServerConfig {
     pub discoverable: bool,
 }
 
+impl ServerConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.relay_url.is_some()
+            || self.advertise_direct.is_some()
+            || self.discoverable
+            || self.listen.is_some_and(|addr| !addr.ip().is_loopback())
+        {
+            require_mobile_networking()?;
+        }
+        if let Some(relay) = &self.relay_url {
+            validate_relay_url(relay)?;
+        }
+        Ok(())
+    }
+}
+
 /// mDNS is only useful, and only allowed, when the direct port is reachable from the network.
 pub fn should_advertise(discoverable: bool, bound: SocketAddr) -> bool {
-    discoverable && !bound.ip().is_loopback()
+    MOBILE_NETWORKING_AVAILABLE && discoverable && !bound.ip().is_loopback()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -170,13 +194,11 @@ pub fn api_token_path(data_dir: &std::path::Path) -> PathBuf {
 
 impl RemoteServer {
     pub fn start(config: ServerConfig, service: Arc<TransformService>) -> Result<Self, String> {
+        config.validate()?;
         let remote_dir = config.data_dir.join("remote");
         let identity = Identity::load_or_create(&remote_dir.join("identity.json"))?;
         let devices = DeviceRegistry::open(remote_dir.join("devices.json"))?;
         let api_token = load_api_token(&api_token_path(&config.data_dir))?;
-        if let Some(relay) = &config.relay_url {
-            validate_relay_url(relay)?;
-        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("promptify-server")
@@ -242,6 +264,7 @@ impl RemoteServer {
 
     /// Creates a fresh single-use offer, replacing any previous one.
     pub fn pairing_offer(&self, lifetime_secs: u64) -> Result<OfferInfo, String> {
+        require_mobile_networking()?;
         let direct = self.shared.config.advertise_direct.clone();
         if self.shared.config.relay_url.is_none() && direct.is_none() {
             return Err("set a relay URL or enable direct connections before pairing".into());

@@ -23,7 +23,7 @@ use promptify_protocol::noise::NOISE_MAX_MESSAGE;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::Shared;
+use crate::{MOBILE_NETWORKING_AVAILABLE, Shared};
 
 pub const LOCAL_API_CLIENT: &str = "local-api";
 /// Concurrent direct links, including ones still in the handshake.
@@ -33,11 +33,10 @@ pub async fn serve(shared: Arc<Shared>, listener: tokio::net::TcpListener) {
     let mut stopping = shared.shutdown.subscribe();
     let app = Router::new()
         .route("/v1/health", get(|| async { Json(serde_json::json!({ "ok": true, "app": "promptify" })) }))
-        .route("/v1/direct", get(direct_upgrade))
         .route("/v1/transform", post(transform))
-        .route("/v1/profiles", get(profiles))
-        .layer(DefaultBodyLimit::max(64 * 1024))
-        .with_state(shared);
+        .route("/v1/profiles", get(profiles));
+    let app = if MOBILE_NETWORKING_AVAILABLE { app.route("/v1/direct", get(direct_upgrade)) } else { app };
+    let app = app.layer(DefaultBodyLimit::max(64 * 1024)).with_state(shared);
     let shutdown = async move {
         let _ = stopping.changed().await;
     };

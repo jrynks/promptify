@@ -3,6 +3,7 @@
 use serde::Deserialize;
 
 use crate::structure::{validate_graph, validate_structure};
+pub use crate::structure::opens_with_role;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,14 +58,6 @@ pub struct CaseScore {
     pub pass: bool,
 }
 
-/// True when a prompt opens with a role or persona ("Act as...", "You are an expert..."), which modern
-/// models gain little from; the goal and context should come first instead.
-pub fn opens_with_role(prompt: &str) -> bool {
-    let plain = prompt.replace(['*', '_', '`'], "");
-    let first = plain.trim_start().trim_start_matches(['#', '-', '>', ' ']).to_ascii_lowercase();
-    ["act as ", "you are a ", "you are an ", "as an expert", "as a ", "imagine you are", "pretend you are", "you're a ", "you're an "].iter().any(|p| first.starts_with(p))
-}
-
 pub fn score(expect: Expect, output: Option<&str>) -> CaseScore {
     let Some(output) = output.filter(|text| !text.trim().is_empty()) else {
         return CaseScore { valid: false, structured: false, pass: false };
@@ -96,6 +89,8 @@ mod tests {
     fn scoring_requires_valid_structure_matching_expectation() {
         let graph = "Step 1: a\nStep 2 (after 1): b\nLoop: if b fails, return to Step 1 (max 2 rounds).\nDone when: b passes.";
         assert!(score(Expect::Graph, Some(graph)).pass);
+        let persona = format!("Act as a senior DevOps engineer.\n{graph}");
+        assert_eq!(score(Expect::Graph, Some(&persona)), CaseScore { valid: false, structured: true, pass: false });
         assert!(!score(Expect::Graph, Some("Step 1: a\nStep 2 (after 1): b")).pass, "a graph needs a loop");
         assert!(!score(Expect::Flat, Some(graph)).pass);
         assert!(score(Expect::Flat, Some("Just a prompt.")).pass);
@@ -115,7 +110,12 @@ mod tests {
 
     #[test]
     fn role_openers_are_detected() {
-        for role in ["Act as a pricing strategist. I need...", "**Act as** an expert", "## __Act as__ an expert", "> `Act as` an expert", "You are an expert travel planner.", "  you're a senior engineer", "As a helpful assistant, explain..."] {
+        for role in [
+            "Act as a pricing strategist. I need...", "**Act as** an expert", "## __Act as__ an expert",
+            "> `Act as` an expert", "You are an expert travel planner.", "  you're a senior engineer",
+            "As a helpful assistant, explain...", "Act \n as a senior engineer.", "\"Act as a developer.",
+            "You\u{2019}re an expert.", "Assume the role of a reviewer.", "Adopt the role of an editor.",
+        ] {
             assert!(opens_with_role(role), "{role}");
         }
         for goal in ["I need to choose a pricing model.", "Help me plan a party.", "Review the draft as a skeptical auditor in Step 2.", "Fix the login button."] {

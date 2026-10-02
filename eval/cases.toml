@@ -148,3 +148,9 @@ id = "c24"
 said = "draft a launch checklist then review it for missing steps and fix any gaps"
 expect = "graph"
 process = "notepad.exe"
+
+[[case]]
+id = "c25"
+said = "commit the current changes create a pull request and then merge it into the target branch"
+expect = "graph"
+process = "Code.exe"

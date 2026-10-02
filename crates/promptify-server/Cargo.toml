@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+mobile-networking = []
+
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.22"

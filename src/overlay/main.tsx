@@ -21,6 +21,7 @@ const FAIL_MESSAGES: Record<string, string> = {
   recording_too_long: "That recording was too long. Try a shorter request.",
   transcription_failed: "Couldn't transcribe the recording.",
   generation_failed: "The prompt model stopped unexpectedly.",
+  invalid_prompt: "Couldn't produce a valid goal-first prompt.",
   timed_out: "The prompt model took too long. Try a shorter request or a smaller model.",
   empty_output: "The prompt model returned nothing.",
   engine_busy: "Promptify is busy with another request. Try again in a moment.",

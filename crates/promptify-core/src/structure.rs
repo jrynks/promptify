@@ -117,9 +117,23 @@ impl GraphSummary {
     }
 }
 
-/// Content-free description of a malformed graph; also used as the repair instruction.
+/// Detects persona boilerplate at the opening, not a perspective used inside a task step.
+pub fn opens_with_role(prompt: &str) -> bool {
+    let plain = prompt.replace(['*', '_', '`'], "").replace('\u{2019}', "'");
+    let first = plain
+        .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '#' | '-' | '>' | '"' | '\'' | '\u{201C}' | '\u{201D}'))
+        .split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
+    [
+        "act as ", "you are a ", "you are an ", "as an expert", "as a ", "imagine you are", "pretend you are",
+        "you're a ", "you're an ", "assume the role of ", "adopt the role of ",
+    ].iter().any(|prefix| first.starts_with(prefix))
+}
+
+/// Content-free description of an invalid task-graph prompt; also used as the repair instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum GraphError {
+    #[error("the prompt opens with a role/persona instruction such as \"Act as...\"; remove that opener and start with the user's goal instead, keeping any useful perspective inside a task step")]
+    RoleOpener,
     #[error("the prompt has {0} steps; use at most {MAX_STEPS}")]
     TooManySteps(usize),
     #[error("the step at position {position} is numbered {found}; number the steps 1, 2, 3 in order with no gaps or repeats")]
@@ -220,6 +234,9 @@ pub fn validate_structure(text: &str) -> Result<GraphSummary, GraphError> {
 /// A prompt for an AI must be a well-formed loop or graph: numbered steps, at least one loop, and a
 /// "Done when" line with the checks the work must pass.
 pub fn validate_graph(text: &str) -> Result<GraphSummary, GraphError> {
+    if opens_with_role(text) {
+        return Err(GraphError::RoleOpener);
+    }
     let summary = validate_structure(text)?;
     if summary.steps == 0 {
         return Err(GraphError::NoSteps);
@@ -249,7 +266,7 @@ mod tests {
     use super::*;
 
     const GOOD: &str = "\
-Act as a senior engineer. Fix the flaky upload test.
+Fix the flaky upload test.
 
 Step 1: Reproduce the failure and capture the error.
 Step 2 (after 1): Find the root cause.
@@ -266,6 +283,17 @@ Done when: the suite passes 5 times in a row.";
         assert_eq!(validate_structure(markdown), Ok(GraphSummary { steps: 2, loops: 1 }));
         let inline = "Fix the build. Step 1: find the cause; Step 2 (after 1): fix it; Step 3 (after 2): run the tests; Loop: if tests fail, return to Step 2 (max 3 rounds); Done when: all tests pass.";
         assert_eq!(validate_structure(inline), Ok(GraphSummary { steps: 3, loops: 1 }));
+    }
+
+    #[test]
+    fn well_formed_graphs_still_reject_persona_openers() {
+        for opener in ["Act as a senior DevOps engineer.", "**Act as** an expert.", "You are an experienced reviewer.", "Act\nas a senior engineer."] {
+            let text = format!("{opener}\n{GOOD}");
+            assert!(validate_structure(&text).is_ok(), "the shape alone is valid");
+            assert_eq!(validate_graph(&text), Err(GraphError::RoleOpener));
+        }
+        let perspective = GOOD.replace("Fix it.", "Review and fix it as a senior engineer.");
+        assert!(validate_graph(&perspective).is_ok(), "useful perspectives inside steps are allowed");
     }
 
     #[test]

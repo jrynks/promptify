@@ -20,8 +20,8 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
   "dictate:" to choose yourself.
 - **Your words**: names and terms Whisper should expect, corrections (`heard => meant`), and the apps whose focused
   text box may be used as context (never password fields, never saved).
-- **Phones and remote access** (off by default): pair a phone with a QR code; it sends audio or text to your desktop
-  over an end-to-end encrypted channel, directly on your network or through a self-hosted relay.
+- **Phone networking is paused** until the native iOS and Android apps are ready. Normal desktop builds do not
+  accept phone connections, connect to relays, or use mDNS. Desktop MCP and model downloads are unaffected.
 - **MCP**: Promptify is an MCP server (other AI tools can ask it to write prompts) and an MCP client (your MCP tools can
   add reference facts before a prompt is written).
 
@@ -97,9 +97,9 @@ same app data folder, so do not run both on one computer at the same time.
 | `live-sim <file.wav>` | replays a recording as if spoken; compares live chunks with one full pass |
 | `rewrite "<text>" [--process claude.exe] [--url URL] [--mcp mcp.json] [--mode prompt\|dictation\|answer] [--auto]` | typed text through the pipeline |
 | `screen-text` | after 3 s, reads the focused text box of the foreground app, as the app would |
-| `eval eval\cases.toml` | structure evaluation (24 opaque cases; `PROMPTIFY_EVAL_SHOW=1` prints prompts and rejected repairs; nonzero exit on failure) |
-| `serve [--relay wss://...] [--listen 127.0.0.1:47822] [--discoverable]` | headless remote server; prints a pairing link |
-| `remote pair <link> [--direct]`, `remote send "<text>" [--app claude] [--dictation] [--direct]` | act as a paired phone |
+| `eval eval\cases.toml` | structure evaluation (25 opaque cases; `PROMPTIFY_EVAL_SHOW=1` prints prompts and rejected repairs; nonzero exit on failure) |
+| `serve [--listen 127.0.0.1:47822]` | headless local MCP API; prints its loopback URL |
+| `remote pair <link> [--direct]`, `remote send "<text>" [--app claude] [--dictation] [--direct]` | paired-phone test client; requires a `mobile-networking` build |
 | `mcp [--api http://127.0.0.1:47821]` | stdio MCP server (see below) |
 
 Set `PROMPTIFY_LOG=1` for diagnostics on stderr. `PROMPTIFY_LLM_NO_PREFIX_CACHE=1` turns off the language model's
@@ -113,15 +113,37 @@ prompt-prefix cache for comparison.
 - Every graph needs numbered steps, a loop that returns to an existing step with a limit of 1-8 rounds, and a
   non-empty `Done when:` section. Dependencies may refer only to earlier steps. The model is instructed to check the
   completion criteria, stop when they pass, and report unmet criteria when the round limit is reached.
+- Graph prompts must open with the goal, not persona boilerplate such as `Act as...` or `You are an expert...`.
+  Such openers trigger a repair and fail evaluation. If no valid goal-first repair is produced, the draft is rejected
+  with an explicit error rather than pasted or returned to MCP; relevant perspectives inside steps remain allowed.
 - Validation checks the finished, sanitized text, including terminal newline handling. A repair shares the original
   generation deadline and is checked the same way. If no repair passes, the original sanitized draft is retained,
-  marked `kept_original` in the report, and a warning is logged; it is not marked as a valid graph.
+  marked `kept_original` in the report, and a warning is logged; it is not marked as a valid graph. Persona-prefixed
+  drafts are the exception: they are never kept as a fallback or returned as copyable truncated prompts.
 - Dictation and answer mode do not add graphs. Image/video generator sites and requests to create images or videos
   in chat apps use descriptive prompts instead.
 
-## Remote access
+## Phone networking (paused by default)
 
-Settings → **Phones and remote access** → *Allow paired devices to use Promptify*. Then:
+Phone networking is unavailable in normal desktop builds, even if older saved settings enabled it. Those settings
+and existing pairings are retained for later development, but cannot activate LAN listeners, the `/v1/direct`
+WebSocket endpoint, relay connections, pairing, or mDNS. Settings shows **Desktop API** instead of **Phones**;
+its switch controls only the token-protected loopback API used by desktop MCP tools.
+
+### Opt-in mobile development
+
+The phone implementation is retained behind the `mobile-networking` Cargo feature. Enable it explicitly only
+when developing or testing phone clients:
+
+```powershell
+npm run app -- --features mobile-networking
+cargo run -p promptify --features mobile-networking --bin promptify-cli -- serve --listen 127.0.0.1:47822
+```
+
+Build the CLI with that feature too before using `remote pair` or `remote send`. Without it, phone-specific
+`serve` options (`--relay`, `--advertise`, `--offer-file`, `--discoverable`) and remote commands fail explicitly.
+
+In an opt-in build, use Settings → **Desktop API** → *Allow desktop tools and paired devices to use Promptify*. Then:
 
 - **Pair a device**: *Pair a new device* shows a QR code (valid 5 minutes, single use). The phone app scans it.
 - **On your network**: turn on *Allow direct connections on this network*. The desktop listens on port 47821.
@@ -160,14 +182,16 @@ Or run it without Docker: `cargo run --release -p promptify-relay -- --listen 12
 
 ### Promptify as an MCP server
 
-Turn on remote access (this creates the local API token), then add this to your MCP client (Claude Desktop,
-VS Code `mcp.json`, Cursor...):
+In Settings → **Desktop API**, turn on *Allow desktop MCP tools to use Promptify* (this creates the local API
+token), then add this to your MCP client (Claude Desktop, VS Code `mcp.json`, Cursor...):
 
 ```json
 { "mcpServers": { "promptify": { "command": "C:\\path\\to\\promptify-cli.exe", "args": ["mcp"] } } }
 ```
 
 Tools: `transform_prompt(text, app?, url?)` and `clean_dictation(text)`. The API token is sent only to loopback addresses.
+No phone-networking feature is needed. For a headless API, run `promptify-cli serve` and give the MCP command
+`--api http://127.0.0.1:47822` instead.
 
 ### MCP tools as context for your prompts
 
@@ -208,11 +232,14 @@ The common `"mcpServers"` format with `"type": "stdio"` or `"http"` works too:
 
 ```powershell
 cargo test --workspace --exclude promptify-llm
+cargo test -p promptify-server --features mobile-networking   # opt-in phone tests, including mDNS
 cargo clippy --workspace --all-targets
 npm run build
 ```
 
-`promptify-llm` builds llama.cpp and is covered by the CLI end-to-end runs (`rewrite`, `eval`, `serve` + `remote send`).
+`promptify-llm` builds llama.cpp and is covered by the CLI end-to-end runs (`rewrite`, `eval`, and the local MCP API).
+Phone pairing and transport tests run only with `mobile-networking`; default tests verify that phone access is
+unavailable while the local API still works.
 
 ## Morning check
 
@@ -220,17 +247,19 @@ npm run build
 2. In Notepad, press `Ctrl+Alt+Space` and say *"plan a three step launch checklist and review it until it's complete"*.
    You should get a numbered task graph with `after` dependencies and a `max N rounds` loop.
 3. Press `Ctrl+Alt+Shift+Space` and dictate a sentence with "um" in it. It should paste cleanly.
-4. Settings → Phones and remote access: turn it on, enable direct connections, then *Pair a new device*. A QR code appears.
-5. Test a phone connection with the CLI against a separate headless server:
+4. Settings → Desktop API: enable desktop MCP tools. It should show a loopback listener and no phone pairing,
+   LAN, relay, or discovery controls. Tools (MCP) remains available for connected tools.
+5. Test the local API against a separate headless server (normal builds do not create pairing links):
    ```powershell
    $env:PROMPTIFY_DATA_DIR="$env:TEMP\pf-morning"; $env:PROMPTIFY_MODELS_DIR="$env:APPDATA\dev.promptify.app\models"
-   promptify-cli serve --offer-file $env:TEMP\pf-offer.txt      # terminal 1; leave running
-   promptify-cli remote pair (Get-Content $env:TEMP\pf-offer.txt) --direct   # terminal 2, same variables
-   promptify-cli remote send "plan a two step code review with a fix loop" --app claude --direct
+   promptify-cli serve --listen 127.0.0.1:47822               # terminal 1; leave running
+   # terminal 2, with the same environment variables:
+   $token = (Get-Content "$env:PROMPTIFY_DATA_DIR\remote\api-token" -Raw).Trim()
+   Invoke-RestMethod http://127.0.0.1:47822/v1/profiles -Headers @{ Authorization = "Bearer $token" }
    ```
 6. `promptify-cli rewrite "draft a launch announcement" --process claude.exe --mcp <your mcp.json>`. With
    `PROMPTIFY_LOG=1`, the output includes a `tool context: N items` line.
-7. `promptify-cli eval eval\cases.toml`. All 24 cases should pass: 20 task graphs and 4 descriptive media prompts.
+7. `promptify-cli eval eval\cases.toml`. All 25 cases should pass: 21 task graphs and 4 descriptive media prompts.
 8. Hold a hotkey and speak for 10+ seconds with pauses: the overlay shows the text heard so far, and the result arrives
    moments after you let go.
 9. Settings → Status: tick *Also start a prompt by holding Ctrl+Shift*, then hold both keys alone for half a second.
@@ -244,8 +273,9 @@ npm run build
 
 ## Not done yet
 
-- Native iOS and Android apps. The protocol ([schema](protocol/schema-v1.json)), pairing and reference client
-  (`crates/promptify-server/src/client.rs`) are ready for them. An iOS keyboard extension will need *Full Access* for
+- Native iOS and Android apps. Phone networking is paused behind `mobile-networking`; the protocol
+  ([schema](protocol/schema-v1.json)), pairing and reference client (`crates/promptify-server/src/client.rs`)
+  are retained for client development. An iOS keyboard extension will need *Full Access* for
   network use.
 - Screenshot context with a vision model (needs a llama.cpp build with multimodal support and a ~1 GB projector).
 - Hold-Ctrl+Shift and screen-text reading on macOS and Linux; a hosted relay, code signing and installers.

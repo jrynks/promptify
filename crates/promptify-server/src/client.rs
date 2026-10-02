@@ -42,7 +42,7 @@ impl ClientIdentity {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mobile-networking"))]
     pub(crate) fn with_new_keys(&self) -> Self {
         let keys = StaticKeys::generate().unwrap();
         Self { private_key: encode_key(&keys.private), public_key: encode_key(&keys.public), ..self.clone() }
@@ -105,6 +105,7 @@ impl Connection {
 }
 
 pub async fn pair(offer: &PairingOffer, device_name: &str, prefer_direct: bool) -> Result<(ClientIdentity, Connection), String> {
+    crate::require_mobile_networking()?;
     let keys = StaticKeys::generate().map_err(|e| e.to_string())?;
     let mut ws = connect(offer.relay.as_deref(), offer.direct.as_deref(), &offer.room, prefer_direct).await?;
     let mut hs = Handshake::pairing_initiator(&keys, &offer.secret).map_err(|e| e.to_string())?;
@@ -136,6 +137,7 @@ pub async fn pair(offer: &PairingOffer, device_name: &str, prefer_direct: bool) 
 }
 
 pub async fn open(identity: &ClientIdentity, prefer_direct: bool) -> Result<Connection, String> {
+    crate::require_mobile_networking()?;
     let keys = identity.keys()?;
     let desktop = decode_key(&identity.desktop_key).ok_or("bad desktop key")?;
     let mut ws = match connect(identity.relay.as_deref(), identity.direct.as_deref(), &identity.room, prefer_direct).await {

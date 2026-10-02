@@ -172,6 +172,7 @@ pub enum FailReason {
     RecordingTooLong,
     TranscriptionFailed,
     GenerationFailed,
+    InvalidPrompt,
     TimedOut,
     EmptyOutput,
     /// The engines stayed busy with other clients' requests past the wait limit.
@@ -837,6 +838,7 @@ mod tests {
 
     const BAD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 3): Build.\nStep 3: Test.";
     const GOOD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 1): Build.\nLoop: if it fails, return to Step 2 (max 2 rounds).\nDone when: the build passes.";
+    const PERSONA_GRAPH: &str = "Act as a senior DevOps engineer.\nCommit the changes, create a pull request, and merge it.\nStep 1: Stage and commit the changes.\nStep 2 (after 1): Create and merge the pull request.\nLoop: if the merge fails, return to Step 1 (max 2 rounds).\nDone when: the pull request is merged.";
 
     fn scripted(first: &str, later: &[&str]) -> FakeGenerator {
         FakeGenerator { output: first.into(), later: Mutex::new(later.iter().map(|s| s.to_string()).collect()), ..Default::default() }
@@ -852,6 +854,65 @@ mod tests {
         let report = run(&h, Mode::Prompt);
         assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
         assert_eq!(report.structure, Some(StructureCheck::Valid));
+        assert_eq!(calls(&h), 1);
+    }
+
+    #[test]
+    fn persona_openers_are_repaired_before_pasting() {
+        let goal = PERSONA_GRAPH.split_once('\n').unwrap().1;
+        let terminal = ActiveContext { window: TARGET, process_name: "WindowsTerminal.exe".into(), window_title: "pwsh".into(), url: None };
+        for (context, expected) in [(chat_ctx(), goal.to_owned()), (terminal, goal.replace('\n', " "))] {
+            for opener in ["Act as a senior DevOps engineer.", "**Act as** an expert.", "You are a senior engineer.", "Act\nas a reviewer."] {
+                let draft = format!("{opener}\n{goal}");
+                let h = harness(context.clone(), "commit the changes then create and merge a pull request", scripted(&draft, &[goal]), ContextPolicy::default(), Limits::default());
+                let report = run(&h, Mode::Prompt);
+                assert_eq!(report.outcome, Outcome::Inserted { text: expected.clone() });
+                assert_eq!(report.structure, Some(StructureCheck::Repaired));
+                assert_eq!(calls(&h), 2);
+                let repair = h.generator.calls.lock().unwrap()[1].last().unwrap().content.clone();
+                assert!(repair.contains("role/persona") && repair.contains("user's goal"), "{repair}");
+            }
+        }
+    }
+
+    #[test]
+    fn unrepairable_persona_drafts_are_never_pasted_or_saved() {
+        let oversized = format!("{GOOD_GRAPH}{}", "x".repeat(Limits::default().max_output_chars));
+        for repair in [PERSONA_GRAPH, BAD_GRAPH, oversized.as_str()] {
+            let h = harness(chat_ctx(), "commit the changes", scripted(PERSONA_GRAPH, &[repair]), ContextPolicy::default(), Limits::default());
+            let report = run(&h, Mode::Prompt);
+            assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, ref detail } if detail.as_deref().is_some_and(|d| d.contains("role/persona"))));
+            assert_eq!(calls(&h), 2);
+            assert_eq!(inserts(&h), 0);
+            assert!(!report.history_saved && records(&h).is_empty());
+        }
+        let limits = Limits { max_structure_repairs: 0, ..Limits::default() };
+        let h = harness(chat_ctx(), "commit the changes", generator(PERSONA_GRAPH), ContextPolicy::default(), limits);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_eq!(calls(&h), 1);
+        assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn truncated_persona_drafts_are_not_returned_as_copyable_prompts() {
+        let h = harness(chat_ctx(), "commit the changes", FakeGenerator { output: PERSONA_GRAPH.into(), finish: Some(FinishReason::Length), ..Default::default() }, ContextPolicy::default(), Limits::default());
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_eq!(calls(&h), 1);
+        assert_eq!(inserts(&h), 0);
+        assert!(records(&h).is_empty());
+    }
+
+    #[test]
+    fn persona_text_in_reasoning_dictation_and_answers_is_not_rewritten() {
+        let h = harness(chat_ctx(), "commit the changes", generator(&format!("<think>{PERSONA_GRAPH}</think>\n{GOOD_GRAPH}")), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::Valid));
+        assert_eq!(calls(&h), 1, "only the sanitized final prompt is checked");
+        let literal = "Act as a senior engineer.";
+        let h = harness(chat_ctx(), literal, generator("unused"), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Dictation).outcome, Outcome::Inserted { text: literal.into() });
+        assert_eq!(calls(&h), 0);
+        let h = harness(chat_ctx(), "explain this phrase", generator(literal), ContextPolicy::default(), Limits::default());
+        assert_eq!(run(&h, Mode::Answer).outcome, Outcome::Answered { text: literal.into() });
         assert_eq!(calls(&h), 1);
     }
 

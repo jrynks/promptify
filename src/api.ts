@@ -125,6 +125,7 @@ export type RelayStatus =
   | { state: "error"; message: string };
 
 export interface RemoteInfo {
+  mobile_available: boolean;
   enabled: boolean;
   relay_url: string | null;
   lan_direct: boolean;

@@ -48,7 +48,7 @@ pub fn validate_api_base(base: &str) -> Result<String, String> {
     Ok(format!("http://{host}:{port}"))
 }
 
-const NOT_RUNNING: &str = "Promptify is not reachable. Start Promptify and turn on \"Allow paired devices to use Promptify\" in its settings.";
+const NOT_RUNNING: &str = "Promptify is not reachable. Start Promptify and enable the API under Settings > Desktop API.";
 
 impl PromptifyTools {
     pub fn new(base: String, token_path: PathBuf) -> Self {
@@ -58,7 +58,7 @@ impl PromptifyTools {
     }
 
     async fn call(&self, body: serde_json::Value) -> Result<String, String> {
-        // Read per call: the app creates the token when remote access is first turned on.
+        // Read per call: the app creates the token when the desktop API is first turned on.
         let token = std::fs::read_to_string(&self.token_path).map_err(|_| NOT_RUNNING.to_string())?;
         let response = self
             .http
@@ -79,10 +79,13 @@ impl PromptifyTools {
             return Err(format!("Promptify returned {status}: {}", text.chars().take(200).collect::<String>()));
         }
         let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-        let outcome = &value["outcome"];
+        Self::response_text(&value["outcome"])
+    }
+
+    fn response_text(outcome: &serde_json::Value) -> Result<String, String> {
         match outcome["kind"].as_str() {
             Some("ready") | Some("truncated") => Ok(outcome["text"].as_str().unwrap_or_default().to_owned()),
-            Some(kind) => Err(format!("Promptify could not write a prompt ({kind}: {})", outcome["reason"].as_str().unwrap_or("no detail"))),
+            Some(kind) => Err(format!("Promptify could not write a prompt ({kind}: {})", outcome["detail"].as_str().or_else(|| outcome["reason"].as_str()).unwrap_or("no detail"))),
             None => Err("unexpected reply from Promptify".into()),
         }
     }
@@ -117,7 +120,18 @@ pub async fn serve_stdio(base: String, token_path: PathBuf) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::validate_api_base;
+    use super::{PromptifyTools, validate_api_base};
+
+    #[test]
+    fn rejected_prompt_details_reach_the_mcp_client() {
+        let detail = "The role/persona-prefixed draft was not used.";
+        let rejected = serde_json::json!({ "kind": "failed", "reason": "invalid_prompt", "detail": detail });
+        let error = PromptifyTools::response_text(&rejected).unwrap_err();
+        assert!(error.contains(detail));
+        assert_eq!(PromptifyTools::result(Err(error)).is_error, Some(true));
+        let fallback = serde_json::json!({ "kind": "failed", "reason": "generation_failed", "detail": null });
+        assert!(PromptifyTools::response_text(&fallback).unwrap_err().contains("generation_failed"));
+    }
 
     #[test]
     fn token_only_goes_to_loopback() {

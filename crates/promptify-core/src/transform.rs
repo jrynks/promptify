@@ -18,7 +18,7 @@ use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_answer_
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
-use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_graph};
+use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, opens_with_role, validate_graph};
 use crate::tool_loop::{MAX_PLANNER_TOKENS, MAX_TOOL_ROUNDS, ToolRequest, ToolSpec, parse_tool_request, planner_messages};
 
 pub const MAX_TEXT_INPUT_CHARS: usize = 8000;
@@ -367,6 +367,11 @@ impl TransformService {
                     return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None };
                 }
                 let outcome = finish_output(&generation.text, generation.finish, profile.newlines, self.limits.max_output_chars);
+                if profile.structure != Structure::Flat
+                    && matches!(&outcome, TransformOutcome::Truncated { text } if opens_with_role(text))
+                {
+                    return reject_persona_draft();
+                }
                 let TransformOutcome::Ready { text } = outcome else {
                     return outcome;
                 };
@@ -419,7 +424,7 @@ impl TransformService {
 
     /// Validates the sanitized draft and runs at most `max_structure_repairs`
     /// rewrites inside the original deadline. Any repair that fails, truncates or arrives late leaves
-    /// the first draft in place.
+    /// the first draft in place, unless it has a forbidden persona opener.
     fn check_structure(
         &self,
         request: &GenerationRequest<'_>,
@@ -475,6 +480,9 @@ impl TransformService {
         if cancel.is_cancelled() {
             return Err(TransformOutcome::Cancelled);
         }
+        if opens_with_role(&draft) {
+            return Err(reject_persona_draft());
+        }
         log::warn!("no valid task graph after repair: {error}; keeping original prompt");
         Ok((draft, StructureCheck::KeptOriginal))
     }
@@ -492,9 +500,14 @@ fn failed(reason: FailReason, detail: String) -> TransformOutcome {
     TransformOutcome::Failed { reason, detail: Some(detail) }
 }
 
+fn reject_persona_draft() -> TransformOutcome {
+    log::warn!("rejecting a role/persona-prefixed draft instead of returning an invalid prompt");
+    failed(FailReason::InvalidPrompt, "The role/persona-prefixed draft was not used. Please try again for a goal-first prompt.".into())
+}
+
 fn repair_instruction(error: GraphError) -> String {
     format!(
-        "Your prompt has a structural problem: {error}. Rewrite the complete prompt as a valid task graph, preserving the user's intent and details. \
+        "Your prompt has a problem: {error}. Rewrite the complete prompt as a valid task graph, preserving the user's intent and details. \
 Number the steps 1, 2, 3 in order and let each step depend only on earlier steps. Include at least one loop with a failure condition, \
 an existing step to return to and a limit of 1 to {MAX_LOOP_ROUNDS} rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" \
 Include a non-empty \"Done when:\" section with verifiable success criteria for the loop to check. Stop when the checks pass; \
