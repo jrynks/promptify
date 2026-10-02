@@ -583,20 +583,24 @@ function Remote() {
     void api.remoteInfo().then((next) => {
       setInfo(next);
       if (next.status?.pairing_expires_unix == null) setOffer(null);
-    });
+    }, (e) => setError(String(e)));
   }, []);
 
   useEffect(() => {
     void api.remoteInfo().then((next) => {
       setInfo(next);
       setRelayUrl(next.relay_url ?? "");
-    });
+    }, (e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!info?.mobile_available) return;
     const timer = window.setInterval(() => {
       setNow(Date.now() / 1000);
       refresh();
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [info?.mobile_available, refresh]);
 
   const act = (fn: () => Promise<unknown>) => {
     setError(null);
@@ -606,41 +610,47 @@ function Remote() {
     });
   };
 
-  if (!info) return null;
+  if (!info) return error ? <p className="error">{error}</p> : null;
   const save = (enabled: boolean, lan: boolean, discovery = info.lan_discovery) => act(() => api.setRemoteSettings(enabled, relayUrl.trim() || null, lan, discovery));
   const secondsLeft = offer ? Math.max(0, Math.round(offer.expires_unix - now)) : 0;
 
   return (
     <section>
-      <h2>Phones and remote access</h2>
+      <h2>{info.mobile_available ? "Desktop API and phone access" : "Desktop API (MCP)"}</h2>
       <p className="hint">
-        Let your own phones use this computer's local models. Everything between a paired phone and this computer is end-to-end encrypted; a relay only forwards scrambled data it cannot read. Phones never get your history or screen text.
+        {info.mobile_available
+          ? "Desktop MCP tools and paired phones can use this computer's local models. Phone traffic is end-to-end encrypted; phones never get your history or screen text."
+          : "Desktop MCP tools can use this computer's models through a token-protected loopback API. Phone networking is paused until the iOS and Android apps are ready."}
       </p>
       <label className="inline">
         <input type="checkbox" checked={info.enabled} onChange={(e) => save(e.target.checked, info.lan_direct)} />
-        Allow paired devices to use Promptify
+        {info.mobile_available ? "Allow desktop tools and paired devices to use Promptify" : "Allow desktop MCP tools to use Promptify"}
       </label>
-      <label className="inline">
-        <input type="checkbox" checked={info.lan_direct} onChange={(e) => save(info.enabled, e.target.checked)} />
-        Accept direct connections on this network
-      </label>
-      {info.lan_direct && (
-        <label className="inline">
-          <input type="checkbox" checked={info.lan_discovery} onChange={(e) => save(info.enabled, info.lan_direct, e.target.checked)} />
-          Let paired phones find this computer if its network address changes (mDNS)
-        </label>
+      {info.mobile_available && (
+        <>
+          <label className="inline">
+            <input type="checkbox" checked={info.lan_direct} onChange={(e) => save(info.enabled, e.target.checked)} />
+            Accept direct connections on this network
+          </label>
+          {info.lan_direct && (
+            <label className="inline">
+              <input type="checkbox" checked={info.lan_discovery} onChange={(e) => save(info.enabled, info.lan_direct, e.target.checked)} />
+              Let paired phones find this computer if its network address changes (mDNS)
+            </label>
+          )}
+          <label>
+            Relay for access over the internet (optional, self-hosted)
+            <input placeholder="wss://relay.example.net" value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} />
+          </label>
+          <button onClick={() => save(info.enabled, info.lan_direct)}>Save relay</button>
+          {info.enabled && info.status && (
+            <p className="hint">
+              {relayLabel(info)} · {info.status.sessions} connected now
+            </p>
+          )}
+        </>
       )}
-      <label>
-        Relay for access over the internet (optional, self-hosted)
-        <input placeholder="wss://relay.example.net" value={relayUrl} onChange={(e) => setRelayUrl(e.target.value)} />
-      </label>
-      <button onClick={() => save(info.enabled, info.lan_direct)}>Save relay</button>
-      {info.enabled && info.status && (
-        <p className="hint">
-          {relayLabel(info)} · {info.status.sessions} connected now
-        </p>
-      )}
-      {info.enabled && (
+      {info.mobile_available && info.enabled && (
         <div>
           {offer && secondsLeft > 0 ? (
             <div className="pairing">
@@ -659,7 +669,7 @@ function Remote() {
       )}
       {error && <p className="error">{error}</p>}
       {info.error && <p className="error">{info.error}</p>}
-      <ul className="rows">
+      {info.mobile_available && <ul className="rows">
         {info.devices.map((d) => (
           <li key={d.id}>
             {renaming?.id === d.id ? (
@@ -689,9 +699,9 @@ function Remote() {
             <button className="link" onClick={() => window.confirm(`Remove ${d.name}? It is disconnected now and must be paired again to use Promptify.`) && act(() => api.removeDevice(d.id))}>Remove</button>
           </li>
         ))}
-      </ul>
+      </ul>}
       {info.enabled && info.status && (
-        <details>
+        <details open={!info.mobile_available}>
           <summary>Local API for tools on this computer</summary>
           <p className="hint">
             Listening on {info.status.listen}. Tools must send the token stored in <code>{info.api_token_path}</code>.
@@ -709,7 +719,7 @@ const PANES: { id: Pane; label: string }[] = [
   { id: "models", label: "Models" },
   { id: "words", label: "Your words" },
   { id: "history", label: "History" },
-  { id: "phones", label: "Phones" },
+  { id: "phones", label: "Desktop API" },
   { id: "tools", label: "Tools (MCP)" },
   { id: "advanced", label: "Advanced" },
 ];

@@ -32,7 +32,7 @@ pub struct AppSettings {
     pub dictation_hotkey: Option<String>,
     pub answer_hotkey: Option<String>,
     pub use_gpu: bool,
-    /// Lets paired phones and local tools use this desktop's engines. Off until the user turns it on.
+    /// Lets local MCP tools use this desktop's engines. Phone access also needs the mobile-networking build feature.
     pub server_enabled: bool,
     /// Self-hosted relay for access over the internet, e.g. wss://relay.example.net.
     pub relay_url: Option<String>,

@@ -6,10 +6,13 @@ use promptify_core::pipeline::{BackendError, CancelToken, FinishReason, Generati
 use promptify_core::profiles::ProfileSet;
 use promptify_core::scheduler::SchedulerLimits;
 use promptify_core::structure::validate_graph;
+#[cfg(feature = "mobile-networking")]
 use promptify_protocol::messages::{ClientMessage, ErrorCode, ServerMessage, WireContext, WireMode};
 
 use super::*;
-use crate::client::{self, Connection};
+use crate::client;
+#[cfg(feature = "mobile-networking")]
+use crate::client::Connection;
 
 struct Echo;
 
@@ -60,41 +63,47 @@ impl History for NoHistory {
 
 struct Fixture {
     _dir: tempfile::TempDir,
-    _relay_rt: tokio::runtime::Runtime,
+    _relay_rt: Option<tokio::runtime::Runtime>,
     server: RemoteServer,
     generator: Arc<SlowGenerator>,
     rt: tokio::runtime::Runtime,
 }
 
 fn fixture() -> Fixture {
-    let relay_rt = tokio::runtime::Runtime::new().unwrap();
-    let relay_addr = relay_rt.block_on(async {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let app = promptify_relay::router(promptify_relay::Relay::new(promptify_relay::Limits::default()));
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        addr
-    });
+    let (relay_rt, relay_url) = if MOBILE_NETWORKING_AVAILABLE {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let addr = runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let app = promptify_relay::router(promptify_relay::Relay::new(promptify_relay::Limits::default()));
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            addr
+        });
+        (Some(runtime), Some(format!("ws://{addr}")))
+    } else {
+        (None, None)
+    };
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(SlowGenerator::default());
     let service = Arc::new(TransformService::new(Arc::new(Echo), generator.clone(), Arc::new(NoHistory), ProfileSet::bundled(), Limits::default(), SchedulerLimits::default()));
     let config = ServerConfig {
         data_dir: dir.path().to_path_buf(),
-        relay_url: Some(format!("ws://{relay_addr}")),
+        relay_url,
         listen: Some("127.0.0.1:0".parse().unwrap()),
         advertise_direct: None,
-        discoverable: true,
+        discoverable: MOBILE_NETWORKING_AVAILABLE,
     };
     let server = RemoteServer::start(config, service).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while server.status().relay != RelayStatus::Connected {
+    while MOBILE_NETWORKING_AVAILABLE && server.status().relay != RelayStatus::Connected {
         assert!(std::time::Instant::now() < deadline, "relay link never connected: {:?}", server.status().relay);
         std::thread::sleep(Duration::from_millis(20));
     }
     Fixture { _dir: dir, _relay_rt: relay_rt, server, generator, rt }
 }
 
+#[cfg(feature = "mobile-networking")]
 fn offer(f: &Fixture, with_direct: bool) -> PairingOffer {
     let info = f.server.pairing_offer(120).unwrap();
     let mut offer = PairingOffer::parse(&info.uri, now_unix()).unwrap();
@@ -104,10 +113,12 @@ fn offer(f: &Fixture, with_direct: bool) -> PairingOffer {
     offer
 }
 
+#[cfg(feature = "mobile-networking")]
 fn text_job(f: &Fixture, connection: &mut Connection, id: u64, text: &str) -> ServerMessage {
     f.rt.block_on(connection.transform_text(id, WireMode::Prompt, WireContext { app: "com.openai.chatgpt".into(), ..Default::default() }, text, &mut |_| {})).unwrap()
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn pair_over_relay_then_reconnect_and_transform() {
     let f = fixture();
@@ -129,6 +140,7 @@ fn pair_over_relay_then_reconnect_and_transform() {
     assert_eq!(f.server.status().devices, 1);
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn pairing_offer_is_single_use_and_must_match() {
     let f = fixture();
@@ -147,6 +159,7 @@ fn pairing_offer_is_single_use_and_must_match() {
     assert_eq!(f.server.devices().len(), 2);
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn repeated_bad_pairing_attempts_kill_the_offer() {
     let f = fixture();
@@ -160,6 +173,7 @@ fn repeated_bad_pairing_attempts_kill_the_offer() {
     assert!(f.server.status().pairing_expires_unix.is_none());
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn removed_device_is_disconnected_and_refused() {
     let f = fixture();
@@ -170,6 +184,7 @@ fn removed_device_is_disconnected_and_refused() {
     assert!(f.rt.block_on(client::open(&identity, false)).is_err());
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn unknown_device_gets_no_session() {
     let f = fixture();
@@ -179,6 +194,7 @@ fn unknown_device_gets_no_session() {
     assert!(f.rt.block_on(client::open(&identity, false)).is_ok());
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn direct_link_busy_and_cancel() {
     let f = fixture();
@@ -211,6 +227,7 @@ fn direct_link_busy_and_cancel() {
     assert!(f.generator.saw_cancel.load(Ordering::SeqCst));
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn audio_job_and_oversized_audio() {
     use promptify_protocol::messages::{MAX_AUDIO_CHUNK_BYTES, encode_pcm16};
@@ -285,6 +302,7 @@ fn upgrade(addr: SocketAddr, origin: Option<&str>) -> (std::net::TcpStream, Stri
     (stream, status)
 }
 
+#[cfg(feature = "mobile-networking")]
 #[test]
 fn web_pages_cannot_open_the_direct_link_and_links_are_capped() {
     let f = fixture();
@@ -305,6 +323,73 @@ fn web_pages_cannot_open_the_direct_link_and_links_are_capped() {
         assert!(std::time::Instant::now() < deadline, "slots never freed: {status}");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(not(feature = "mobile-networking"))]
+#[test]
+fn desktop_builds_reject_phone_server_configuration_before_startup() {
+    let f = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let base = ServerConfig {
+        data_dir: dir.path().to_path_buf(),
+        relay_url: None,
+        listen: Some("127.0.0.1:0".parse().unwrap()),
+        advertise_direct: None,
+        discoverable: false,
+    };
+    for config in [
+        ServerConfig { relay_url: Some("wss://relay.example.test".into()), ..base.clone() },
+        ServerConfig { listen: Some("0.0.0.0:0".parse().unwrap()), ..base.clone() },
+        ServerConfig { listen: Some("[::]:0".parse().unwrap()), ..base.clone() },
+        ServerConfig { advertise_direct: Some("192.168.1.20:47821".into()), ..base.clone() },
+        ServerConfig { discoverable: true, ..base.clone() },
+    ] {
+        let error = RemoteServer::start(config, f.server.shared.service.clone()).err().expect("phone configuration must fail");
+        assert_eq!(error, MOBILE_NETWORKING_DISABLED);
+        assert!(!dir.path().join("remote").exists(), "disabled configurations must fail before any server setup");
+    }
+    base.validate().unwrap();
+    ServerConfig { listen: Some("[::1]:0".parse().unwrap()), ..base }.validate().unwrap();
+}
+
+#[cfg(not(feature = "mobile-networking"))]
+#[test]
+fn desktop_api_has_no_phone_endpoint_or_pairing() {
+    let f = fixture();
+    let addr = f.server.listen_addr().unwrap();
+    assert!(addr.ip().is_loopback());
+    assert_eq!(f.server.status().relay, RelayStatus::Disabled);
+    assert_eq!(f.server.status().sessions, 0);
+    assert_eq!(f.server.status().pairing_expires_unix, None);
+    assert!(f.server.advertiser.is_none());
+    let (_client, status) = upgrade(addr, None);
+    assert!(status.starts_with("HTTP/1.1 404"), "{status}");
+    let (_browser, status) = upgrade(addr, Some("https://example.test"));
+    assert!(status.starts_with("HTTP/1.1 404"), "{status}");
+    assert_eq!(f.server.pairing_offer(120).unwrap_err(), MOBILE_NETWORKING_DISABLED);
+    assert_eq!(f.generator.calls.load(Ordering::SeqCst), 0);
+}
+
+#[cfg(not(feature = "mobile-networking"))]
+#[test]
+fn desktop_builds_refuse_reference_phone_clients() {
+    let f = fixture();
+    let offer = PairingOffer {
+        relay: None,
+        direct: Some(f.server.listen_addr().unwrap().to_string()),
+        room: "0".repeat(64),
+        desktop_key: [0; 32],
+        secret: [0; 32],
+        expires_unix: now_unix() + 60,
+    };
+    let error = f.rt.block_on(client::pair(&offer, "test phone", true)).err().expect("pairing must be disabled");
+    assert_eq!(error, MOBILE_NETWORKING_DISABLED);
+    let identity: client::ClientIdentity = serde_json::from_value(serde_json::json!({
+        "private_key": "unused", "public_key": "unused", "desktop_key": "unused",
+        "relay": null, "direct": offer.direct, "room": offer.room, "device_id": "unused"
+    })).unwrap();
+    let error = f.rt.block_on(client::open(&identity, true)).err().expect("phone reconnect must be disabled");
+    assert_eq!(error, MOBILE_NETWORKING_DISABLED);
 }
 
 #[test]

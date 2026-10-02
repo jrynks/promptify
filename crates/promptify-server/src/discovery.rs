@@ -26,6 +26,7 @@ pub struct Advertiser {
 
 impl Advertiser {
     pub fn start(room: &str, port: u16) -> Result<Self, String> {
+        crate::require_mobile_networking()?;
         let id = instance_id(room);
         let daemon = ServiceDaemon::new().map_err(|e| format!("mDNS unavailable: {e}"))?;
         let info = ServiceInfo::new(SERVICE_TYPE, &id, &format!("promptify-{id}.local."), "", port, [("v", "1")].as_slice())
@@ -46,6 +47,10 @@ impl Drop for Advertiser {
 
 /// Looks for the desktop that owns `room` on the local network.
 pub fn find(room: &str, timeout: Duration) -> Option<SocketAddr> {
+    if let Err(error) = crate::require_mobile_networking() {
+        log::warn!("{error}");
+        return None;
+    }
     let wanted = format!("{}.{SERVICE_TYPE}", instance_id(room));
     let daemon = ServiceDaemon::new().ok()?;
     let events = daemon.browse(SERVICE_TYPE).ok()?;
@@ -88,14 +93,15 @@ mod tests {
     #[test]
     fn only_network_reachable_listeners_are_advertised() {
         use crate::should_advertise;
-        assert!(should_advertise(true, "0.0.0.0:47821".parse().unwrap()));
-        assert!(should_advertise(true, "192.168.1.20:47821".parse().unwrap()));
+        assert_eq!(should_advertise(true, "0.0.0.0:47821".parse().unwrap()), crate::MOBILE_NETWORKING_AVAILABLE);
+        assert_eq!(should_advertise(true, "192.168.1.20:47821".parse().unwrap()), crate::MOBILE_NETWORKING_AVAILABLE);
         assert!(!should_advertise(true, "127.0.0.1:47821".parse().unwrap()));
         assert!(!should_advertise(true, "[::1]:47821".parse().unwrap()));
         assert!(!should_advertise(false, "0.0.0.0:47821".parse().unwrap()));
     }
 
     /// Uses real multicast on this machine's interfaces.
+    #[cfg(feature = "mobile-networking")]
     #[test]
     fn advertised_desktop_is_found_by_its_room_only() {
         let room = format!("test-room-{}", std::process::id());
@@ -103,5 +109,14 @@ mod tests {
         let found = find(&room, Duration::from_secs(8)).expect("found on the local network");
         assert_eq!(found.port(), 47_999);
         assert_eq!(find("some-other-room", Duration::from_secs(2)), None);
+    }
+
+    #[cfg(not(feature = "mobile-networking"))]
+    #[test]
+    fn desktop_builds_do_not_advertise_or_browse_for_phones() {
+        assert_eq!(Advertiser::start("unused-room", 47_999).err().as_deref(), Some(crate::MOBILE_NETWORKING_DISABLED));
+        let started = Instant::now();
+        assert_eq!(find("unused-room", Duration::from_secs(3)), None);
+        assert!(started.elapsed() < Duration::from_secs(1), "discovery must not wait for network replies");
     }
 }

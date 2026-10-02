@@ -32,7 +32,10 @@ const USAGE: &str = "usage:
   promptify-cli mcp [--api http://127.0.0.1:47821]   (stdio MCP server for Claude Desktop, VS Code, Cursor...)
   promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE] [--discoverable]
   promptify-cli remote pair <pairing-link> [--name NAME] [--direct] [--identity FILE]
-  promptify-cli remote send <text> [--app APP] [--url URL] [--dictation] [--direct] [--identity FILE]";
+  promptify-cli remote send <text> [--app APP] [--url URL] [--dictation] [--direct] [--identity FILE]
+
+serve starts a loopback MCP API by default. Phone options (--relay, --advertise,
+--offer-file, --discoverable) and remote commands require the mobile-networking build feature.";
 
 /// Feeds typed text through the pipeline in place of speech.
 struct TextTranscriber(String);
@@ -99,7 +102,10 @@ fn rewrite_with(
         JobEvent::Token(text) if show && revising => revised.push_str(text),
         _ => {}
     });
-    if show && report.structure == Some(promptify_core::pipeline::StructureCheck::KeptOriginal) && !revised.trim().is_empty() {
+    if show
+        && (report.structure == Some(promptify_core::pipeline::StructureCheck::KeptOriginal) || matches!(&report.outcome, Outcome::Failed { .. }))
+        && !revised.trim().is_empty()
+    {
         eprintln!("Rejected repair:\n{revised}\n---");
     }
     Ok(report)
@@ -167,11 +173,28 @@ impl log::Log for StderrLogger {
     fn flush(&self) {}
 }
 
+fn serve_config(args: &[String], data_dir: &Path) -> Result<promptify_server::ServerConfig, String> {
+    if args.iter().any(|a| ["--relay", "--advertise", "--offer-file", "--discoverable"].contains(&a.as_str())) {
+        promptify_server::require_mobile_networking()?;
+    }
+    let listen: std::net::SocketAddr = flag(args, "--listen").unwrap_or_else(|| "127.0.0.1:47822".into()).parse().map_err(|e| format!("bad --listen: {e}"))?;
+    let config = promptify_server::ServerConfig {
+        data_dir: data_dir.to_path_buf(),
+        relay_url: flag(args, "--relay"),
+        listen: Some(listen),
+        advertise_direct: if promptify_server::MOBILE_NETWORKING_AVAILABLE { Some(flag(args, "--advertise").unwrap_or_else(|| listen.to_string())) } else { None },
+        discoverable: args.iter().any(|a| a == "--discoverable"),
+    };
+    config.validate()?;
+    Ok(config)
+}
+
 /// Acts as a paired phone, for testing remote access end to end.
 fn remote(args: &[String], data_dir: &Path) -> Result<(), String> {
     use promptify_protocol::messages::{ServerMessage, WireContext, WireMode};
     use promptify_server::client;
 
+    promptify_server::require_mobile_networking()?;
     let identity_path = flag(args, "--identity").map(PathBuf::from).unwrap_or_else(|| data_dir.join("remote-test-client.json"));
     let direct = args.iter().any(|a| a == "--direct");
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
@@ -456,6 +479,7 @@ fn run() -> Result<(), String> {
         Some("serve") => {
             use promptify_core::scheduler::SchedulerLimits;
             use promptify_core::transform::TransformService;
+            let config = serve_config(&args, &data_dir)?;
             let shared: SharedSettings = Arc::new(RwLock::new(app_settings));
             let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
             let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
@@ -463,27 +487,55 @@ fn run() -> Result<(), String> {
             llm.preload().map_err(|e| e.0)?;
             let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
             let service = Arc::new(TransformService::new(stt, llm, Arc::new(NoHistory), ProfileSet::bundled(), limits, SchedulerLimits::default()));
-            let listen: std::net::SocketAddr = flag(&args, "--listen").unwrap_or_else(|| "127.0.0.1:47822".into()).parse().map_err(|e| format!("bad --listen: {e}"))?;
-            let config = promptify_server::ServerConfig {
-                data_dir: data_dir.clone(),
-                relay_url: flag(&args, "--relay"),
-                listen: Some(listen),
-                advertise_direct: Some(flag(&args, "--advertise").unwrap_or_else(|| listen.to_string())),
-                discoverable: args.iter().any(|a| a == "--discoverable"),
-            };
             let server = promptify_server::RemoteServer::start(config, service)?;
-            let offer = server.pairing_offer(600)?;
-            if let Some(path) = flag(&args, "--offer-file") {
-                std::fs::write(&path, &offer.uri).map_err(|e| e.to_string())?;
+            if promptify_server::MOBILE_NETWORKING_AVAILABLE {
+                let offer = server.pairing_offer(600)?;
+                if let Some(path) = flag(&args, "--offer-file") {
+                    std::fs::write(&path, &offer.uri).map_err(|e| e.to_string())?;
+                }
+                println!("{}", offer.uri);
+                eprintln!("serving on {:?}; pairing link valid for 10 minutes; Ctrl+C to stop", server.listen_addr());
+            } else {
+                let addr = server.listen_addr().ok_or("local MCP API listener is unavailable")?;
+                println!("http://{addr}");
+                eprintln!("local MCP API only; token in {}; phone networking disabled; Ctrl+C to stop", promptify_server::api_token_path(&data_dir).display());
             }
-            println!("{}", offer.uri);
-            eprintln!("serving on {:?}; pairing link valid for 10 minutes; Ctrl+C to stop", server.listen_addr());
             loop {
                 std::thread::sleep(Duration::from_secs(10));
-                eprintln!("status: {}", serde_json::to_string(&server.status()).unwrap_or_default());
+                if promptify_server::MOBILE_NETWORKING_AVAILABLE {
+                    eprintln!("status: {}", serde_json::to_string(&server.status()).unwrap_or_default());
+                }
             }
         }
         _ => return Err(USAGE.into()),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_serve_config_keeps_the_desktop_api() {
+        let config = serve_config(&["serve".into()], Path::new("unused")).unwrap();
+        assert!(config.listen.unwrap().ip().is_loopback());
+        assert!(config.relay_url.is_none() && !config.discoverable);
+        assert_eq!(config.advertise_direct.is_some(), promptify_server::MOBILE_NETWORKING_AVAILABLE);
+    }
+
+    #[cfg(not(feature = "mobile-networking"))]
+    #[test]
+    fn phone_serve_options_fail_before_loading_models() {
+        for options in [
+            vec!["--relay", "wss://relay.example.test"],
+            vec!["--advertise", "192.168.1.20:47822"],
+            vec!["--offer-file", "unused"],
+            vec!["--discoverable"],
+            vec!["--listen", "0.0.0.0:47822"],
+        ] {
+            let args: Vec<String> = std::iter::once("serve").chain(options).map(String::from).collect();
+            assert_eq!(serve_config(&args, Path::new("unused")).unwrap_err(), promptify_server::MOBILE_NETWORKING_DISABLED);
+        }
+    }
 }
