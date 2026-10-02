@@ -249,11 +249,24 @@ async fn connect(server: &ServerConfig) -> Result<Client, String> {
         None => server_path(&std::env::var_os("PATH").unwrap_or_default(), std::env::current_exe().ok().as_deref().and_then(Path::parent)),
     };
     let mut command = tokio::process::Command::new(resolve_program(program, &path));
-    command.args(&server.args).envs(&server.env).env("PATH", &path).kill_on_drop(true);
+    command.env_clear().envs(server_env(std::env::vars_os())).envs(&server.env).env("PATH", &path).args(&server.args).kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
     let transport = rmcp::transport::TokioChildProcess::new(command).map_err(|e| format!("cannot start {program}: {e}"))?;
     ().serve(transport).await.map_err(|e| e.to_string())
+}
+
+/// Variables a server may inherit: what Windows, npx/uvx and proxies need to run, never the user's
+/// tokens or keys. A server gets anything else only through its own `env` in mcp.json.
+const INHERITED_ENV: &[&str] = &[
+    "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "OS", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    "TEMP", "TMP", "TMPDIR", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME", "USERNAME", "USER",
+    "COMPUTERNAME", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles", "LANG", "LC_ALL",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE",
+];
+
+fn server_env(inherited: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    inherited.filter(|(name, _)| name.to_str().is_some_and(|n| INHERITED_ENV.iter().any(|k| k.eq_ignore_ascii_case(n)))).collect()
 }
 
 /// The user's PATH without the app's own folders. `cargo run` adds every native build folder there,
@@ -514,6 +527,14 @@ mod tests {
         assert_eq!(explicit, PathBuf::from("fakenpx.cmd"));
         assert_eq!(missing, PathBuf::from("not-installed-anywhere"));
         assert_eq!(with_dir, PathBuf::from(r"C:\tools\fakenpx"));
+    }
+
+    #[test]
+    fn servers_inherit_only_allowlisted_variables() {
+        let os = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect::<Vec<_>>();
+        let inherited = os(&[("GITHUB_TOKEN", "ghp_secret"), ("OPENAI_API_KEY", "sk-secret"), ("SYSTEMROOT", "C:\\Windows"), ("AppData", "C:\\a"), ("Path", "C:\\x"), ("HTTPS_PROXY", "http://p:8080")]);
+        let kept = server_env(inherited.into_iter());
+        assert_eq!(kept, os(&[("SYSTEMROOT", "C:\\Windows"), ("AppData", "C:\\a"), ("HTTPS_PROXY", "http://p:8080")]), "names match case-insensitively; PATH is set separately");
     }
 
     #[test]

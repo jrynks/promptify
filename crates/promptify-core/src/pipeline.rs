@@ -208,10 +208,8 @@ impl Outcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StructureCheck {
-    /// No numbered steps or loops in the output.
-    Unstructured,
     Valid,
-    /// The first draft was malformed and a repair passed validation.
+    /// The first draft was not a well-formed task graph with a loop, and a repair passed validation.
     Repaired,
     /// No repair passed validation; the first draft was kept.
     KeptOriginal,
@@ -838,7 +836,7 @@ mod tests {
     }
 
     const BAD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 3): Build.\nStep 3: Test.";
-    const GOOD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 1): Build.\nLoop: if it fails, return to Step 2 (max 2 rounds).";
+    const GOOD_GRAPH: &str = "Step 1: Plan.\nStep 2 (after 1): Build.\nLoop: if it fails, return to Step 2 (max 2 rounds).\nDone when: the build passes.";
 
     fn scripted(first: &str, later: &[&str]) -> FakeGenerator {
         FakeGenerator { output: first.into(), later: Mutex::new(later.iter().map(|s| s.to_string()).collect()), ..Default::default() }
@@ -855,8 +853,71 @@ mod tests {
         assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
         assert_eq!(report.structure, Some(StructureCheck::Valid));
         assert_eq!(calls(&h), 1);
-        let h = harness(chat_ctx(), "x", generator("Plain prompt."), ContextPolicy::default(), Limits::default());
-        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::Unstructured));
+    }
+
+    #[test]
+    fn incomplete_drafts_are_repaired_into_graphs() {
+        let no_checks = GOOD_GRAPH.split("\nDone when:").next().unwrap();
+        let empty_checks = format!("{no_checks}\nDone when:");
+        for (draft, problem) in [
+            ("Plain prompt.", "no numbered steps"),
+            ("Step 1: Plan.\nStep 2 (after 1): Build.\nDone when: built.", "no loop"),
+            ("Step 1: Write it.\nLoop: if it is unclear, revise it (max 2 rounds).\nDone when: it is clear.", "no numbered return target"),
+            (no_checks, "no checks"),
+            (empty_checks.as_str(), "no checks"),
+        ] {
+            let h = harness(chat_ctx(), "x", scripted(draft, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+            let report = run(&h, Mode::Prompt);
+            assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() }, "{draft}");
+            assert_eq!(report.structure, Some(StructureCheck::Repaired), "{draft}");
+            let repair = h.generator.calls.lock().unwrap()[1].last().unwrap().content.clone();
+            assert!(repair.contains(problem), "{repair}");
+            assert!(repair.contains("at least one loop") && repair.contains("Done when:"), "{repair}");
+        }
+    }
+
+    #[test]
+    fn structure_checks_use_the_sanitized_draft_and_repair() {
+        let hidden_good = format!("<think>{GOOD_GRAPH}</think>\nPlain prompt.");
+        let hidden_bad = format!("<think>{BAD_GRAPH}</think>\n{GOOD_GRAPH}");
+        for (draft, repair, expected) in [
+            (hidden_good.as_str(), GOOD_GRAPH, StructureCheck::Repaired),
+            (hidden_bad.as_str(), BAD_GRAPH, StructureCheck::Valid),
+            (BAD_GRAPH, hidden_bad.as_str(), StructureCheck::Repaired),
+            (BAD_GRAPH, hidden_good.as_str(), StructureCheck::KeptOriginal),
+        ] {
+            let h = harness(chat_ctx(), "x", scripted(draft, &[repair]), ContextPolicy::default(), Limits::default());
+            let report = run(&h, Mode::Prompt);
+            let text = if expected == StructureCheck::KeptOriginal { BAD_GRAPH } else { GOOD_GRAPH };
+            assert_eq!(report.outcome, Outcome::Inserted { text: text.into() }, "{draft}");
+            assert_eq!(report.structure, Some(expected), "{draft}");
+            assert_eq!(calls(&h), if expected == StructureCheck::Valid { 1 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn terminal_graphs_are_validated_after_collapsing_lines() {
+        let ctx = ActiveContext { window: TARGET, process_name: "WindowsTerminal.exe".into(), window_title: "pwsh".into(), url: None };
+        let draft = "Step 1: Plan\nStep 2 (after 1): Build\nLoop: if the build fails, return to Step 2 (max 2 rounds).\nDone when: the build passes.";
+        let inline = GOOD_GRAPH.replace('\n', "; ");
+        let h = harness(ctx, "x", scripted(draft, &[&inline]), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: inline.clone() });
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert!(crate::structure::validate_graph(&inline).is_ok());
+        assert!(!inline.contains('\n'));
+        assert_eq!(calls(&h), 2);
+    }
+
+    #[test]
+    fn oversized_repairs_keep_the_complete_original_draft() {
+        let limits = Limits { max_output_chars: GOOD_GRAPH.len(), ..Limits::default() };
+        let oversized = format!("{GOOD_GRAPH}\n{}", "x".repeat(50));
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[&oversized]), ContextPolicy::default(), limits);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert_eq!(calls(&h), 2);
     }
 
     #[test]
@@ -924,11 +985,11 @@ mod tests {
     }
 
     #[test]
-    fn flat_profiles_and_dictation_skip_structure_checks() {
-        let ctx = ActiveContext { window: TARGET, process_name: "chrome.exe".into(), url: Some("https://www.perplexity.ai/".into()), ..Default::default() };
+    fn media_profiles_and_dictation_skip_structure_checks() {
+        let ctx = ActiveContext { window: TARGET, process_name: "chrome.exe".into(), url: Some("https://www.midjourney.com/imagine".into()), ..Default::default() };
         let h = harness(ctx, "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
         let report = run(&h, Mode::Prompt);
-        assert_eq!(report.profile_id, "perplexity");
+        assert_eq!(report.profile_id, "image_gen");
         assert_eq!(report.structure, None);
         assert_eq!(calls(&h), 1);
         let h = harness(chat_ctx(), "x", generator("unused"), ContextPolicy::default(), Limits::default());

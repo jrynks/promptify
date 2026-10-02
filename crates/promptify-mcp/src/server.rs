@@ -34,21 +34,27 @@ pub struct PromptifyTools {
 }
 
 /// The API token must never leave this computer, so only loopback API addresses are accepted.
+/// The address is rebuilt from its parsed parts, so text like `127.0.0.1:1@evil.example` cannot reach another host.
 pub fn validate_api_base(base: &str) -> Result<String, String> {
-    let rest = base.strip_prefix("http://").ok_or("--api must be an http:// loopback address")?;
-    let host = rest.split('/').next().unwrap_or_default();
-    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
-    if !["127.0.0.1", "localhost", "[::1]"].contains(&host) {
+    let url = reqwest::Url::parse(base).map_err(|_| "--api must be an http:// loopback address")?;
+    if url.scheme() != "http" || !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() || url.path() != "/" {
+        return Err("--api must be an http:// loopback address such as http://127.0.0.1:47821".into());
+    }
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return Err("--api needs a host and port".into()) };
+    let ip = host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>();
+    if !(host == "localhost" || ip.is_ok_and(|ip| ip.is_loopback())) {
         return Err("--api must point at this computer (127.0.0.1, localhost or [::1])".into());
     }
-    Ok(base.trim_end_matches('/').to_owned())
+    Ok(format!("http://{host}:{port}"))
 }
 
 const NOT_RUNNING: &str = "Promptify is not reachable. Start Promptify and turn on \"Allow paired devices to use Promptify\" in its settings.";
 
 impl PromptifyTools {
     pub fn new(base: String, token_path: PathBuf) -> Self {
-        Self { http: reqwest::Client::builder().no_proxy().build().unwrap_or_default(), base, token_path }
+        // A redirect could carry the bearer token to another address.
+        let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap_or_default();
+        Self { http, base, token_path }
     }
 
     async fn call(&self, body: serde_json::Value) -> Result<String, String> {
@@ -91,7 +97,7 @@ impl PromptifyTools {
 
 #[tool_router(server_handler)]
 impl PromptifyTools {
-    #[tool(description = "Rewrite a rough request into a clear, well-structured prompt for another AI, using Promptify's local model on this computer. Multi-step requests get numbered steps with dependencies and bounded check-and-revise loops.")]
+    #[tool(description = "Rewrite a rough request into a clear, well-structured prompt for another AI, using Promptify's local model on this computer. AI prompts get numbered steps with dependencies, bounded check-and-revise loops and completion checks, sized to the request. Image and video creation prompts stay descriptive.")]
     async fn transform_prompt(&self, Parameters(args): Parameters<TransformArgs>) -> Result<CallToolResult, McpError> {
         let body = serde_json::json!({ "text": args.text, "mode": "prompt", "app": args.app.unwrap_or_default(), "url": args.url });
         Ok(Self::result(self.call(body).await))
@@ -118,8 +124,24 @@ mod tests {
         assert_eq!(validate_api_base("http://127.0.0.1:47821/").unwrap(), "http://127.0.0.1:47821");
         assert!(validate_api_base("http://localhost:1").is_ok());
         assert!(validate_api_base("http://[::1]:1").is_ok());
-        for bad in ["https://127.0.0.1:1", "http://127.0.0.1.evil.com:1", "http://evil.com/127.0.0.1", "http://user@evil.com:1", "http://10.0.0.2:1"] {
+        for bad in [
+            "https://127.0.0.1:1",
+            "http://127.0.0.1.evil.com:1",
+            "http://evil.com/127.0.0.1",
+            "http://user@evil.com:1",
+            "http://10.0.0.2:1",
+            "http://127.0.0.1:47821@evil.example",
+            "http://localhost:9@attacker.test/x",
+            "http://[::1]:1@evil.example",
+            "http://user:pass@127.0.0.1:1",
+            "http://user@127.0.0.1:1",
+            "http://127.0.0.1:1/other?x=1",
+            "http://localhost.evil.com:1",
+        ] {
             assert!(validate_api_base(bad).is_err(), "{bad}");
         }
+        assert_eq!(validate_api_base("http://127.0.0.2:5").unwrap(), "http://127.0.0.2:5", "all of 127/8 is loopback");
+        assert_eq!(validate_api_base("http://LOCALHOST:5").unwrap(), "http://localhost:5", "rebuilt from parsed parts");
+        assert_eq!(validate_api_base("http://127.1:5").unwrap(), "http://127.0.0.1:5", "rebuilt from parsed parts");
     }
 }

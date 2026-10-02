@@ -5,6 +5,7 @@ use promptify_core::history::{HistoryContext, NewHistoryEntry};
 use promptify_core::pipeline::{BackendError, CancelToken, FinishReason, Generation, GenerationRequest, Generator, History, Limits, Transcriber};
 use promptify_core::profiles::ProfileSet;
 use promptify_core::scheduler::SchedulerLimits;
+use promptify_core::structure::validate_graph;
 use promptify_protocol::messages::{ClientMessage, ErrorCode, ServerMessage, WireContext, WireMode};
 
 use super::*;
@@ -38,7 +39,11 @@ impl Generator for SlowGenerator {
         }
         let said = req.messages.last().map(|m| m.content.clone()).unwrap_or_default();
         on_token("Prompt ");
-        Ok(Generation { text: format!("Prompt for: {}", said.lines().last().unwrap_or_default().len()), finish: FinishReason::Stop })
+        let text = format!(
+            "Prompt for: {}.\nStep 1: Write it.\nLoop: if it misses a requirement, return to Step 1 (max 2 rounds).\nDone when: all stated requirements are met.",
+            said.lines().last().unwrap_or_default().len()
+        );
+        Ok(Generation { text, finish: FinishReason::Stop })
     }
 }
 
@@ -111,7 +116,11 @@ fn pair_over_relay_then_reconnect_and_transform() {
     assert_eq!(f.server.devices().len(), 1);
     assert_eq!(f.server.devices()[0].name, "Test phone");
     match text_job(&f, &mut conn, 1, "compare three crm tools") {
-        ServerMessage::Done { id: 1, profile, truncated: false, .. } => assert_eq!(profile, "chatgpt"),
+        ServerMessage::Done { id: 1, profile, text, structure, truncated: false } => {
+            assert_eq!(profile, "chatgpt");
+            assert_eq!(structure.as_deref(), Some("valid"));
+            validate_graph(&text).unwrap();
+        }
         other => panic!("unexpected {other:?}"),
     }
     drop(conn);
@@ -213,8 +222,9 @@ fn audio_job_and_oversized_audio() {
         conn.send(&ClientMessage::AudioEnd { id: 1 }).await.unwrap();
         loop {
             match conn.recv().await.unwrap() {
-                ServerMessage::Done { id: 1, text, .. } => {
+                ServerMessage::Done { id: 1, text, structure, .. } => {
                     assert_eq!(text, "heard 1600 samples");
+                    assert_eq!(structure, None);
                     break;
                 }
                 ServerMessage::Stage { .. } | ServerMessage::Transcript { .. } => continue,
@@ -258,6 +268,43 @@ fn local_api_requires_the_token() {
     let ok = http(addr, Some(token.trim()), body);
     assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
     assert!(ok.contains(r#""profile":"claude""#));
+    let response: serde_json::Value = serde_json::from_str(ok.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(response["structure"], "valid");
+    assert_eq!(response["outcome"]["kind"], "ready");
+    validate_graph(response["outcome"]["text"].as_str().unwrap()).unwrap();
+}
+
+/// Sends a WebSocket upgrade for /v1/direct and returns the open stream and the status line.
+fn upgrade(addr: SocketAddr, origin: Option<&str>) -> (std::net::TcpStream, String) {
+    use std::io::{BufRead, Write};
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+    write!(stream, "GET /v1/direct HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n{origin}\r\n").unwrap();
+    let mut status = String::new();
+    std::io::BufReader::new(stream.try_clone().unwrap()).read_line(&mut status).unwrap();
+    (stream, status)
+}
+
+#[test]
+fn web_pages_cannot_open_the_direct_link_and_links_are_capped() {
+    let f = fixture();
+    let addr = f.server.listen_addr().unwrap();
+    let (_page, status) = upgrade(addr, Some("https://evil.example"));
+    assert!(status.starts_with("HTTP/1.1 403"), "browser origin: {status}");
+    let held: Vec<_> = (0..local::MAX_DIRECT_LINKS).map(|_| upgrade(addr, None)).collect();
+    assert!(held.iter().all(|(_, s)| s.starts_with("HTTP/1.1 101")), "{:?}", held.iter().map(|(_, s)| s).collect::<Vec<_>>());
+    let (_extra, status) = upgrade(addr, None);
+    assert!(status.starts_with("HTTP/1.1 503"), "over the cap: {status}");
+    drop(held);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_s, status) = upgrade(addr, None);
+        if status.starts_with("HTTP/1.1 101") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "slots never freed: {status}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]

@@ -5,8 +5,9 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 
 - **Prompt mode** (`Ctrl+Alt+Space`): turns what you said into a prompt that fits the target app (ChatGPT, Claude,
   Gemini, Grok, Copilot, Perplexity, Cursor, VS Code, Claude Code, Codex CLI, terminals, image generators...).
-  Multi-step requests become a **task graph**: numbered steps, explicit dependencies (`after 1, 2`) and bounded
-  check-and-revise loops (`max N rounds`). The output is validated and, if needed, repaired once.
+  AI requests become a **task graph**, sized to their complexity: numbered steps, explicit dependencies (`after 1, 2`),
+  bounded check-and-revise loops (`max N rounds`) and `Done when:` completion checks. Image and video creation prompts
+  stay descriptive. The finished output is validated and, if needed, repaired once.
 - **Dictation mode** (`Ctrl+Alt+Shift+Space`): pastes what you said with filler words removed. Say "new line",
   "new paragraph" or "scratch that" as their own sentence to edit as you speak.
 - **Answer mode** (optional hotkey, set it in Settings): ask a question; the local model's answer is shown with a Copy
@@ -73,6 +74,18 @@ For an unbundled development build, a user-local `promptify.desktop` entry must 
 and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that development entry hidden with
 `NoDisplay=true` and continue launching through the task above; Linux bundles install their own desktop entry and icons.
 
+## Windows installer
+
+```powershell
+npm run installer      # C:\ptb\release\bundle\nsis\Promptify_0.1.0_x64-setup.exe
+```
+
+Needs Visual Studio Build Tools (its Visual C++ and OpenMP runtime DLLs are installed next to the app). The installer
+is unsigned, so Windows SmartScreen asks for confirmation (*More info* → *Run anyway*). It installs per user, includes
+the llama.cpp worker and `promptify-cli.exe`, and downloads WebView2 if it is missing. The target computer needs a
+current graphics driver (for `vulkan-1.dll`); models are downloaded on first launch. Installed and dev builds share the
+same app data folder, so do not run both on one computer at the same time.
+
 ## Developer CLI
 
 `cargo run -p promptify --bin promptify-cli -- <command>` (or `C:\ptb\debug\promptify-cli.exe` if `CARGO_TARGET_DIR=C:\ptb`):
@@ -84,13 +97,27 @@ and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that develo
 | `live-sim <file.wav>` | replays a recording as if spoken; compares live chunks with one full pass |
 | `rewrite "<text>" [--process claude.exe] [--url URL] [--mcp mcp.json] [--mode prompt\|dictation\|answer] [--auto]` | typed text through the pipeline |
 | `screen-text` | after 3 s, reads the focused text box of the foreground app, as the app would |
-| `eval eval\cases.toml` | structure evaluation (20 opaque cases; `PROMPTIFY_EVAL_SHOW=1` prints prompts) |
+| `eval eval\cases.toml` | structure evaluation (24 opaque cases; `PROMPTIFY_EVAL_SHOW=1` prints prompts and rejected repairs; nonzero exit on failure) |
 | `serve [--relay wss://...] [--listen 127.0.0.1:47822] [--discoverable]` | headless remote server; prints a pairing link |
 | `remote pair <link> [--direct]`, `remote send "<text>" [--app claude] [--dictation] [--direct]` | act as a paired phone |
 | `mcp [--api http://127.0.0.1:47821]` | stdio MCP server (see below) |
 
 Set `PROMPTIFY_LOG=1` for diagnostics on stderr. `PROMPTIFY_LLM_NO_PREFIX_CACHE=1` turns off the language model's
 prompt-prefix cache for comparison.
+
+### Task graphs and check loops
+
+- Complexity guidance asks the model for 2 steps and a short check loop for simple requests, 3-4 steps for moderate
+  requests, and 4-8 steps for complex requests, with independent work marked for parallel execution. Terminal prompts
+  keep the graph in one paragraph.
+- Every graph needs numbered steps, a loop that returns to an existing step with a limit of 1-8 rounds, and a
+  non-empty `Done when:` section. Dependencies may refer only to earlier steps. The model is instructed to check the
+  completion criteria, stop when they pass, and report unmet criteria when the round limit is reached.
+- Validation checks the finished, sanitized text, including terminal newline handling. A repair shares the original
+  generation deadline and is checked the same way. If no repair passes, the original sanitized draft is retained,
+  marked `kept_original` in the report, and a warning is logged; it is not marked as a valid graph.
+- Dictation and answer mode do not add graphs. Image/video generator sites and requests to create images or videos
+  in chat apps use descriptive prompts instead.
 
 ## Remote access
 
@@ -203,7 +230,7 @@ npm run build
    ```
 6. `promptify-cli rewrite "draft a launch announcement" --process claude.exe --mcp <your mcp.json>`. With
    `PROMPTIFY_LOG=1`, the output includes a `tool context: N items` line.
-7. `promptify-cli eval eval\cases.toml`. The last run scored graph 10/10 and flat 10/10 on Qwen3.5 9B.
+7. `promptify-cli eval eval\cases.toml`. All 24 cases should pass: 20 task graphs and 4 descriptive media prompts.
 8. Hold a hotkey and speak for 10+ seconds with pauses: the overlay shows the text heard so far, and the result arrives
    moments after you let go.
 9. Settings → Status: tick *Also start a prompt by holding Ctrl+Shift*, then hold both keys alone for half a second.

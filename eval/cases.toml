@@ -1,5 +1,6 @@
 # Prompt-structure evaluation set, run with `promptify-cli eval eval/cases.toml`.
-# "graph" means the finished prompt should contain a valid task graph; "flat" means no steps or loops.
+# "graph" requires valid numbered steps, a bounded loop and non-empty "Done when:" checks.
+# "flat" (media creation only) means no steps or loops.
 
 [[case]]
 id = "c01"
@@ -10,7 +11,7 @@ url = "https://chatgpt.com/"
 [[case]]
 id = "c02"
 said = "what's the difference between a roth ira and a traditional ira"
-expect = "flat"
+expect = "graph"
 url = "https://chatgpt.com/"
 
 [[case]]
@@ -22,7 +23,7 @@ process = "Cursor.exe"
 [[case]]
 id = "c04"
 said = "write a short thank you note to my neighbor for watering my plants"
-expect = "flat"
+expect = "graph"
 url = "https://claude.ai/new"
 
 [[case]]
@@ -34,7 +35,7 @@ url = "https://claude.ai/new"
 [[case]]
 id = "c06"
 said = "find recent studies on intermittent fasting and longevity in adults over fifty"
-expect = "flat"
+expect = "graph"
 url = "https://www.perplexity.ai/"
 
 [[case]]
@@ -52,7 +53,7 @@ process = "Code.exe"
 [[case]]
 id = "c09"
 said = "explain how a heat pump works like i'm twelve"
-expect = "flat"
+expect = "graph"
 url = "https://gemini.google.com/app"
 
 [[case]]
@@ -65,7 +66,7 @@ title = "Claude Code"
 [[case]]
 id = "c11"
 said = "summarize this article in three bullet points for my boss"
-expect = "flat"
+expect = "graph"
 url = "https://chatgpt.com/"
 
 [[case]]
@@ -77,7 +78,7 @@ url = "https://chatgpt.com/"
 [[case]]
 id = "c13"
 said = "what time zone is tokyo in"
-expect = "flat"
+expect = "graph"
 url = "https://grok.com/"
 
 [[case]]
@@ -89,7 +90,7 @@ process = "Cursor.exe"
 [[case]]
 id = "c15"
 said = "give me a catchy name for a coffee shop that also sells used books"
-expect = "flat"
+expect = "graph"
 url = "https://claude.ai/new"
 
 [[case]]
@@ -101,7 +102,7 @@ url = "https://grok.com/"
 [[case]]
 id = "c17"
 said = "rename the variable count to total in the stats module"
-expect = "flat"
+expect = "graph"
 process = "Cursor.exe"
 
 [[case]]
@@ -113,7 +114,7 @@ url = "https://chatgpt.com/"
 [[case]]
 id = "c19"
 said = "how do i undo my last git commit but keep the changes"
-expect = "flat"
+expect = "graph"
 process = "WindowsTerminal.exe"
 title = "pwsh"
 
@@ -123,3 +124,27 @@ said = "refactor the payment module into smaller services add unit tests for eac
 expect = "graph"
 process = "WindowsTerminal.exe"
 title = "pwsh"
+
+[[case]]
+id = "c21"
+said = "a slow aerial shot of a lighthouse at sunset with waves crashing below cinematic and calm"
+expect = "flat"
+url = "https://runwayml.com/"
+
+[[case]]
+id = "c22"
+said = "make me a picture of a fox in a snowy forest painted in watercolor"
+expect = "flat"
+url = "https://chatgpt.com/"
+
+[[case]]
+id = "c23"
+said = "create a short cinematic video of waves at sunset"
+expect = "flat"
+url = "https://claude.ai/new"
+
+[[case]]
+id = "c24"
+said = "draft a launch checklist then review it for missing steps and fix any gaps"
+expect = "graph"
+process = "notepad.exe"

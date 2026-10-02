@@ -88,7 +88,21 @@ fn rewrite_with(
     orchestrator.service().set_enricher(enricher);
     orchestrator.set_auto_mode(auto_mode);
     let job = orchestrator.begin(mode).map_err(|e| e.to_string())?;
-    Ok(orchestrator.finish(job, &[], &mut |_| {}))
+    let show = std::env::var_os("PROMPTIFY_EVAL_SHOW").is_some();
+    let mut revising = false;
+    let mut revised = String::new();
+    let report = orchestrator.finish(job, &[], &mut |event| match event {
+        JobEvent::Stage(promptify_core::pipeline::Stage::Revising) if show => {
+            revising = true;
+            revised.clear();
+        }
+        JobEvent::Token(text) if show && revising => revised.push_str(text),
+        _ => {}
+    });
+    if show && report.structure == Some(promptify_core::pipeline::StructureCheck::KeptOriginal) && !revised.trim().is_empty() {
+        eprintln!("Rejected repair:\n{revised}\n---");
+    }
+    Ok(report)
 }
 
 fn outcome_text(outcome: &Outcome) -> Option<&str> {
@@ -405,7 +419,7 @@ fn run() -> Result<(), String> {
             let cases = eval::load_cases(&source)?;
             let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
             llm.preload().map_err(|e| e.0)?;
-            let (mut graph_pass, mut graph_total, mut flat_pass, mut flat_total, mut repaired) = (0, 0, 0, 0, 0);
+            let (mut graph_pass, mut graph_total, mut flat_pass, mut flat_total, mut repaired, mut roles) = (0, 0, 0, 0, 0, 0);
             for case in &cases {
                 let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
                 let report = rewrite_text(&llm, ctx, &case.said, None)?;
@@ -413,6 +427,7 @@ fn run() -> Result<(), String> {
                 if report.structure == Some(promptify_core::pipeline::StructureCheck::Repaired) {
                     repaired += 1;
                 }
+                roles += usize::from(outcome_text(&report.outcome).is_some_and(eval::opens_with_role));
                 match case.expect {
                     Expect::Graph => (graph_total, graph_pass) = (graph_total + 1, graph_pass + usize::from(score.pass)),
                     Expect::Flat => (flat_total, flat_pass) = (flat_total + 1, flat_pass + usize::from(score.pass)),
@@ -425,7 +440,11 @@ fn run() -> Result<(), String> {
                     println!("{}\n---", outcome_text(&report.outcome).unwrap_or(""));
                 }
             }
-            println!("graph: {graph_pass}/{graph_total}  flat: {flat_pass}/{flat_total}  repaired: {repaired}");
+            println!("graph: {graph_pass}/{graph_total}  flat: {flat_pass}/{flat_total}  repaired: {repaired}  role openers: {roles}");
+            if graph_pass != graph_total || flat_pass != flat_total {
+                let failed = cases.len() - graph_pass - flat_pass;
+                return Err(format!("prompt structure evaluation failed: {failed} of {} cases did not pass", cases.len()));
+            }
         }
         Some("remote") => remote(&args, &data_dir)?,
         Some("mcp") => {

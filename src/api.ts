@@ -17,7 +17,7 @@ export interface JobReport {
   outcome: Outcome;
   elapsed_ms: number;
   history_saved: boolean;
-  structure: "unstructured" | "valid" | "repaired" | "kept_original" | null;
+  structure: "valid" | "repaired" | "kept_original" | null;
 }
 
 export type OverlayEvent =

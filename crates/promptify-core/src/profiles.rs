@@ -165,7 +165,7 @@ impl ProfileSet {
                 return Err(invalid("style must not be empty"));
             }
             let structure = p.structure.unwrap_or(match (p.kind, p.newlines) {
-                (ProfileKind::Search | ProfileKind::ImageGen | ProfileKind::VideoGen, _) => Structure::Flat,
+                (ProfileKind::ImageGen | ProfileKind::VideoGen, _) => Structure::Flat,
                 (_, NewlinePolicy::Collapse) => Structure::Inline,
                 _ => Structure::Graph,
             });
