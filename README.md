@@ -39,6 +39,40 @@ App data lives in `%APPDATA%\dev.promptify.app` (settings, models, history, `rem
 logs are in `%LOCALAPPDATA%\dev.promptify.app\logs`. `PROMPTIFY_DATA_DIR` and `PROMPTIFY_MODELS_DIR` override them
 for isolated test runs.
 
+## Build and run (Fedora / Bazzite)
+
+Node 22+ must be installed natively. On Bazzite, install the native Rust, Tauri, and Vulkan build dependencies:
+
+```bash
+sudo rpm-ostree install --idempotent --allow-inactive \
+  rust cargo rustfmt gcc-c++ make cmake ninja-build clang clang-libs \
+  vulkan-headers vulkan-loader-devel glslc glslang-devel spirv-headers-devel \
+  gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel \
+  openssl-devel alsa-lib-devel dbus-devel libxdo-devel wayland-devel libXtst-devel patchelf
+```
+
+Reboot to activate the staged deployment, or explicitly apply it live after reviewing any other pending system changes.
+On regular Fedora, use `sudo dnf install` with the same package list instead.
+
+Run from a terminal in your desktop session:
+
+```bash
+export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+export VULKAN_SDK=/usr
+export LIBCLANG_PATH=/usr/lib64
+npm ci
+npm run app
+```
+
+The PATH entry supports Node installed through Linuxbrew; it is unnecessary when Node is already on PATH.
+The Vulkan and libclang paths above use Fedora's system packages, not a separately downloaded SDK.
+In VS Code, **Terminal > Run Task > Promptify: Run desktop app** supplies this environment automatically.
+
+On Wayland, the taskbar and titlebar icons are resolved through a desktop entry, not the window's embedded PNG.
+For an unbundled development build, a user-local `promptify.desktop` entry must match `StartupWMClass=promptify`
+and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that development entry hidden with
+`NoDisplay=true` and continue launching through the task above; Linux bundles install their own desktop entry and icons.
+
 ## Developer CLI
 
 `cargo run -p promptify --bin promptify-cli -- <command>` (or `C:\ptb\debug\promptify-cli.exe` if `CARGO_TARGET_DIR=C:\ptb`):

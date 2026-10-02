@@ -1,0 +1,25 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Promptify: Run desktop app",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"app"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"linux": {
+				"options": {
+					"env": {
+						"PATH": "/home/linuxbrew/.linuxbrew/bin:${env:PATH}",
+						"VULKAN_SDK": "/usr",
+						"LIBCLANG_PATH": "/usr/lib64"
+					}
+				}
+			}
+		}
+	]
+}
