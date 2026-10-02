@@ -25,22 +25,71 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 - **MCP**: Promptify is an MCP server (other AI tools can ask it to write prompts) and an MCP client (your MCP tools can
   add reference facts before a prompt is written).
 
-## Build and run (Windows dev build)
+## Download and install
+
+Promptify 1.0 supports Windows 10 and 11 on x64 computers. Download
+[`Promptify_1.0.0_x64-setup.exe`](https://github.com/jrynks/promptify/releases/download/v1.0.0/Promptify_1.0.0_x64-setup.exe)
+from the [v1.0.0 release](https://github.com/jrynks/promptify/releases/tag/v1.0.0) and run it. The installer is currently
+unsigned, so Windows SmartScreen may show a warning: choose **More info**, verify that the app is **Promptify**, and then
+choose **Run anyway**.
+
+The installer:
+
+- installs Promptify for the current user;
+- includes the local llama.cpp worker and `promptify-cli.exe`;
+- installs the required Visual C++ and OpenMP runtime files alongside the app; and
+- downloads Microsoft WebView2 if it is not already installed.
+
+On first launch, Promptify opens Settings so you can download a speech model and a language model. Model downloads can
+take several minutes. A current graphics driver with Vulkan support is recommended; model inference falls back to the
+CPU when necessary.
+
+GitHub also provides ZIP and tar.gz source archives on the release page. Those archives are for building Promptify
+yourself and are not portable application packages.
+
+## Use Promptify
+
+Promptify runs in the system tray. In any text box:
+
+1. Press `Ctrl+Alt+Space`, say a rough request, and press the shortcut again. Promptify rewrites it as a structured
+   prompt and pastes it into the active app.
+2. Press `Ctrl+Alt+Shift+Space` for plain dictation with filler words removed.
+3. Press `Esc` while recording to cancel.
+
+For example, saying:
+
+> Make a launch plan. Review the docs first, then package the app and make the repository public. Retry failed uploads.
+
+produces a numbered prompt with dependencies, a bounded retry loop, and a clear completion condition. Hotkeys, models,
+accuracy, app context, and optional Answer mode can all be changed in Settings.
+
+App data lives in `%APPDATA%\dev.promptify.app` (settings, models, history, `remote\`, and optional `mcp.json`); logs are
+in `%LOCALAPPDATA%\dev.promptify.app\logs`. Installed and development builds use the same data folder, so do not run both
+at the same time.
+
+## Platform support
+
+| Platform | Status |
+| --- | --- |
+| Windows 10/11 x64 | Supported by the v1.0.0 installer |
+| Fedora / Bazzite | Runs from source; packaged installer not yet published |
+| macOS | Source support is experimental; packaged installer and some hotkeys are not yet available |
+
+## Build from source
+
+### Windows
 
 Requirements: Rust 1.85+ (tested 1.97), Node 22+, the Vulkan SDK (`VULKAN_SDK` set), and libclang
 (`LIBCLANG_PATH`, e.g. from `pip install libclang`). A Vulkan-capable GPU is recommended; models fall back to CPU.
 
 ```powershell
-npm install
+npm ci
 npm run app            # builds the workers and launches the desktop app (tray icon)
 ```
 
-On first launch the settings window opens to download a speech model and a language model.
-App data lives in `%APPDATA%\dev.promptify.app` (settings, models, history, `remote\`, optional `mcp.json`);
-logs are in `%LOCALAPPDATA%\dev.promptify.app\logs`. `PROMPTIFY_DATA_DIR` and `PROMPTIFY_MODELS_DIR` override them
-for isolated test runs.
+`PROMPTIFY_DATA_DIR` and `PROMPTIFY_MODELS_DIR` override the normal data locations for isolated test runs.
 
-## Build and run (Fedora / Bazzite)
+### Fedora / Bazzite
 
 Node 22+ must be installed natively. On Bazzite, install the native Rust, Tauri, and Vulkan build dependencies:
 
@@ -74,17 +123,14 @@ For an unbundled development build, a user-local `promptify.desktop` entry must 
 and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that development entry hidden with
 `NoDisplay=true` and continue launching through the task above; Linux bundles install their own desktop entry and icons.
 
-## Windows installer
+### Build the Windows installer
 
 ```powershell
-npm run installer      # C:\ptb\release\bundle\nsis\Promptify_0.1.0_x64-setup.exe
+npm run installer      # C:\ptb\release\bundle\nsis\Promptify_1.0.0_x64-setup.exe
 ```
 
-Needs Visual Studio Build Tools (its Visual C++ and OpenMP runtime DLLs are installed next to the app). The installer
-is unsigned, so Windows SmartScreen asks for confirmation (*More info* → *Run anyway*). It installs per user, includes
-the llama.cpp worker and `promptify-cli.exe`, and downloads WebView2 if it is missing. The target computer needs a
-current graphics driver (for `vulkan-1.dll`); models are downloaded on first launch. Installed and dev builds share the
-same app data folder, so do not run both on one computer at the same time.
+This additionally needs Visual Studio Build Tools with the Visual C++ toolchain. The build copies the permitted Visual
+C++ and OpenMP redistributable DLLs into the application and creates an unsigned per-user NSIS installer.
 
 ## Developer CLI
 
@@ -278,4 +324,8 @@ unavailable while the local API still works.
   are retained for client development. An iOS keyboard extension will need *Full Access* for
   network use.
 - Screenshot context with a vision model (needs a llama.cpp build with multimodal support and a ~1 GB projector).
-- Hold-Ctrl+Shift and screen-text reading on macOS and Linux; a hosted relay, code signing and installers.
+- Hold-Ctrl+Shift and screen-text reading on macOS and Linux; a hosted relay, code signing, and Linux/macOS installers.
+
+## License
+
+Promptify is free and open-source software licensed under the [MIT License](LICENSE).
