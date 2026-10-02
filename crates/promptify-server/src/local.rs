@@ -26,6 +26,8 @@ use tokio::sync::mpsc;
 use crate::Shared;
 
 pub const LOCAL_API_CLIENT: &str = "local-api";
+/// Concurrent direct links, including ones still in the handshake.
+pub const MAX_DIRECT_LINKS: usize = 16;
 
 pub async fn serve(shared: Arc<Shared>, listener: tokio::net::TcpListener) {
     let mut stopping = shared.shutdown.subscribe();
@@ -42,9 +44,19 @@ pub async fn serve(shared: Arc<Shared>, listener: tokio::net::TcpListener) {
     let _ = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(shutdown).await;
 }
 
-async fn direct_upgrade(State(shared): State<Arc<Shared>>, ws: WebSocketUpgrade) -> Response {
+async fn direct_upgrade(State(shared): State<Arc<Shared>>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+    // Browsers always send Origin and do not apply CORS to WebSockets; phones and the CLI never send it.
+    if headers.contains_key(axum::http::header::ORIGIN) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Ok(slot) = shared.direct_links.clone().try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     let max = NOISE_MAX_MESSAGE + 1;
-    ws.max_message_size(max).max_frame_size(max).on_upgrade(move |socket| direct_session(shared, socket))
+    ws.max_message_size(max).max_frame_size(max).on_upgrade(move |socket| async move {
+        direct_session(shared, socket).await;
+        drop(slot);
+    })
 }
 
 async fn direct_session(shared: Arc<Shared>, socket: WebSocket) {

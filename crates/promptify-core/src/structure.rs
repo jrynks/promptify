@@ -16,7 +16,7 @@ pub enum Structure {
     Graph,
     /// Steps and loops written inline in a single paragraph.
     Inline,
-    /// Never add steps or loops (search queries, image prompts).
+    /// Never add steps or loops (image and video generation).
     Flat,
 }
 
@@ -26,13 +26,23 @@ pub enum Shape {
     MultiStep,
 }
 
-/// Whether the finished prompt may ask the user clarifying questions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FollowUp {
-    /// Go ahead with what was said.
+/// How involved a request is. Sets the size of the task graph and how many clarifying questions the
+/// prompt may ask: none, at most 1, or up to 3, and only when details that matter are missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Complexity {
     Simple,
-    /// Ask up to 3 short questions when details that matter are missing.
-    Advanced,
+    Moderate,
+    Complex,
+}
+
+impl Complexity {
+    pub fn max_questions(self) -> usize {
+        match self {
+            Self::Simple => 0,
+            Self::Moderate => 1,
+            Self::Complex => 3,
+        }
+    }
 }
 
 /// Personal plans and decisions usually hinge on details the speaker did not give (budget, dates, who).
@@ -43,14 +53,19 @@ fn words(transcript: &str) -> Vec<String> {
     transcript.split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
 }
 
-/// Multi-step work, or a longer request to plan, buy or decide something, is advanced; the rest is simple.
-pub fn follow_up_hint(transcript: &str) -> FollowUp {
+/// Multi-step work, or a longer request to plan, buy or decide something, is complex; other longer
+/// requests are moderate; short ones are simple.
+pub fn complexity(transcript: &str) -> Complexity {
     if complexity_hint(transcript) == Shape::MultiStep {
-        return FollowUp::Advanced;
+        return Complexity::Complex;
     }
     let words = words(transcript);
     let decision = words.iter().any(|w| DECISION_STEMS.iter().any(|stem| w.starts_with(stem) && w.len() <= stem.len() + 4));
-    if words.len() >= 12 && decision { FollowUp::Advanced } else { FollowUp::Simple }
+    match words.len() {
+        n if n >= 12 && decision => Complexity::Complex,
+        n if n >= 12 => Complexity::Moderate,
+        _ => Complexity::Simple,
+    }
 }
 
 const TASK_VERBS: &[&str] = &[
@@ -111,7 +126,7 @@ pub enum GraphError {
     Numbering { position: usize, found: usize },
     #[error("Step {step} depends on step {on}, but a step may depend only on earlier steps")]
     ForwardDependency { step: usize, on: usize },
-    #[error("a loop does not say which step to return to")]
+    #[error("a loop has no numbered return target; include the literal words \"return to Step N\" in that loop, replacing N with an existing step number; \"revise it\" or \"rewrite that point\" alone is not a return target")]
     LoopWithoutTarget,
     #[error("a loop returns to step {target}, which does not exist")]
     LoopTargetMissing { target: usize },
@@ -119,6 +134,12 @@ pub enum GraphError {
     LoopWithoutLimit,
     #[error("a loop allows {rounds} rounds; use between 1 and {MAX_LOOP_ROUNDS}")]
     LoopLimitOutOfRange { rounds: usize },
+    #[error("the prompt has no numbered steps; lay the work out as Step 1, Step 2 (after 1) and so on")]
+    NoSteps,
+    #[error("the prompt has no loop; add a check loop such as \"Loop: if the result misses a requirement, return to Step 1 (max 2 rounds).\"")]
+    NoLoop,
+    #[error("the prompt has no checks; add a non-empty \"Done when:\" section listing conditions that can fail, such as \"the tests pass\" or \"every claim has a source\"")]
+    NoChecks,
 }
 
 static HEADING: LazyLock<Regex> = LazyLock::new(|| {
@@ -170,7 +191,7 @@ pub fn validate_structure(text: &str) -> Result<GraphSummary, GraphError> {
     let mut loops = 0;
     for found in LOOP.find_iter(text) {
         loops += 1;
-        let rest = &text[found.end()..];
+        let rest = text[found.end()..].trim_start_matches(|c: char| c.is_whitespace() || c == '*');
         let mut end = rest.find('\n').unwrap_or(rest.len());
         let line = &rest[..end];
         for cut in [LOOP_END.find(line).map(|m| m.start()), HEADING.find(line).map(|m| m.start())].into_iter().flatten() {
@@ -195,6 +216,33 @@ pub fn validate_structure(text: &str) -> Result<GraphSummary, GraphError> {
     }
     Ok(GraphSummary { steps, loops })
 }
+
+/// A prompt for an AI must be a well-formed loop or graph: numbered steps, at least one loop, and a
+/// "Done when" line with the checks the work must pass.
+pub fn validate_graph(text: &str) -> Result<GraphSummary, GraphError> {
+    let summary = validate_structure(text)?;
+    if summary.steps == 0 {
+        return Err(GraphError::NoSteps);
+    }
+    if summary.loops == 0 {
+        return Err(GraphError::NoLoop);
+    }
+    let has_checks = DONE_WHEN.find_iter(text).any(|heading| {
+        let rest = &text[heading.end()..];
+        let end = [HEADING.find(rest), LOOP.find(rest), DONE_WHEN.find(rest)]
+            .into_iter().flatten().map(|m| m.start()).min().unwrap_or(rest.len());
+        rest[..end].chars().any(char::is_alphanumeric)
+    });
+    if !has_checks {
+        return Err(GraphError::NoChecks);
+    }
+    Ok(summary)
+}
+
+static DONE_WHEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)(?:^|[;.])[ \t]*(?:[-*>#]+[ \t]*)?(?:\*\*)?done when(?:\*\*)?[ \t]*:(?:[ \t]*\*\*)?")
+        .expect("valid done-when regex")
+});
 
 #[cfg(test)]
 mod tests {
@@ -256,12 +304,28 @@ Done when: the suite passes 5 times in a row.";
         assert_eq!(validate_structure(&format!("{base}Loop: if it fails, return to Step 1 (max 20 rounds).")), Err(GraphError::LoopLimitOutOfRange { rounds: 20 }));
         assert_eq!(validate_structure(&format!("{base}Loop: return to Step 1 (max 0 rounds).")), Err(GraphError::LoopLimitOutOfRange { rounds: 0 }));
         assert_eq!(validate_structure("Loop: return to Step 1 (max 2 rounds)."), Err(GraphError::LoopTargetMissing { target: 1 }));
+        assert!(validate_structure(&format!("{base}Loop: if it fails, return to Step 1 (max {MAX_LOOP_ROUNDS} rounds).")).is_ok());
+        let rounds = MAX_LOOP_ROUNDS + 1;
+        assert_eq!(validate_structure(&format!("{base}Loop: if it fails, return to Step 1 (max {rounds} rounds).")), Err(GraphError::LoopLimitOutOfRange { rounds }));
     }
 
     #[test]
     fn loop_segment_stops_at_the_next_section() {
         let text = "Step 1: a; Loop: if it fails, return to Step 1; Done when: max 99 times is never reached";
         assert_eq!(validate_structure(text), Err(GraphError::LoopWithoutLimit));
+    }
+
+    #[test]
+    fn loop_headings_may_be_on_their_own_line() {
+        let base = "Step 1: Build.\nStep 2 (after 1): Test.\n";
+        for heading in ["Loop:\n", "**Loop:**\n\n", "- **Loop:**\r\n"] {
+            let text = format!("{base}{heading}If a test fails, return to Step 1 (max 3 rounds).\nDone when: all tests pass.");
+            assert_eq!(validate_graph(&text), Ok(GraphSummary { steps: 2, loops: 1 }));
+        }
+        let missing = format!("{base}**Loop:**\n**Done when:** Step 1 succeeds within max 2 rounds.");
+        assert_eq!(validate_structure(&missing), Err(GraphError::LoopWithoutTarget));
+        let unbounded = format!("{base}**Loop:**\nIf a test fails, return to Step 1.\nDone when: max 2 rounds is never reached.");
+        assert_eq!(validate_structure(&unbounded), Err(GraphError::LoopWithoutLimit));
     }
 
     #[test]
@@ -296,25 +360,50 @@ Done when: the suite passes 5 times in a row.";
     }
 
     #[test]
-    fn follow_up_only_for_advanced_requests() {
-        let simple = [
-            "what's the capital of france",
-            "write a haiku about autumn leaves for my mom's birthday card",
-            "make me a picture of a fox in a snowy forest at night",
-            "create a short cinematic video of waves crashing at sunset with warm light",
-            "translate this paragraph into formal german please",
+    fn complexity_ramps_from_simple_to_complex() {
+        let simple = ["what's the capital of france", "make me a picture of a fox in the snow", "translate this paragraph into formal german please"];
+        let moderate = [
+            "write a haiku about autumn leaves for my mom's birthday card please",
+            "explain how a heat pump works in winter and why it is more efficient than a furnace",
         ];
-        let advanced = [
+        let complex = [
             "um i want to buy a used car for my son he just got his license something safe and not too expensive",
             "so i need to plan a birthday party for my daughter she's turning eight and she loves science stuff",
             "research the top three crm tools compare their pricing and then recommend one for a five person team",
-            "design a logo for my startup then create three variations and pick the best one for the website",
         ];
-        for s in simple {
-            assert_eq!(follow_up_hint(s), FollowUp::Simple, "{s}");
+        for (said, expected) in simple.iter().map(|s| (s, Complexity::Simple)).chain(moderate.iter().map(|s| (s, Complexity::Moderate))).chain(complex.iter().map(|s| (s, Complexity::Complex))) {
+            assert_eq!(complexity(said), expected, "{said}");
         }
-        for a in advanced {
-            assert_eq!(follow_up_hint(a), FollowUp::Advanced, "{a}");
+        assert_eq!([Complexity::Simple, Complexity::Moderate, Complexity::Complex].map(Complexity::max_questions), [0, 1, 3]);
+    }
+
+    #[test]
+    fn graphs_need_steps_a_loop_and_checks() {
+        assert_eq!(validate_graph(GOOD), Ok(GraphSummary { steps: 5, loops: 1 }));
+        assert_eq!(validate_graph("Just a prompt."), Err(GraphError::NoSteps));
+        assert_eq!(validate_graph("Step 1: a\nStep 2 (after 1): b\nDone when: b works."), Err(GraphError::NoLoop));
+        assert_eq!(validate_graph("Step 1: a\nLoop: if a fails, return to Step 1 (max 2 rounds)."), Err(GraphError::NoChecks));
+        assert!(validate_graph("**Done when:** a passes.\nStep 1: a\nLoop: if a fails, return to Step 1 (max 2 rounds).").is_ok(), "checks may come first");
+        assert_eq!(validate_graph("Step 1: a\nStep 2 (after 2): b\nLoop: if it fails, return to Step 1 (max 2 rounds).\nDone when: b."), Err(GraphError::ForwardDependency { step: 2, on: 2 }));
+    }
+
+    #[test]
+    fn completion_checks_must_have_their_own_nonempty_section() {
+        let graph = "Step 1: Run the tests.\nLoop: if a test fails, return to Step 1 (max 2 rounds).";
+        for empty in ["Done when:", "Done when: ...", "**Done when:**", "Done when: ;"] {
+            for text in [format!("{empty}\n{graph}"), format!("{graph}\n{empty}")] {
+                assert_eq!(validate_graph(&text), Err(GraphError::NoChecks), "{text}");
+            }
         }
+        let mention = format!("{graph}\nExplain what \"Done when:\" means.");
+        assert_eq!(validate_graph(&mention), Err(GraphError::NoChecks));
+        for checks in ["Done when: all tests pass.", "**Done when:**\n- All tests pass.", "## Done when:\nAll tests pass."] {
+            assert!(validate_graph(&format!("{checks}\n{graph}")).is_ok(), "{checks}");
+            assert!(validate_graph(&format!("{graph}\n{checks}")).is_ok(), "{checks}");
+        }
+        let inline = "Done when: all tests pass; Step 1: Run the tests; Loop: if a test fails, return to Step 1 (max 2 rounds).";
+        assert!(validate_graph(inline).is_ok());
+        let empty_inline = "Done when: ; Step 1: Run the tests; Loop: if a test fails, return to Step 1 (max 2 rounds).";
+        assert_eq!(validate_graph(empty_inline), Err(GraphError::NoChecks));
     }
 }

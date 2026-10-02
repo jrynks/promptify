@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "app": "node scripts/dev.mjs",
+    "installer": "node scripts/installer.mjs",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri"

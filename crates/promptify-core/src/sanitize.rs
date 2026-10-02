@@ -15,7 +15,10 @@ pub enum SanitizeError {
 
 pub fn sanitize_output(raw: &str, newlines: NewlinePolicy, max_chars: usize) -> Result<Sanitized, SanitizeError> {
     let mut text = strip_think_blocks(raw);
-    text = text.replace("\r\n", "\n").trim().to_owned();
+    text = text.replace("\r\n", "\n");
+    // Escape sequences (e.g. ESC[201~ ends a terminal's bracketed paste) and bidi overrides must never be pasted.
+    text.retain(|c| !(c.is_control() && c != '\n' && c != '\t') && !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'));
+    text = text.trim().to_owned();
     text = strip_preamble(&text);
     text = strip_wrapping_fence(&text);
     text = strip_wrapping_quotes(&text);
@@ -124,6 +127,18 @@ mod tests {
         let out = sanitize_output("Do this\n- and that\r\n\n", NewlinePolicy::Collapse, 100).unwrap();
         assert_eq!(out.text, "Do this - and that");
         assert!(!clean("line\n\n").ends_with('\n'));
+    }
+
+    #[test]
+    fn control_and_bidi_characters_never_reach_the_paste() {
+        let hostile = "echo safe\u{1b}[201~\u{1b}[31mred\u{7}\u{3}\r\u{85} next\u{202E}txt.exe\u{2066}x\u{2069}";
+        for policy in [NewlinePolicy::Keep, NewlinePolicy::Collapse] {
+            let out = sanitize_output(hostile, policy, 1000).unwrap().text;
+            assert!(!out.chars().any(|c| c.is_control() && c != '\n' && c != '\t'), "{policy:?}: {out:?}");
+            assert!(!out.contains(['\u{202E}', '\u{2066}', '\u{2069}']), "{policy:?}: {out:?}");
+            assert!(out.starts_with("echo safe[201~[31mred") && out.contains("next") && out.ends_with("txt.exex"), "{policy:?}: {out:?}");
+        }
+        assert_eq!(clean("keep\ttabs\nand lines"), "keep\ttabs\nand lines");
     }
 
     #[test]

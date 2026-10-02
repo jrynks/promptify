@@ -18,7 +18,7 @@ use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_answer_
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
-use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_structure};
+use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, validate_graph};
 use crate::tool_loop::{MAX_PLANNER_TOKENS, MAX_TOOL_ROUNDS, ToolRequest, ToolSpec, parse_tool_request, planner_messages};
 
 pub const MAX_TEXT_INPUT_CHARS: usize = 8000;
@@ -366,27 +366,26 @@ impl TransformService {
                 if Instant::now() > deadline {
                     return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None };
                 }
-                if generation.finish == FinishReason::Stop && profile.structure != Structure::Flat {
-                    match self.check_structure(&messages, stable_prefix, generation.text, deadline, cancel, on_event) {
+                let outcome = finish_output(&generation.text, generation.finish, profile.newlines, self.limits.max_output_chars);
+                let TransformOutcome::Ready { text } = outcome else {
+                    return outcome;
+                };
+                if profile.structure != Structure::Flat {
+                    return match self.check_structure(&request, profile.newlines, text, cancel, on_event) {
                         Ok((text, check)) => {
                             *structure = Some(check);
-                            (text, FinishReason::Stop)
+                            TransformOutcome::Ready { text }
                         }
-                        Err(outcome) => return outcome,
-                    }
-                } else {
-                    (generation.text, generation.finish)
+                        Err(outcome) => outcome,
+                    };
                 }
+                return TransformOutcome::Ready { text };
             }
         };
 
         // Answers are shown in the overlay, never pasted into a shell, so their line breaks stay.
         let newlines = if mode == Mode::Answer { NewlinePolicy::Keep } else { profile.newlines };
-        match sanitize_output(&raw, newlines, self.limits.max_output_chars) {
-            Ok(sanitized) if sanitized.truncated || finish == FinishReason::Length => TransformOutcome::Truncated { text: sanitized.text },
-            Ok(sanitized) => TransformOutcome::Ready { text: sanitized.text },
-            Err(_) => TransformOutcome::Failed { reason: FailReason::EmptyOutput, detail: None },
-        }
+        finish_output(&raw, finish, newlines, self.limits.max_output_chars)
     }
 
     /// Lets the model request up to [`MAX_TOOL_ROUNDS`] lookups from the allowlist. Ends at the first
@@ -418,20 +417,19 @@ impl TransformService {
         log::info!("tool loop: {} calls", calls.len());
     }
 
-    /// Validates the draft's task graph and runs at most `max_structure_repairs` rewrites inside the
-    /// original deadline. Any repair that fails, truncates or arrives late leaves the first draft in place.
+    /// Validates the sanitized draft and runs at most `max_structure_repairs`
+    /// rewrites inside the original deadline. Any repair that fails, truncates or arrives late leaves
+    /// the first draft in place.
     fn check_structure(
         &self,
-        messages: &[ChatMessage],
-        stable_prefix: usize,
+        request: &GenerationRequest<'_>,
+        newlines: NewlinePolicy,
         draft: String,
-        deadline: Instant,
         cancel: &CancelToken,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<(String, StructureCheck), TransformOutcome> {
-        let mut error = match validate_structure(&draft) {
-            Ok(summary) if summary.is_structured() => return Ok((draft, StructureCheck::Valid)),
-            Ok(_) => return Ok((draft, StructureCheck::Unstructured)),
+        let mut error = match validate_graph(&draft) {
+            Ok(_) => return Ok((draft, StructureCheck::Valid)),
             Err(error) => error,
         };
         let mut latest = draft.clone();
@@ -439,35 +437,54 @@ impl TransformService {
             if cancel.is_cancelled() {
                 return Err(TransformOutcome::Cancelled);
             }
-            if Instant::now() >= deadline {
+            if Instant::now() >= request.deadline {
+                log::warn!("task graph repair skipped: generation deadline reached");
                 break;
             }
             on_event(JobEvent::Stage(Stage::Revising));
-            let mut repair = messages.to_vec();
+            let mut repair = request.messages.to_vec();
             repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
             repair.push(ChatMessage { role: Role::User, content: repair_instruction(error) });
-            let request = GenerationRequest { messages: &repair, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
+            let repair_request = GenerationRequest { messages: &repair, ..*request };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
-            let generation = match self.generator.generate(&request, cancel, &mut forward) {
+            let generation = match self.generator.generate(&repair_request, cancel, &mut forward) {
                 Ok(generation) => generation,
                 Err(_) if cancel.is_cancelled() => return Err(TransformOutcome::Cancelled),
-                Err(_) => break,
+                Err(err) => {
+                    log::warn!("task graph repair failed: {err}");
+                    break;
+                }
             };
-            if Instant::now() > deadline || generation.finish != FinishReason::Stop {
+            if Instant::now() > request.deadline {
+                log::warn!("task graph repair discarded: generation deadline reached");
                 break;
             }
-            match validate_structure(&generation.text) {
-                Ok(_) => return Ok((generation.text, StructureCheck::Repaired)),
+            let outcome = finish_output(&generation.text, generation.finish, newlines, self.limits.max_output_chars);
+            let TransformOutcome::Ready { text } = outcome else {
+                log::warn!("task graph repair produced no complete usable prompt");
+                break;
+            };
+            match validate_graph(&text) {
+                Ok(_) => return Ok((text, StructureCheck::Repaired)),
                 Err(next) => {
                     error = next;
-                    latest = generation.text;
+                    latest = text;
                 }
             }
         }
         if cancel.is_cancelled() {
             return Err(TransformOutcome::Cancelled);
         }
+        log::warn!("no valid task graph after repair: {error}; keeping original prompt");
         Ok((draft, StructureCheck::KeptOriginal))
+    }
+}
+
+fn finish_output(raw: &str, finish: FinishReason, newlines: NewlinePolicy, max_chars: usize) -> TransformOutcome {
+    match sanitize_output(raw, newlines, max_chars) {
+        Ok(sanitized) if sanitized.truncated || finish == FinishReason::Length => TransformOutcome::Truncated { text: sanitized.text },
+        Ok(sanitized) => TransformOutcome::Ready { text: sanitized.text },
+        Err(_) => TransformOutcome::Failed { reason: FailReason::EmptyOutput, detail: None },
     }
 }
 
@@ -477,9 +494,11 @@ fn failed(reason: FailReason, detail: String) -> TransformOutcome {
 
 fn repair_instruction(error: GraphError) -> String {
     format!(
-        "Your prompt has a structural problem: {error}. Rewrite the complete prompt and fix only that problem. \
-Number the steps 1, 2, 3 in order, let each step depend only on earlier steps, and give every loop a step to return to \
-and a limit of at most {MAX_LOOP_ROUNDS} rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" \
+        "Your prompt has a structural problem: {error}. Rewrite the complete prompt as a valid task graph, preserving the user's intent and details. \
+Number the steps 1, 2, 3 in order and let each step depend only on earlier steps. Include at least one loop with a failure condition, \
+an existing step to return to and a limit of 1 to {MAX_LOOP_ROUNDS} rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" \
+Include a non-empty \"Done when:\" section with verifiable success criteria for the loop to check. Stop when the checks pass; \
+if the round limit is reached, report what still fails instead of claiming success. Keep the target's required formatting. \
 Output only the finished prompt."
     )
 }
@@ -512,6 +531,9 @@ mod tests {
         }
     }
 
+    /// Every AI prompt must be a task graph with a loop; test fakes return the smallest valid one.
+    const FINISHED: &str = "Step 1: Write it.\nLoop: if it misses a requirement, return to Step 1 (max 2 rounds).\nDone when: all stated requirements are met.";
+
     #[derive(Default)]
     struct EchoGenerator {
         delay: Duration,
@@ -527,7 +549,7 @@ mod tests {
             self.calls.lock().unwrap().push(req.messages.to_vec());
             std::thread::sleep(self.delay);
             self.active.fetch_sub(1, Ordering::SeqCst);
-            Ok(Generation { text: "A finished prompt.".into(), finish: FinishReason::Stop })
+            Ok(Generation { text: FINISHED.into(), finish: FinishReason::Stop })
         }
     }
 
@@ -581,7 +603,7 @@ mod tests {
         let f = fixture(Duration::ZERO);
         let client = ClientContext { app: "com.openai.chatgpt".into(), ..Default::default() };
         let report = run_text(&f, &client, "compare three crm tools", false);
-        assert_eq!(report.outcome, TransformOutcome::Ready { text: "A finished prompt.".into() });
+        assert_eq!(report.outcome, TransformOutcome::Ready { text: FINISHED.into() });
         assert_eq!(f.transcriber.0.load(Ordering::SeqCst), 0);
         assert_eq!(f.history.0.load(Ordering::SeqCst), 0);
         assert!(!format!("{:?}", f.generator.calls.lock().unwrap()[0]).contains("HISTORY-SENTINEL"));
@@ -621,11 +643,11 @@ mod tests {
             let system = system(i);
             assert!(system.contains(&format!("Target: ChatGPT (creating {what}).")), "{system}");
             assert!(system.contains(opener) && system.contains("Describe, do not instruct") && !system.contains("Task structure:"));
-            assert!(last(i).contains("Follow-up: simple request.") && !last(i).contains("Request shape:"));
+            assert!(last(i).contains("Questions: none; go ahead") && !last(i).contains("steps"));
         }
-        assert!(system(2).contains("Target: ChatGPT.") && last(2).contains("Follow-up: advanced request."), "a script is text");
+        assert!(system(2).contains("Target: ChatGPT.") && last(2).contains("Complexity: complex."), "a script is text");
         assert!(system(3).contains("Target: ChatGPT (creating an image)."));
-        assert!(last(3).contains("Follow-up: advanced request."), "an advanced image request may ask");
+        assert!(last(3).contains("Questions: up to 3"), "a complex image request may ask");
     }
 
     #[test]
@@ -691,7 +713,7 @@ mod tests {
                 let text = if script.is_empty() { "NONE" } else { script.remove(0) };
                 return Ok(Generation { text: text.into(), finish: FinishReason::Stop });
             }
-            Ok(Generation { text: "A finished prompt.".into(), finish: FinishReason::Stop })
+            Ok(Generation { text: FINISHED.into(), finish: FinishReason::Stop })
         }
     }
 
@@ -744,7 +766,7 @@ mod tests {
         let (tools, generator, outcome) = run_loop(vec![CALL_A, CALL_B, CALL_A, CALL_B], Mode::Prompt, false);
         assert_eq!(*tools.0.lock().unwrap(), vec!["docs.search:limits", "docs.search:quotas"]);
         assert_eq!(generator.planner_calls.load(Ordering::SeqCst), MAX_TOOL_ROUNDS);
-        assert_eq!(outcome, TransformOutcome::Ready { text: "A finished prompt.".into() });
+        assert_eq!(outcome, TransformOutcome::Ready { text: FINISHED.into() });
     }
 
     #[test]
