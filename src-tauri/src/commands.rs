@@ -511,24 +511,37 @@ pub fn hide_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 fn fitted_overlay_height(requested: u32, monitor_height: f64) -> Result<f64, String> {
-    if requested == 0 || requested > 2048 || !monitor_height.is_finite() || monitor_height <= 0.0 {
+    if requested == 0 || !monitor_height.is_finite() || monitor_height <= 0.0 {
         return Err("invalid overlay height".into());
     }
-    let maximum = (monitor_height - 32.0).clamp(64.0, 440.0);
-    Ok(f64::from(requested).clamp(64.0, maximum))
+    let maximum = (monitor_height - 16.0).max(1.0);
+    Ok(f64::from(requested).max(64.0).min(maximum))
+}
+
+fn overlay_monitor(window: &tauri::WebviewWindow) -> Result<tauri::Monitor, String> {
+    window.current_monitor().map_err(|error| format!("could not read overlay monitor: {error}"))?
+        .ok_or_else(|| "overlay monitor is unavailable".into())
+}
+
+#[tauri::command]
+pub fn overlay_max_height(app: AppHandle) -> Result<f64, String> {
+    let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
+    let monitor = overlay_monitor(&overlay)?;
+    fitted_overlay_height(u32::MAX, f64::from(monitor.work_area().size.height) / monitor.scale_factor())
 }
 
 #[tauri::command]
 pub fn resize_overlay(app: AppHandle, height: u32) -> Result<(), String> {
     let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
     let scale = overlay.scale_factor().map_err(|error| format!("could not read overlay scale: {error}"))?;
-    let monitor = overlay.current_monitor().map_err(|error| format!("could not read overlay monitor: {error}"))?;
-    let monitor_height = monitor.as_ref().map_or(480.0, |monitor| f64::from(monitor.size().height) / monitor.scale_factor());
+    let monitor = overlay_monitor(&overlay)?;
+    let monitor_height = f64::from(monitor.work_area().size.height) / monitor.scale_factor();
     let target_height = fitted_overlay_height(height, monitor_height)?;
     let size = overlay.inner_size().map_err(|error| format!("could not read overlay size: {error}"))?.to_logical::<f64>(scale);
     if (size.height - target_height).abs() >= 1.0 {
         overlay.set_size(tauri::LogicalSize::new(size.width, target_height))
             .map_err(|error| format!("could not resize the overlay: {error}"))?;
+        overlay.center().map_err(|error| format!("could not keep the overlay on screen: {error}"))?;
     }
     Ok(())
 }
@@ -541,10 +554,11 @@ mod overlay_tests {
     fn overlay_size_is_bounded_and_respects_small_displays() {
         assert_eq!(fitted_overlay_height(180, 1080.0).unwrap(), 180.0);
         assert_eq!(fitted_overlay_height(416, 1080.0).unwrap(), 416.0);
-        assert_eq!(fitted_overlay_height(900, 1080.0).unwrap(), 440.0);
-        assert_eq!(fitted_overlay_height(416, 400.0).unwrap(), 368.0);
+        assert_eq!(fitted_overlay_height(900, 1080.0).unwrap(), 900.0);
+        assert_eq!(fitted_overlay_height(1800, 1080.0).unwrap(), 1064.0);
+        assert_eq!(fitted_overlay_height(416, 400.0).unwrap(), 384.0);
+        assert_eq!(fitted_overlay_height(3000, 4320.0).unwrap(), 3000.0);
         assert!(fitted_overlay_height(0, 1080.0).is_err());
-        assert!(fitted_overlay_height(2049, 1080.0).is_err());
         assert!(fitted_overlay_height(180, f64::NAN).is_err());
     }
 }

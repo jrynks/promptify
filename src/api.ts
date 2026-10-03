@@ -279,6 +279,7 @@ export const api = {
   copyLastResult: () => invoke<void>("copy_last_result"),
   hideOverlay: () => invoke<void>("hide_overlay"),
   resizeOverlay: (height: number) => invoke<void>("resize_overlay", { height }),
+  overlayMaxHeight: () => invoke<number>("overlay_max_height"),
   listModels: () => invoke<ModelStatus[]>("list_models"),
   downloadModel: (id: string) => invoke<void>("download_model", { id }),
   cancelDownload: (id: string) => invoke<boolean>("cancel_download", { id }),

@@ -69,9 +69,9 @@ async function launch(page: Page, state = fixture(), path = "/") {
   if (path === "/overlay.html") {
     // Playwright changes screen metrics with setViewportSize; native window resizing does not
     // change the monitor's available height.
-    await page.addInitScript(() => Object.defineProperty(window.screen, "availHeight", { value: 1080 }));
+    await page.addInitScript(() => Object.defineProperty(window.screen, "availHeight", { value: 1080, configurable: true }));
     await page.exposeFunction("resizeTestOverlay", async (height: number) => {
-      await page.setViewportSize({ width: 560, height: Math.max(64, Math.min(440, height)) });
+      await page.setViewportSize({ width: 560, height: Math.max(64, Math.min(1064, height)) });
     });
   }
   await page.addInitScript((initial: Fixture) => {
@@ -182,6 +182,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
               window.onboardingTest.overlaySizes.push(args.height);
               if (window.resizeTestOverlay) await window.resizeTestOverlay(args.height);
               return;
+            case "overlay_max_height": return 1064;
             case "copy_last_result":
             case "hide_overlay": return;
             case "routing_state": return { rendering, error: null };
@@ -751,9 +752,24 @@ test.describe("native overlay sizing", () => {
     expect(await preview.evaluate((element) => element.scrollHeight > element.clientHeight && element.scrollTop > 0)).toBe(true);
   });
 
-  test("long blocked results keep Copy and Dismiss inside the native window", async ({ page }, testInfo) => {
+  test("final prompts expand fully even beyond the old 400px limit", async ({ page }) => {
     await openOverlay(page);
+    // Some native webviews expose the tiny overlay viewport as screen.availHeight.
+    await page.evaluate(() => Object.defineProperty(window.screen, "availHeight", { value: 96, configurable: true }));
     await emitOverlay(page, blocked);
+    await fitsWindow(page);
+    const result = page.getByRole("region", { name: "Prompt result" });
+    await expect.poll(() => page.evaluate(() => innerHeight)).toBeGreaterThan(440);
+    expect(await result.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true);
+    await expect(result).toContainText("Done when:");
+  });
+
+  test("screen-height blocked results keep Copy and Dismiss inside the native window", async ({ page }, testInfo) => {
+    await openOverlay(page);
+    const oversized = structuredClone(blocked);
+    if (oversized.type !== "finished" || oversized.report.outcome.kind !== "blocked") throw new Error("Expected blocked fixture");
+    oversized.report.outcome.text = longGraph.repeat(4);
+    await emitOverlay(page, oversized);
     await fitsWindow(page);
     const copy = page.getByRole("button", { name: "Copy", exact: true });
     await expect(copy).toBeVisible();
@@ -761,6 +777,8 @@ test.describe("native overlay sizing", () => {
     const result = page.getByRole("region", { name: "Prompt result" });
     expect(await result.evaluate((element) => element.clientHeight)).toBeGreaterThanOrEqual(120);
     expect(await result.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    expect(await page.evaluate(() => innerHeight)).toBeGreaterThanOrEqual(1050);
+    expect(await page.evaluate(() => innerHeight)).toBeLessThanOrEqual(1064);
     await result.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     expect(await result.evaluate((element) => element.scrollTop > 0)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("overlay-result-fits.png") });

@@ -122,6 +122,7 @@ pub fn run() {
             commands::copy_last_result,
             commands::hide_overlay,
             commands::resize_overlay,
+            commands::overlay_max_height,
             commands::list_models,
             commands::download_model,
             commands::cancel_download,

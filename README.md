@@ -15,6 +15,8 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
   "new paragraph" or "scratch that" as their own sentence to edit as you speak.
 - **Answer mode** (optional hotkey, set it in Settings): ask a question; the local model's answer is shown with a Copy
   button and never pasted.
+- **Copy results**: the final prompt or answer dialog expands to show the full text. It scrolls only
+  when the content exceeds the current monitor's available height; Copy and Dismiss stay visible.
 - Hold the hotkey while speaking, or tap it once to start and again to stop. `Esc` cancels. All are rebindable.
   Optionally, holding **Ctrl+Shift on their own** also starts a prompt on Windows, macOS, and Linux
   (requires input-monitoring permission on macOS and physical-keyboard access on Linux Wayland).
