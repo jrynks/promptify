@@ -1,4 +1,4 @@
-// Builds a Windows installer (NSIS) with the llama.cpp worker bundled next to the app.
+// Packages the native app with its llama.cpp worker and developer CLI.
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -11,8 +11,17 @@ if (!triple) {
   process.exit(1);
 }
 const exe = process.platform === "win32" ? ".exe" : "";
+const bundles = process.platform === "win32" ? "nsis" : process.platform === "linux" ? "deb,rpm,appimage" : null;
+if (!bundles) {
+  console.error("Installer builds currently support Windows and Linux only.");
+  process.exit(1);
+}
 
-run("cargo", ["build", "--release", "-p", "promptify-llm"], { retries: 2 });
+// Never specialize Whisper to the release builder's CPU (for example AVX-512).
+env.GGML_NATIVE = "OFF";
+if (process.platform === "linux") env.NO_STRIP = "1";
+
+run("cargo", ["build", "--locked", "--release", "-p", "promptify-llm"], { retries: 2 });
 
 // Tauri installs sidecars next to the app without the target suffix, where `worker_exe()` looks.
 // Tauri resolves the path from src-tauri and drops drive letters, so it is staged there.
@@ -20,6 +29,12 @@ const staging = join(root, "src-tauri", "binaries");
 mkdirSync(staging, { recursive: true });
 copyFileSync(join(env.CARGO_TARGET_DIR, "release", `promptify-llm${exe}`), join(staging, `promptify-llm-${triple}${exe}`));
 const config = { bundle: { externalBin: ["binaries/promptify-llm"], resources: {} } };
+if (process.platform === "linux") {
+  config.bundle.linux = {
+    deb: { depends: ["libc6 (>= 2.35)", "libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1", "libasound2", "libvulkan1", "libgomp1", "libxdo3", "libxtst6", "libxi6", "libxkbcommon0"] },
+    rpm: { depends: ["webkit2gtk4.1", "gtk3", "libayatana-appindicator-gtk3", "alsa-lib", "vulkan-loader", "libgomp", "libxdo", "libXtst", "libXi", "libxkbcommon"] },
+  };
+}
 
 // The app and worker need the Visual C++ runtime and OpenMP, which a fresh Windows may lack.
 // Microsoft allows installing these redistributable DLLs next to the app.
@@ -44,5 +59,8 @@ if (process.platform === "win32") {
 }
 
 // The tauri crate is 2.12 but npm has no @tauri-apps/api 2.12 yet; dev builds run this same pair.
-run(process.execPath, [tauriCli, "build", "--bundles", "nsis", "--ignore-version-mismatches", "--config", JSON.stringify(config), ...process.argv.slice(2)]);
-console.log(`Installer: ${join(env.CARGO_TARGET_DIR, "release", "bundle", "nsis")}`);
+run(process.execPath, [tauriCli, "build", "--no-bundle", "--ignore-version-mismatches", "--config", JSON.stringify(config), ...process.argv.slice(2), "--", "--locked"]);
+// Tauri builds and bundles the CLI automatically; snapshot that final build for verification.
+copyFileSync(join(env.CARGO_TARGET_DIR, "release", `promptify-cli${exe}`), join(staging, `promptify-cli-${triple}${exe}`));
+run(process.execPath, [tauriCli, "bundle", "--bundles", bundles, "--config", JSON.stringify(config), ...process.argv.slice(2)]);
+console.log(`Installers: ${join(env.CARGO_TARGET_DIR, "release", "bundle")}`);

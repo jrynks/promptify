@@ -39,9 +39,14 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 
 ## Download and install
 
-Promptify 1.1 supports Windows 10 and 11 on x64 computers. Download
-[`Promptify_1.1.0_x64-setup.exe`](https://github.com/jrynks/promptify/releases/download/v1.1.0/Promptify_1.1.0_x64-setup.exe)
-from the [v1.1.0 release](https://github.com/jrynks/promptify/releases/tag/v1.1.0) and run it. The installer is currently
+Download the x64 installer for your platform from the
+[v1.1.1 release](https://github.com/jrynks/promptify/releases/tag/v1.1.1).
+Quit any running Promptify instance before upgrading. Models are downloaded separately on first launch.
+Verify your download against the release's **SHA256SUMS.txt**.
+
+### Windows
+
+Promptify supports Windows 10 and 11 on x64 computers with AVX2. Run **Promptify_1.1.1_x64-setup.exe**. The installer is currently
 unsigned, so Windows SmartScreen may show a warning: choose **More info**, verify that the app is **Promptify**, and then
 choose **Run anyway**.
 
@@ -51,6 +56,46 @@ The installer:
 - includes the local llama.cpp worker and `promptify-cli.exe`;
 - installs the required Visual C++ and OpenMP runtime files alongside the app; and
 - downloads Microsoft WebView2 if it is not already installed.
+
+Install an up-to-date graphics driver that provides the Vulkan runtime. Even when loading models
+on the CPU, the Windows binaries require the Vulkan loader; the installer does not redistribute
+or replace your graphics driver. A Vulkan SDK is not needed to run the app.
+
+### Linux
+
+Linux packages are built on Ubuntu 22.04 (glibc 2.35) for x86-64 PCs with AVX2, without requiring a source
+build, Node, Rust, or a Vulkan SDK. They include the local language-model worker and developer CLI.
+Use the package for your distribution:
+
+| Distribution | Package | Install |
+| --- | --- | --- |
+| Ubuntu 22.04+, Debian 12+, Linux Mint 21+ | `.deb` | `sudo apt install ./Promptify_1.1.1_amd64.deb` |
+| Fedora and compatible RPM desktops with WebKitGTK 4.1 | `.rpm` | `sudo dnf install ./Promptify-1.1.1-1.x86_64.rpm` |
+| Bazzite / Fedora Atomic, Arch, and other modern glibc desktops | `.AppImage` | Make executable, then run as your normal user |
+
+For the AppImage:
+
+```bash
+chmod +x Promptify_1.1.1_amd64.AppImage
+./Promptify_1.1.1_amd64.AppImage
+```
+
+If FUSE 2 is unavailable (common on immutable desktops), use
+`./Promptify_1.1.1_amd64.AppImage --appimage-extract-and-run` instead. The AppImage avoids
+layering application packages on Bazzite; it is not a Flatpak. Your graphics driver's Vulkan
+loader and desktop audio services must be available. CPU inference is supported, but the binary
+still needs the Vulkan loader. Native `.deb`/`.rpm` installers declare their runtime dependencies.
+AppImage portability does not imply that every distribution or compositor has been tested.
+
+Use an X11 session, or KDE Plasma 6 Wayland with its RemoteDesktop portal backend.
+On KDE Wayland, grant paste permission during setup. GNOME Wayland additionally needs the
+`x-win` window-tracking extension; other Wayland compositors remain unsupported.
+GNOME users may need an AppIndicator extension to see the tray. The packages do not grant
+keyboard-device access, install input permission rules, or run the app as root.
+See [Wayland integration and keyboard permissions](#fedora--bazzite) below.
+
+Linux settings and models live in `${XDG_DATA_HOME:-~/.local/share}/dev.promptify.app`.
+Installed and development builds share that location; do not run both at once.
 
 On first launch, Promptify opens a required guided tour in Settings:
 
@@ -101,11 +146,25 @@ at the same time.
 
 | Platform | Status |
 | --- | --- |
-| Windows 10/11 x64 | Supported by the v1.1.0 installer |
-| Fedora / Bazzite | Runs from source; packaged installer not yet published |
+| Windows 10/11 x64 | NSIS installer |
+| Linux x86-64, glibc 2.35+ | Debian, RPM, and AppImage packages; KDE Plasma 6 Wayland or X11 |
 | macOS | Source support is experimental; packaged installer and some hotkeys are not yet available |
 
 ## Build from source
+
+### Build installers
+
+After installing the native build prerequisites below and running `npm ci`, run `npm run installer`.
+Windows produces an NSIS installer; Linux produces `.deb`, `.rpm`, and `.AppImage` files.
+Output is under `$CARGO_TARGET_DIR/release/bundle` (by default `~/.cache/promptify-target` on Linux
+and `C:\ptb` on Windows). Both the worker and CLI are staged as sidecars next to the desktop
+executable. Linux release packages must be built on Ubuntu 22.04 or an equally old compatible
+build environment, not a newer Fedora host, to retain the glibc 2.35 baseline.
+
+The **Installers** GitHub Actions workflow builds and verifies Windows and Linux packages
+from the selected ref, and uploads artifacts for inspection. It does not publish a release
+automatically. Publish only artifacts from the same source commit as the release tag, with a
+combined SHA-256 checksum file.
 
 ### Windows
 
