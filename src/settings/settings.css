@@ -64,6 +64,9 @@ body { margin: 0; }
 .tour-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .tour-target { border-left: 3px solid Highlight; padding-left: 16px; }
 .tour-model { background: rgba(127, 127, 127, 0.08); }
+.model-unsupported { color: GrayText; background: rgba(127, 127, 127, 0.08); }
+.model-unsupported strong { font-weight: normal; }
+.model-unsupported .actions { opacity: 0.65; }
 .tour-foot { border-top: 1px solid rgba(127, 127, 127, 0.25); padding-top: 12px; font-size: 12px; }
 .practice-label { margin-top: 16px; }
 .practice-label textarea { box-sizing: border-box; width: 100%; resize: vertical; }

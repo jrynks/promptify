@@ -48,6 +48,7 @@ pub struct AppSettings {
     pub modifier_keyboard: Option<String>,
     /// The prompt hotkey writes plain dictation in apps that are not AI tools.
     pub auto_mode: bool,
+    pub code_chat_paste: bool,
     /// Words to expect and corrections for speech recognition.
     pub vocabulary: promptify_core::dictation::Vocabulary,
     /// App keys (e.g. "chatgpt.com", "outlook") whose focused text may be used as context.
@@ -72,6 +73,7 @@ impl Default for AppSettings {
             modifier_hold: false,
             modifier_keyboard: None,
             auto_mode: false,
+            code_chat_paste: false,
             vocabulary: Default::default(),
             screen_text_apps: Vec::new(),
         }
@@ -205,6 +207,18 @@ mod tests {
         let loaded = load_checked(&dir.0).unwrap().unwrap();
         assert_eq!(loaded.modifier_keyboard.as_deref(), Some("/dev/input/by-id/keyboard-event-kbd"));
         assert!(loaded.modifier_hold);
+    }
+
+    #[test]
+    fn code_chat_paste_requires_explicit_persisted_consent() {
+        let legacy: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.code_chat_paste);
+        let dir = TestDir::new();
+        let settings: SharedSettings = Arc::new(RwLock::new(legacy));
+        update(&settings, &dir.0, |s| s.code_chat_paste = true).unwrap();
+        assert!(load_checked(&dir.0).unwrap().unwrap().code_chat_paste);
+        update(&settings, &dir.0, |s| s.code_chat_paste = false).unwrap();
+        assert!(!load_checked(&dir.0).unwrap().unwrap().code_chat_paste);
     }
 
     #[test]

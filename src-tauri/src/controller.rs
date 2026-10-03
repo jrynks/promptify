@@ -63,6 +63,56 @@ fn emit_for(app: &AppHandle, practice: Option<u64>, event: OverlayEvent) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn insertion_overlay_has_focus(context: &promptify_core::context::ActiveContext, process_id: u32) -> bool {
+    context.window.process_id == process_id && context.window_title == "Promptify overlay"
+}
+
+#[cfg(target_os = "linux")]
+fn hide_insertion_overlay(app: &AppHandle) -> Result<(), String> {
+    use promptify_core::pipeline::ContextProvider;
+    let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let _ = tx.send(overlay.hide().map_err(|error| format!("could not hide the insertion overlay: {error}")));
+    }).map_err(|error| format!("could not prepare the insertion overlay: {error}"))?;
+    rx.recv_timeout(Duration::from_secs(1)).map_err(|error| format!("insertion overlay did not hide: {error}"))??;
+
+    // Wayland cannot guarantee a non-activating overlay. Wait for its unmap, never refocus the target.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        let foreground = crate::system_context::SystemContext.identify().map_err(|error| error.0)?;
+        if !insertion_overlay_has_focus(&foreground, std::process::id()) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("The overlay still owns focus after hiding. Nothing should be pasted until the destination is focused.".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod insertion_overlay_tests {
+    use super::insertion_overlay_has_focus;
+    use promptify_core::context::{ActiveContext, WindowIdentity};
+
+    #[test]
+    fn only_our_overlay_is_treated_as_a_transient_focus_owner() {
+        let mut context = ActiveContext {
+            window: WindowIdentity { handle: 1, process_id: 42 },
+            window_title: "Promptify overlay".into(),
+            ..Default::default()
+        };
+        assert!(insertion_overlay_has_focus(&context, 42));
+        assert!(!insertion_overlay_has_focus(&context, 99));
+        context.window_title = "Promptify".into();
+        assert!(!insertion_overlay_has_focus(&context, 42));
+        context.window_title = "Agents - Visual Studio Code".into();
+        assert!(!insertion_overlay_has_focus(&context, 42));
+    }
+}
+
 enum Phase {
     Idle,
     Recording { job: Box<Job>, recording: Recording, live: LiveLoop, practice: Option<u64> },
@@ -311,7 +361,16 @@ impl Worker {
             .spawn(move || {
                 let live = live.finish();
                 let tail = audio.samples.get(live.committed_samples()..).unwrap_or_default();
+                #[cfg(target_os = "linux")]
+                let mut overlay_hidden = false;
                 let report = orchestrator.finish_live(*job, &live.text(), tail, &mut |event| {
+                    #[cfg(target_os = "linux")]
+                    if practice.is_none() && matches!(event, JobEvent::Stage(Stage::Inserting)) {
+                        overlay_hidden = true;
+                        if let Err(error) = hide_insertion_overlay(&app) {
+                            log::warn!("could not prepare overlay for insertion: {error}");
+                        }
+                    }
                     let payload = match event {
                         JobEvent::Stage(stage) => OverlayEvent::Stage { stage },
                         JobEvent::Transcript(text) => OverlayEvent::Transcript { text: text.to_owned() },
@@ -328,6 +387,9 @@ impl Worker {
                     report.elapsed_ms,
                     report.history_saved
                 );
+                if let Outcome::Blocked { reason, detail, .. } = &report.outcome {
+                    log::warn!("job {} insertion blocked: reason={reason:?} detail={detail:?}", report.job_id);
+                }
                 if let Outcome::Blocked { text, .. } | Outcome::Answered { text } = &report.outcome {
                     *last_result.lock().unwrap() = Some(text.clone());
                 }
@@ -337,6 +399,12 @@ impl Worker {
                 *phase.lock().unwrap() = Phase::Idle;
                 on_active(false);
                 emit_for(&app, practice, OverlayEvent::Finished { report, capped: audio.capped });
+                #[cfg(target_os = "linux")]
+                if overlay_hidden && let Some(overlay) = app.get_webview_window("overlay") {
+                    if let Err(error) = overlay.show() {
+                        log::warn!("could not show insertion result: {error}");
+                    }
+                }
             })
             .expect("spawn processing thread");
     }

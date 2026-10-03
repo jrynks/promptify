@@ -23,6 +23,11 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
   Shortcuts like Ctrl+Shift+T and quick layout-switch taps are ignored.
 - **Live transcription**: speech is transcribed at natural pauses while you talk, so the result is ready moments after
   you stop. The overlay shows what was heard so far.
+- **Model compatibility**: Models compares detected total system RAM with each model's manifest
+  minimum and grays out models below it, with an explanation. GPU/VRAM and CPU core count are not
+  minimum requirements because CPU inference is supported. This is an advisory check, not a
+  guarantee that a model will load with current memory usage; downloads and saved selections are
+  preserved. Hardware detection failures are shown as unknown, not unsupported.
 - **Automatic mode** (optional): outside AI apps the prompt hotkey types plain dictation. Start with "prompt:" or
   "dictate:" to choose yourself.
 - **Your words**: names and terms Whisper should expect, corrections (`heard => meant`), and the apps whose focused
@@ -213,6 +218,48 @@ sudo setfacl -x u:$(id -un) /dev/input/eventN
 
 If the selected keyboard is removed or access is lost, monitoring stops with a visible error and releases
 any active hold; retry in Settings after checking device access. Your saved preference is preserved.
+
+### Verify native automatic paste on Windows and macOS
+
+Automatic insertion uses the clipboard plus native Ctrl+V on Windows and Cmd+V on macOS.
+Copy-only results are a fallback when focus changes, insertion fails, or an experimental routing
+policy requires review; they are not the normal Windows/macOS insertion path. Task-aware adaptation deliberately requires surface confirmation in
+VS Code/Cursor because these apps also contain editors. In General Settings, explicitly enable
+**Allow automatic prompt paste in VS Code and Cursor AI chat** to remember that choice across
+recordings and restarts on any platform, including KDE Wayland. This does not detect the specific
+control: only use the Prompt hotkey in the AI chat input, not an editor or integrated terminal.
+The option is off by default and does not bypass window/site focus checks or an explicit
+per-request input-surface override. Other unconfirmed apps still require review.
+Keep the destination text field focused while generating. macOS requires **Accessibility** permission for input
+simulation (separate from **Input Monitoring** for Ctrl+Shift). Windows UIPI can block a
+non-elevated app from injecting into an elevated destination.
+
+Run the native smoke test in an interactive Windows or macOS desktop session:
+
+```bash
+cargo build -p promptify --bin promptify-cli
+npx playwright install chromium
+npm run test:native-paste -- target/debug/promptify-cli
+```
+
+On Windows use `target/debug/promptify-cli.exe`; if `CARGO_TARGET_DIR` is set, use that directory
+instead of `target`. On macOS grant Accessibility to the CLI/launcher when requested and rerun.
+If macOS hides the test window title, its focused-window backend may also need Screen Recording
+permission for the CLI/launcher to read other applications' window metadata.
+The harness opens its own browser textarea and uses the **real desktop ClipboardPaste backend**,
+not browser typing, to inject single-line and multiline text. It passes only when the exact text
+appears in the field. Do not switch windows during the test. A unique test-window title is checked
+before injection so an unrelated window cannot intentionally receive the test text. No models,
+user settings, or history are changed. Passing this test verifies the native paste backend, not
+every target application or the complete speech/model/hotkey flow. Shared tests run on Linux are
+not a substitute for these native Windows and macOS runs.
+
+The same harness also runs on Linux X11 and supported Wayland desktops. On Wayland, grant paste
+permission in the app first; the CLI restores that grant in its own session before the test.
+It never injects unless the unique test-window title is focused.
+On Linux the progress overlay is hidden immediately before insertion so a compositor cannot
+mistake it for the destination. The focused window is then checked normally; Promptify never
+reactivates an old destination or bypasses a genuine focus change.
 
 ### Build the Windows installer
 

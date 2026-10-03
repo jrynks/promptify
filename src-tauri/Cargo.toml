@@ -32,6 +32,7 @@ promptify-server = { path = "../crates/promptify-server" }
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"

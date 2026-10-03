@@ -29,6 +29,7 @@ const USAGE: &str = "usage:
   promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
   promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json] [--mode prompt|dictation|answer] [--auto]
   promptify-cli screen-text   (reads the focused text box of the foreground app after 3 s, as the app would)
+  promptify-cli paste-smoke-test <unique-window-title> <text>   (pastes into the matching focused test window after 3 s)
   promptify-cli eval <cases.toml>
   promptify-cli eval-adaptive <cases.toml> [--model ID]   (local model output contracts)
   promptify-cli eval-routing <cases.toml>   (classification only; no model needed)
@@ -283,6 +284,28 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "paste-smoke-test") {
+        if args.len() != 3 || !args[1].starts_with("Promptify paste test ") || args[2].is_empty() {
+            return Err("Use paste-smoke-test with a unique 'Promptify paste test ...' window title and nonempty text.".into());
+        }
+        #[cfg(target_os = "linux")]
+        if promptify_lib::wayland_paste::applies() {
+            promptify_lib::wayland_paste::init(&settings::app_data_dir());
+            if !promptify_lib::wayland_paste::has_saved_permission()? {
+                return Err("Grant paste permission in Settings before running the Wayland paste test.".into());
+            }
+            promptify_lib::wayland_paste::grant(|| {})?;
+        }
+        std::thread::sleep(Duration::from_secs(3));
+        let context = promptify_lib::system_context::SystemContext;
+        let target = context.identify().map_err(|error| error.0)?;
+        if !target.window_title.contains(&args[1]) {
+            return Err("The test window is not focused. No paste was attempted.".into());
+        }
+        promptify_lib::insert::ClipboardPaste.insert(&target.window, &args[2], PasteChord::Standard).map_err(|error| error.0)?;
+        println!("Native paste dispatched; the test harness must verify the field contents.");
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "prompt-types") {
         println!("{}", serde_json::to_string_pretty(routing::catalog().all()).map_err(|e| e.to_string())?);
         return Ok(());

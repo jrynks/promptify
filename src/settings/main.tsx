@@ -169,6 +169,17 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
       <p className="hint indent">Start with “prompt:” or “dictate:” to choose yourself.</p>
       </>}
       <h3>This computer</h3>
+      {!guided && <>
+        <label className="inline">
+          <input type="checkbox" checked={info.code_chat_paste}
+            onChange={(event) => {
+              setError(null);
+              void api.setCodeChatPaste(event.target.checked).then(onChange, (reason) => setError(String(reason)));
+            }} />
+          Allow automatic prompt paste in VS Code and Cursor AI chat
+        </label>
+        <p className="hint">Remembered on this computer. With task-aware adaptation, these mixed-purpose apps otherwise require review. Only use the Prompt hotkey while the AI chat input is focused: Promptify cannot distinguish it from an editor or terminal field. Focus-change checks still apply. Disable this to restore per-request confirmation.</p>
+      </>}
       {!guided && <DesktopIntegration info={info} onChange={onChange} />}
       <dl>
         <dt>Microphone</dt>
@@ -193,6 +204,7 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
   const [models, setModels] = useState<ModelStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, DownloadEvent>>({});
   const [error, setError] = useState<string | null>(null);
+  const totalRam = models.find((m) => m.compatibility.total_ram_bytes !== null)?.compatibility.total_ram_bytes;
 
   const refresh = useCallback(() => {
     void api.listModels().then(setModels, (reason) => setError(`Could not read models: ${String(reason)}`));
@@ -225,6 +237,8 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
   const group = (kind: ModelStatus["kind"], title: string) => {
     // On first setup, point at one sensible download per kind instead of making every button shout.
     const noneInstalled = !models.some((m) => m.kind === kind && m.installed);
+    const candidates = models.filter((m) => m.kind === kind && m.compatibility.supported !== false);
+    const recommendation = candidates.find((m) => m.tier === "balanced") ?? candidates.find((m) => m.tier === "small") ?? candidates[0];
     return (
     <>
       <h3>{title}</h3>
@@ -233,15 +247,17 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
           {models.filter((m) => m.kind === kind).map((m) => {
             const p = progress[m.id];
             const pct = p && !p.done && p.total > 0 ? Math.floor((p.downloaded / p.total) * 100) : null;
-            const recommended = noneInstalled && m.tier === "balanced";
+            const unsupported = m.compatibility.supported === false;
+            const recommended = noneInstalled && m.id === recommendation?.id;
             return (
-              <tr key={m.id} className={guided && recommended ? "tour-model" : undefined}>
+              <tr key={m.id} className={[unsupported ? "model-unsupported" : "", guided && recommended ? "tour-model" : ""].filter(Boolean).join(" ")}>
                 <td>
                   <input type="radio" name={kind} checked={m.selected} disabled={!m.installed} onChange={() => act(() => api.selectModel(m.id))} aria-label={`Use ${m.display_name}`} />
                 </td>
                 <td>
                   <strong>{m.display_name}</strong> {recommended && <span className="badge">Recommended</span>}{" "}
                   <span className="hint">{m.tier} · {m.license} · {m.min_ram_gb} GB+ RAM</span>
+                  {m.compatibility.reason && <div className="hint">{m.compatibility.reason}</div>}
                 </td>
                 <td className="actions">
                   {m.installed && !m.downloading && (
@@ -279,6 +295,11 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
     <section className={guided ? "tour-target" : undefined} aria-label="Model settings">
       <h2>Models</h2>
       <p className="hint">Downloaded from Hugging Face over HTTPS, checked against pinned SHA-256 hashes, and run entirely on this device.</p>
+      <p className="hint">
+        {totalRam != null && `Detected system RAM: ${gb(totalRam)}. `}
+        Compatibility compares total system RAM with each model's minimum. GPU acceleration is optional; VRAM and CPU core count are not requirements.
+        {" "}Grayed-out models are below the RAM requirement. Downloads and existing selections remain available; this check does not guarantee successful loading.
+      </p>
       {group("stt", "Speech to text")}
       {group("llm", "Prompt writer")}
       {error && <div role="alert"><p className="error">{error}</p><button onClick={refresh}>Refresh models</button></div>}
