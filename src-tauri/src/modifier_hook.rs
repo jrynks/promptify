@@ -8,18 +8,40 @@ use tauri::{AppHandle, Manager};
 use crate::AppState;
 use crate::controller::Command;
 
+static STARTUP_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[derive(serde::Serialize)]
+pub struct KeyboardDevice {
+    pub path: String,
+    pub name: String,
+}
+
+pub fn keyboards() -> Result<Vec<KeyboardDevice>, String> {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        return platform::available_keyboards();
+    }
+    Ok(Vec::new())
+}
+
+pub fn status(slot: &std::sync::Mutex<Option<Hook>>) -> (bool, Option<String>) {
+    let slot = slot.lock().unwrap();
+    let error = slot.as_ref().and_then(Hook::error).or_else(|| STARTUP_ERROR.lock().unwrap().clone());
+    (slot.is_some() && error.is_none(), error)
+}
+
 /// Turns chord transitions into the same commands as the prompt hotkey.
 fn dispatch(app: &AppHandle, action: ChordAction, pressed: &mut bool) {
     let Some(state) = app.try_state::<AppState>() else { return };
     match action {
         ChordAction::Press if !state.hotkeys.read().unwrap().paused && !crate::onboarding::required(&state) => {
             *pressed = true;
-            state.controller.send(Command::Press(Mode::Prompt));
+            state.controller.send(Command::HoldPress(Mode::Prompt));
         }
         // Release is always delivered for a press we sent, even if hotkeys were paused meanwhile.
         ChordAction::Release if *pressed => {
             *pressed = false;
-            state.controller.send(Command::Release(Mode::Prompt));
+            state.controller.send(Command::HoldRelease(Mode::Prompt));
         }
         _ => {}
     }
@@ -88,6 +110,10 @@ mod platform {
     }
 
     impl Hook {
+        pub fn error(&self) -> Option<String> {
+            None
+        }
+
         pub fn start(app: AppHandle) -> Result<Self, String> {
             let (tx, rx) = mpsc::channel::<(ChordKey, bool)>();
             *EVENTS.lock().unwrap() = Some(tx);
@@ -165,16 +191,28 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "modifier_hook/linux.rs"]
+mod platform;
+
+#[cfg(target_os = "macos")]
+#[path = "modifier_hook/macos.rs"]
+mod platform;
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod platform {
     use super::*;
 
     pub struct Hook;
 
     impl Hook {
+        pub fn error(&self) -> Option<String> {
+            None
+        }
+
         pub fn start(_app: AppHandle) -> Result<Self, String> {
             let _ = (dispatch, ModifierChord::default, ChordKey::Other);
-            Err("holding Ctrl+Shift is only available on Windows for now".into())
+            Err("Ctrl+Shift hold monitoring is not supported on this operating system.".into())
         }
     }
 }
@@ -202,16 +240,30 @@ mod tests {
 /// Installs or removes the hook to match the setting.
 pub fn apply(app: &AppHandle, slot: &std::sync::Mutex<Option<Hook>>, enabled: bool) -> Result<(), String> {
     let mut slot = slot.lock().unwrap();
+    if slot.as_ref().is_some_and(|hook| hook.error().is_some()) {
+        *slot = None;
+    }
     match (enabled, slot.is_some()) {
         (true, false) => {
-            *slot = Some(Hook::start(app.clone())?);
+            match Hook::start(app.clone()) {
+                Ok(hook) => {
+                    *slot = Some(hook);
+                    *STARTUP_ERROR.lock().unwrap() = None;
+                }
+                Err(error) => {
+                    *STARTUP_ERROR.lock().unwrap() = Some(error.clone());
+                    return Err(error);
+                }
+            }
             log::info!("Ctrl+Shift hold hotkey on");
         }
         (false, true) => {
             *slot = None;
+            *STARTUP_ERROR.lock().unwrap() = None;
             log::info!("Ctrl+Shift hold hotkey off");
         }
-        _ => {}
+        (false, false) => { *STARTUP_ERROR.lock().unwrap() = None; }
+        (true, true) => {}
     }
     Ok(())
 }

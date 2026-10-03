@@ -44,14 +44,65 @@ pub struct AppInfo {
     use_gpu: bool,
     gpu_device: Option<String>,
     modifier_hold: bool,
+    modifier_hold_requested: bool,
+    modifier_hold_error: Option<String>,
+    modifier_keyboard: Option<String>,
+    modifier_keyboard_devices: Vec<crate::modifier_hook::KeyboardDevice>,
     auto_mode: bool,
     vocabulary: promptify_core::dictation::Vocabulary,
     screen_text_apps: Vec<String>,
+    /// Wayland only: whether the one-time remote-input permission for pasting was granted.
+    paste_permission: &'static str,
+    desktop_error: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn paste_permission() -> &'static str {
+    match crate::wayland_paste::status() {
+        crate::wayland_paste::PermissionState::NotNeeded => "not_needed",
+        crate::wayland_paste::PermissionState::Granted => "granted",
+        crate::wayland_paste::PermissionState::Required => "required",
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn paste_permission() -> &'static str {
+    "not_needed"
+}
+
+#[tauri::command]
+pub async fn grant_paste_permission(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        let closed_app = app.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || crate::wayland_paste::grant(move || {
+            let state = closed_app.state::<AppState>();
+            onboarding::invalidate(&state, Some("Automatic paste permission was closed. Grant permission and try practice again."));
+            onboarding::notify(&closed_app);
+        })).await.map_err(|e| format!("Paste permission request failed: {e}"))?;
+        onboarding::notify(&app);
+        return result;
+    }
+    Ok(())
+}
+
+fn desktop_error() -> Option<String> {
+    use promptify_core::pipeline::ContextProvider;
+    crate::system_context::SystemContext.identify().err().map(|e| e.0)
 }
 
 #[tauri::command]
 pub fn app_info(state: State<'_, AppState>) -> AppInfo {
     let settings = state.settings.read().unwrap().clone();
+    let (modifier_hold, mut modifier_hold_error) = crate::modifier_hook::status(&state.modifier_hook);
+    let modifier_keyboard_devices = match crate::modifier_hook::keyboards() {
+        Ok(keyboards) => keyboards,
+        Err(error) => {
+            log::warn!("could not list Ctrl+Shift keyboards: {error}");
+            modifier_hold_error = Some(error);
+            Vec::new()
+        }
+    };
     AppInfo {
         input_device: crate::audio::default_input_name(),
         hotkeys: state.hotkeys.read().unwrap().config.clone(),
@@ -65,10 +116,16 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         data_dir: state.data_dir.to_string_lossy().into_owned(),
         use_gpu: settings.use_gpu,
         gpu_device: state.llm.device(),
-        modifier_hold: state.modifier_hook.lock().unwrap().is_some(),
+        modifier_hold,
+        modifier_hold_requested: settings.modifier_hold,
+        modifier_hold_error,
+        modifier_keyboard: settings.modifier_keyboard.clone(),
+        modifier_keyboard_devices,
         auto_mode: settings.auto_mode,
         vocabulary: settings.vocabulary.clone(),
         screen_text_apps: settings.screen_text_apps.clone(),
+        paste_permission: paste_permission(),
+        desktop_error: desktop_error(),
     }
 }
 
@@ -236,9 +293,29 @@ pub fn set_use_gpu(app: AppHandle, state: State<'_, AppState>, enabled: bool) ->
 
 #[tauri::command]
 pub fn set_modifier_hold(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let previous = state.settings.read().unwrap().modifier_hold;
     crate::modifier_hook::apply(&app, &state.modifier_hook, enabled)?;
-    state.settings.write().unwrap().modifier_hold = enabled;
-    save_settings(&state)
+    if let Err(error) = settings::update(&state.settings, &state.data_dir, |settings| settings.modifier_hold = enabled) {
+        if let Err(restore_error) = crate::modifier_hook::apply(&app, &state.modifier_hook, previous) {
+            return Err(format!("{error}; could not restore Ctrl+Shift monitoring: {restore_error}"));
+        }
+        return Err(error);
+    }
+    onboarding::notify(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_modifier_keyboard(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+    if !crate::modifier_hook::keyboards()?.iter().any(|keyboard| keyboard.path == path) {
+        return Err("Select a currently connected physical keyboard from the list.".into());
+    }
+    settings::update(&state.settings, &state.data_dir, |settings| settings.modifier_keyboard = Some(path))?;
+    let enabled = state.settings.read().unwrap().modifier_hold;
+    crate::modifier_hook::apply(&app, &state.modifier_hook, false)?;
+    let result = crate::modifier_hook::apply(&app, &state.modifier_hook, enabled);
+    onboarding::notify(&app);
+    result
 }
 
 /// Pushes the text-related settings into the pipeline; called at startup and after each change.

@@ -106,9 +106,15 @@ export interface AppInfo {
   use_gpu: boolean;
   gpu_device: string | null;
   modifier_hold: boolean;
+  modifier_hold_requested: boolean;
+  modifier_hold_error: string | null;
+  modifier_keyboard: string | null;
+  modifier_keyboard_devices: { path: string; name: string }[];
   auto_mode: boolean;
   vocabulary: Vocabulary;
   screen_text_apps: string[];
+  paste_permission: "not_needed" | "granted" | "required";
+  desktop_error: string | null;
 }
 
 export type OnboardingStep = "models" | "input" | "practice";
@@ -252,6 +258,7 @@ export interface McpFile {
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
+  grantPastePermission: () => invoke<void>("grant_paste_permission"),
   onboardingStatus: () => invoke<OnboardingStatus>("onboarding_status"),
   retryOnboardingStartup: () => invoke<void>("retry_onboarding_startup"),
   retryModelLoading: () => invoke<void>("retry_model_loading"),
@@ -284,6 +291,7 @@ export const api = {
   setHotkey: (mode: Mode, accelerator: string) => invoke<void>("set_hotkey", { mode, accelerator }),
   setUseGpu: (enabled: boolean) => invoke<void>("set_use_gpu", { enabled }),
   setModifierHold: (enabled: boolean) => invoke<void>("set_modifier_hold", { enabled }),
+  setModifierKeyboard: (path: string) => invoke<void>("set_modifier_keyboard", { path }),
   setAutoMode: (enabled: boolean) => invoke<void>("set_auto_mode", { enabled }),
   setVocabulary: (vocabulary: Vocabulary) => invoke<Vocabulary>("set_vocabulary", { vocabulary }),
   setScreenTextApps: (apps: string[]) => invoke<void>("set_screen_text_apps", { apps }),

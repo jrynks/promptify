@@ -16,7 +16,9 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 - **Answer mode** (optional hotkey, set it in Settings): ask a question; the local model's answer is shown with a Copy
   button and never pasted.
 - Hold the hotkey while speaking, or tap it once to start and again to stop. `Esc` cancels. All are rebindable.
-  Optionally, holding **Ctrl+Shift on their own** also starts a prompt (Windows; shortcuts like Ctrl+Shift+T are ignored).
+  Optionally, holding **Ctrl+Shift on their own** also starts a prompt on Windows, macOS, and Linux
+  (requires input-monitoring permission on macOS and physical-keyboard access on Linux Wayland).
+  Shortcuts like Ctrl+Shift+T and quick layout-switch taps are ignored.
 - **Live transcription**: speech is transcribed at natural pauses while you talk, so the result is ready moments after
   you stop. The overlay shows what was heard so far.
 - **Automatic mode** (optional): outside AI apps the prompt hotkey types plain dictation. Start with "prompt:" or
@@ -145,10 +147,70 @@ The PATH entry supports Node installed through Linuxbrew; it is unnecessary when
 The Vulkan and libclang paths above use Fedora's system packages, not a separately downloaded SDK.
 In VS Code, **Terminal > Run Task > Promptify: Run desktop app** supplies this environment automatically.
 
+Wayland desktop integration:
+
+- **KDE Plasma 6**: Promptify queries KWin with a short-lived script for a fresh focused-window
+  snapshot at recording start and before pasting. Scripts are unloaded after each query; only
+  KWin's authenticated D-Bus connection can return a snapshot. No GNOME extension is needed.
+- **GNOME**: the `x-win` window-tracking extension is required.
+- **Automatic paste**: choose **Grant paste permission** in setup or General Settings and allow
+  keyboard control in the desktop's RemoteDesktop portal dialog. No screen capture is requested.
+  The portal may remember the grant; its restore token is saved privately as `remote-desktop-token`
+  in the data folder and restored on launch. A saved token alone is not treated as an active grant.
+  If permission is denied, revoked, or disconnected, grant it again in Settings. Quit Promptify
+  and remove that token to stop restoring the grant; revoke permission in your desktop's portal
+  permission controls if available.
+- Paste never opens a permission dialog or retries an ambiguous keystroke delivery. It checks
+  focus immediately before injection, releases held modifiers on failure, and retains the
+  generated result in the overlay for copying if insertion is blocked.
+- Other Wayland compositors are not supported yet; use an X11 session there.
+
 On Wayland, the taskbar and titlebar icons are resolved through a desktop entry, not the window's embedded PNG.
 For an unbundled development build, a user-local `promptify.desktop` entry must match `StartupWMClass=promptify`
 and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that development entry hidden with
 `NoDisplay=true` and continue launching through the task above; Linux bundles install their own desktop entry and icons.
+
+### Optional Ctrl+Shift hold gesture
+
+Enable **Also start a prompt by holding Ctrl+Shift on their own** in General Settings after setup.
+Hold both modifiers, without other keys, for at least 350 ms; releasing either modifier ends the hold.
+The ordinary Prompt shortcut remains available if the monitor is disabled or permission is denied.
+
+- **Windows:** a listen-only low-level keyboard hook, unchanged from previous releases.
+- **macOS:** a listen-only Core Graphics event tap. Allow Promptify (or the development launcher)
+  in **System Settings > Privacy & Security > Input Monitoring**, then retry or restart the app.
+  Synthetic paste keystrokes are ignored.
+- **Linux X11:** XInput2 raw keyboard events. No root permission or device-access changes are needed;
+  XTest-generated paste events are ignored.
+- **Linux Wayland:** select one physical keyboard in General Settings and grant read access to that
+  keyboard only. Promptify uses its stable by-id path when available and does not monitor other
+  keyboards or auxiliary consumer-control devices. The paste portal's
+  keyboard-control grant does **not** authorize observing your keyboard. Promptify does not run as
+  root, install permission rules, or add you to the broad `input` group automatically.
+
+Keyboard-device access can expose all keystrokes to a process with that access, even though Promptify
+only classifies Ctrl, Shift, and other-key interference and never saves or logs typed text.
+The monitor does not grab, block, or consume keys. Wayland monitoring stops arming while the logind
+desktop session is locked or inactive.
+
+On Fedora/Bazzite Wayland, choose **Ctrl+Shift keyboard** first. Enabling the option without permission reports the exact keyboard name
+and device path. If you choose to grant access, use a **read-only ACL on that specific keyboard**:
+
+```bash
+# Replace eventN with the exact keyboard event device reported in Settings.
+sudo setfacl -m u:$(id -un):r /dev/input/eventN
+```
+
+Then choose **Retry Ctrl+Shift monitoring**. Do not grant access to every input device or use `chmod 666`.
+ACLs on event devices are normally temporary and must be re-established after reconnecting or rebooting.
+To revoke one, disable the gesture and run:
+
+```bash
+sudo setfacl -x u:$(id -un) /dev/input/eventN
+```
+
+If the selected keyboard is removed or access is lost, monitoring stops with a visible error and releases
+any active hold; retry in Settings after checking device access. Your saved preference is preserved.
 
 ### Build the Windows installer
 

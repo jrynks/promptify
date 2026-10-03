@@ -4,6 +4,8 @@ mod controller;
 pub mod download;
 mod hotkeys;
 pub mod insert;
+#[cfg(target_os = "linux")]
+mod kwin;
 pub mod llm_client;
 mod mcp;
 mod modifier_hook;
@@ -13,6 +15,8 @@ pub mod settings;
 pub mod stt;
 pub mod system_context;
 mod tray;
+#[cfg(target_os = "linux")]
+pub mod wayland_paste;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -128,6 +132,7 @@ pub fn run() {
             commands::clear_history,
             commands::set_history_enabled,
             commands::set_modifier_hold,
+            commands::set_modifier_keyboard,
             commands::set_auto_mode,
             commands::set_vocabulary,
             commands::set_screen_text_apps,
@@ -139,6 +144,7 @@ pub fn run() {
             mcp::mcp_save,
             commands::set_hotkey,
             commands::set_use_gpu,
+            commands::grant_paste_permission,
             onboarding::onboarding_status,
             onboarding::retry_onboarding_startup,
             onboarding::retry_model_loading,
@@ -161,6 +167,11 @@ pub fn run() {
             let data_dir = settings::app_data_dir();
             std::fs::create_dir_all(&data_dir)?;
             let models_dir = settings::models_dir(&data_dir);
+            #[cfg(target_os = "linux")]
+            {
+                wayland_paste::init(&data_dir);
+                std::thread::Builder::new().name("kwin-focus".into()).spawn(kwin::init)?;
+            }
             let manifest = Manifest::bundled();
             let (loaded, startup_error) = onboarding::initialize(&data_dir, &manifest, &models_dir);
             if let Some(error) = &startup_error {
@@ -224,6 +235,27 @@ pub fn run() {
                 remote: remote::RemoteState::default(),
                 modifier_hook: Default::default(),
             });
+            #[cfg(target_os = "linux")]
+            {
+                let permission_app = handle.clone();
+                std::thread::Builder::new().name("restore-paste-permission".into()).spawn(move || {
+                    let result = (|| {
+                        if wayland_paste::applies() && wayland_paste::has_saved_permission()? {
+                            let closed_app = permission_app.clone();
+                            wayland_paste::grant(move || {
+                                let state = closed_app.state::<AppState>();
+                                onboarding::invalidate(&state, Some("Automatic paste permission was closed. Grant permission and try practice again."));
+                                onboarding::notify(&closed_app);
+                            })?;
+                        }
+                        Ok::<_, String>(())
+                    })();
+                    if let Err(e) = result {
+                        log::warn!("could not restore paste permission: {e}");
+                    }
+                    onboarding::notify(&permission_app);
+                })?;
+            }
             if !onboarding::required(&app.state::<AppState>()) {
                 let _ = mcp::reload(&app.state::<AppState>());
             }
@@ -262,7 +294,12 @@ pub fn run() {
         .expect("error while building Promptify")
         .run(|_, event| match event {
             tauri::RunEvent::ExitRequested { code, .. } => log::info!("desktop exit requested: code={code:?}"),
-            tauri::RunEvent::Exit => log::info!("desktop event loop exited"),
+            tauri::RunEvent::Exit => {
+                #[cfg(target_os = "linux")]
+                wayland_paste::shutdown();
+                system_context::shutdown();
+                log::info!("desktop event loop exited")
+            }
             _ => {}
         });
 }

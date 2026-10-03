@@ -17,6 +17,8 @@ use crate::audio::{LiveAudio, Recording};
 pub enum Command {
     Press(Mode),
     Release(Mode),
+    HoldPress(Mode),
+    HoldRelease(Mode),
     Cancel,
 }
 
@@ -154,6 +156,16 @@ impl Worker {
     fn handle(&mut self, command: Command) {
         let now = Instant::now();
         match command {
+            Command::HoldPress(mode) => {
+                if let GestureAction::Start(mode) = self.gesture.hold_press(mode) {
+                    self.start(mode);
+                }
+            }
+            Command::HoldRelease(mode) => {
+                if self.gesture.hold_release(mode) == GestureAction::Stop {
+                    self.stop();
+                }
+            }
             Command::Press(mode) => match self.gesture.press(mode, now) {
                 GestureAction::Start(mode) => self.start(mode),
                 GestureAction::Stop => self.stop(),
@@ -172,6 +184,18 @@ impl Worker {
         let mut phase = self.phase.lock().unwrap();
         if !matches!(*phase, Phase::Idle) {
             self.gesture.reset();
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if mode != Mode::Answer && let Err(message) = crate::wayland_paste::require_ready() {
+            self.gesture.reset();
+            if crate::onboarding::required(&self.app.state::<crate::AppState>()) {
+                crate::onboarding::record_error(&self.app, &message);
+                crate::tray::show_settings(&self.app);
+            } else {
+                self.show_overlay(None);
+                emit(&self.app, OverlayEvent::Error { message });
+            }
             return;
         }
         let practice = match crate::onboarding::claim_practice(&self.app, mode) {

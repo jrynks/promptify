@@ -45,7 +45,17 @@ x-win = "5.8.0"
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["vulkan"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "remote_desktop", "screencast"] }
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+futures-util = "0.3"
+evdev = "0.13.2"
+x11rb = { version = "0.13.2", features = ["xinput"] }
+zbus = "5.13"
+
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+core-graphics = "0.25.0"
 whisper-rs = { version = "0.16.0", features = ["metal"] }
 
 [target.'cfg(windows)'.dependencies]

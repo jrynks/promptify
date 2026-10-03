@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AppInfo, type EngineStatus, type OnboardingStatus, type OnboardingStep, type PracticeEvent } from "../api";
+import { DesktopIntegration } from "./DesktopIntegration";
 
 const STEPS: { id: OnboardingStep; label: string }[] = [
   { id: "models", label: "Local models" },
@@ -149,7 +150,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
 
   const index = STEPS.findIndex((step) => step.id === status.step);
   const failedLoad = status.speech.state === "error" || status.language.state === "error";
-  const inputReady = info.engines_ready && !!info.input_device && !info.prompt_hotkey_error && !info.hotkeys_paused;
+  const inputReady = info.engines_ready && !!info.input_device && !info.prompt_hotkey_error && !info.hotkeys_paused && info.paste_permission !== "required" && !info.desktop_error;
   const passed = status.practice.phase === "passed";
   const modelReady = info.engines_ready && status.speech.state === "ready" && status.language.state === "ready";
   const active = status.practice.phase === "recording" || status.practice.phase === "processing";
@@ -204,6 +205,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
             {info.hotkeys_paused && <button disabled={busy} onClick={() => void act(api.resumeOnboardingHotkeys)}>Resume shortcuts</button>}
           </div>
           {info.prompt_hotkey_error && <p className="error" role="alert">{info.prompt_hotkey_error}</p>}
+          <DesktopIntegration info={info} onChange={onChange} />
           <div className="tour-actions">
             <button disabled={busy} onClick={() => void act(() => api.setOnboardingStep("models"))}>Back to models</button>
             <button className="primary" disabled={busy || !inputReady} onClick={() => void act(() => api.setOnboardingStep("practice"))}>Continue to practice</button>
@@ -215,6 +217,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
           <p>Choose <strong>Prepare practice</strong>, then press <kbd>{shortcut}</kbd>, say <em>&quot;Write a friendly greeting for a new colleague&quot;</em>, and press the same shortcut again. You can also hold to talk. Press <kbd>Esc</kbd> to cancel.</p>
           <p className="hint">Keep the practice field focused until the prompt appears. This exercise stays local and does not use connected tools or save its text to history.</p>
           {!inputReady && <p role="alert" className="error">The required input or model configuration changed. Go back to check it before trying again.</p>}
+          {(!inputReady && (info.paste_permission === "required" || info.desktop_error)) && <DesktopIntegration info={info} onChange={onChange} />}
           <button disabled={busy || active || !inputReady || !listening} onClick={() => void arm()}>Prepare practice</button>
           <label className="practice-label" htmlFor="setup-practice">Practice field
             <textarea

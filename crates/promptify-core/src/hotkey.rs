@@ -19,6 +19,7 @@ enum State {
     #[default]
     Idle,
     Holding { mode: Mode, since: Instant },
+    HoldOnly { mode: Mode },
     Latched { mode: Mode },
 }
 
@@ -29,6 +30,25 @@ pub struct Gesture {
 }
 
 impl Gesture {
+    /// Modifier-only gestures have already passed their own hold delay; they must never latch.
+    pub fn hold_press(&mut self, mode: Mode) -> GestureAction {
+        if self.state == State::Idle {
+            self.state = State::HoldOnly { mode };
+            GestureAction::Start(mode)
+        } else {
+            GestureAction::Ignore
+        }
+    }
+
+    pub fn hold_release(&mut self, mode: Mode) -> GestureAction {
+        if self.state == (State::HoldOnly { mode }) {
+            self.state = State::Idle;
+            GestureAction::Stop
+        } else {
+            GestureAction::Ignore
+        }
+    }
+
     pub fn press(&mut self, mode: Mode, now: Instant) -> GestureAction {
         match self.state {
             State::Idle => {
@@ -69,6 +89,22 @@ mod tests {
     use super::*;
 
     const LONG: Duration = Duration::from_millis(900);
+
+    #[test]
+    fn modifier_hold_release_never_latches_or_interferes_with_regular_hotkeys() {
+        let now = Instant::now();
+        let mut gesture = Gesture::default();
+        assert_eq!(gesture.hold_press(Mode::Prompt), GestureAction::Start(Mode::Prompt));
+        assert_eq!(gesture.press(Mode::Prompt, now), GestureAction::Ignore);
+        assert_eq!(gesture.release(Mode::Prompt, now), GestureAction::Ignore);
+        assert_eq!(gesture.hold_release(Mode::Prompt), GestureAction::Stop);
+        assert_eq!(gesture.hold_release(Mode::Prompt), GestureAction::Ignore);
+        assert_eq!(gesture.press(Mode::Prompt, now), GestureAction::Start(Mode::Prompt));
+        assert_eq!(gesture.release(Mode::Prompt, now), GestureAction::Latch);
+        assert_eq!(gesture.hold_press(Mode::Prompt), GestureAction::Ignore);
+        assert_eq!(gesture.hold_release(Mode::Prompt), GestureAction::Ignore);
+        assert_eq!(gesture.press(Mode::Prompt, now), GestureAction::Stop);
+    }
 
     #[test]
     fn hold_then_release_stops() {

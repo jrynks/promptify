@@ -36,6 +36,12 @@ function fixture(ready = false): Fixture {
       engines_ready: ready, models_installed: ready, engine_error: null,
       history_enabled: true, data_dir: "isolated-test-data", use_gpu: true, gpu_device: null,
       modifier_hold: false, auto_mode: false, vocabulary: { words: [], replacements: [] }, screen_text_apps: [],
+      modifier_hold_error: null,
+      modifier_hold_requested: false,
+      modifier_keyboard: null,
+      modifier_keyboard_devices: [],
+      paste_permission: "not_needed",
+      desktop_error: null,
     },
     status: {
       required: true, step: "models",
@@ -80,6 +86,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
     const savedStep = sessionStorage.getItem("test.setup.step");
     if (savedStep === "models" || savedStep === "input" || savedStep === "practice") initial.status.step = savedStep;
     if (sessionStorage.getItem("test.setup.complete") === "true") initial.status.required = false;
+    initial.info.modifier_keyboard = sessionStorage.getItem("test.modifier.keyboard") ?? initial.info.modifier_keyboard;
     for (const model of initial.models) {
       if (sessionStorage.getItem(`test.model.${model.id}`) === "true") model.installed = model.selected = true;
     }
@@ -90,6 +97,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
     const persist = () => {
       sessionStorage.setItem("test.setup.step", initial.status.step);
       sessionStorage.setItem("test.setup.complete", String(!initial.status.required));
+      if (initial.info.modifier_keyboard) sessionStorage.setItem("test.modifier.keyboard", initial.info.modifier_keyboard);
       for (const model of initial.models) sessionStorage.setItem(`test.model.${model.id}`, String(model.installed));
     };
     const emit = (event: string, payload: unknown) => {
@@ -148,6 +156,20 @@ async function launch(page: Page, state = fixture(), path = "/") {
             }
             case "plugin:event|unlisten": listeners.delete(Number(args.eventId)); return;
             case "app_info": return structuredClone(initial.info);
+            case "grant_paste_permission":
+              initial.info.paste_permission = "granted";
+              changed();
+              return;
+            case "set_modifier_hold":
+              initial.info.modifier_hold = args.enabled === true;
+              initial.info.modifier_hold_requested = args.enabled === true;
+              initial.info.modifier_hold_error = null;
+              changed();
+              return;
+            case "set_modifier_keyboard":
+              initial.info.modifier_keyboard = String(args.path);
+              changed();
+              return;
             case "onboarding_status": return structuredClone(initial.status);
             case "list_models": return structuredClone(initial.models);
             case "list_profiles":
@@ -358,6 +380,128 @@ test("missing microphone, paused shortcuts, and shortcut collisions block practi
   await page.getByRole("button", { name: "Change", exact: true }).click();
   await page.locator("input.capture").press("Control+Alt+P");
   await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
+});
+
+test("Wayland permission gates practice and can be granted", async ({ page }) => {
+  const state = fixture(true);
+  state.status.step = "input";
+  state.info.paste_permission = "required";
+  await launch(page, state);
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
+  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await expect(page.getByText("Automatic paste: keyboard permission is active.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
+});
+
+test("denied paste permission is explicit and retryable", async ({ page }) => {
+  const state = fixture(true);
+  state.status.step = "input";
+  state.info.paste_permission = "required";
+  state.failures.grant_paste_permission = "Paste permission was not granted";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Paste permission was not granted" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
+  await page.evaluate(() => { delete window.onboardingTest.state.failures.grant_paste_permission; });
+  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
+});
+
+test("unknown desktop focus blocks practice even with permission", async ({ page }) => {
+  const state = fixture(true);
+  state.status.step = "input";
+  state.info.paste_permission = "granted";
+  state.info.desktop_error = "KDE window tracking unavailable: KWin did not return a focus snapshot";
+  await launch(page, state);
+  await expect(page.getByRole("alert").filter({ hasText: state.info.desktop_error })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
+});
+
+test("permission loss during practice offers recovery without skipping verification", async ({ page }) => {
+  await launchPractice(page);
+  await page.evaluate(() => {
+    window.onboardingTest.state.info.paste_permission = "required";
+    window.onboardingTest.change({});
+  });
+  await expect(page.getByRole("button", { name: "Prepare practice" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
+  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await expect(page.getByRole("button", { name: "Prepare practice" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
+});
+
+test("configured users can recover paste permission in General Settings", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.paste_permission = "required";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await expect(page.getByText("Automatic paste: keyboard permission is active.")).toBeVisible();
+});
+
+test("Ctrl+Shift hold can be enabled and disabled outside Windows", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  const checkbox = page.getByRole("checkbox", { name: /Also start a prompt by holding/ });
+  await checkbox.check();
+  await expect(checkbox).toBeChecked();
+  expect(await page.evaluate(() => window.onboardingTest.state.info.modifier_hold)).toBe(true);
+  await checkbox.uncheck();
+  await expect(checkbox).not.toBeChecked();
+});
+
+test("Wayland Ctrl+Shift monitors an explicitly selected keyboard only", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.modifier_keyboard_devices = [
+    { path: "/dev/input/by-id/keyboard-event-kbd", name: "Physical keyboard" },
+    { path: "/dev/input/by-id/consumer-event-kbd", name: "Consumer controls" },
+  ];
+  await launch(page, state);
+  await page.getByRole("combobox", { name: "Ctrl+Shift keyboard" }).selectOption("/dev/input/by-id/keyboard-event-kbd");
+  expect(await page.evaluate(() => window.onboardingTest.state.info.modifier_keyboard)).toBe("/dev/input/by-id/keyboard-event-kbd");
+  await page.getByRole("checkbox", { name: /Also start a prompt by holding/ }).check();
+  await expect(page.getByRole("checkbox", { name: /Also start a prompt by holding/ })).toBeChecked();
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Ctrl+Shift keyboard" })).toHaveValue("/dev/input/by-id/keyboard-event-kbd");
+});
+
+test("Ctrl+Shift permission denial stays explicit and retryable", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.failures.set_modifier_hold = "Ctrl+Shift on Wayland needs read permission for keyboard SteelSeries";
+  await launch(page, state);
+  await page.getByRole("checkbox", { name: /Also start a prompt by holding/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "needs read permission" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /Also start a prompt by holding/ })).not.toBeChecked();
+  await page.evaluate(() => { delete window.onboardingTest.state.failures.set_modifier_hold; });
+  await page.getByRole("checkbox", { name: /Also start a prompt by holding/ }).check();
+  await expect(page.getByRole("checkbox", { name: /Also start a prompt by holding/ })).toBeChecked();
+});
+
+test("Ctrl+Shift runtime failure offers retry and preserves the requested setting", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.modifier_hold_requested = true;
+  state.info.modifier_hold_error = "The keyboard devices changed. Retry Ctrl+Shift monitoring in Settings.";
+  await launch(page, state);
+  await expect(page.getByRole("checkbox", { name: /Also start a prompt by holding/ })).toBeChecked();
+  await expect(page.getByRole("alert").filter({ hasText: "keyboard devices changed" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry Ctrl+Shift monitoring" }).click();
+  await expect(page.getByRole("button", { name: "Retry Ctrl+Shift monitoring" })).toHaveCount(0);
+  expect(await page.evaluate(() => window.onboardingTest.state.info.modifier_hold)).toBe(true);
+});
+
+test("Ctrl+Shift saved startup failure can be disabled instead of retried", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.modifier_hold_requested = true;
+  state.info.modifier_hold_error = "Input Monitoring permission is required";
+  await launch(page, state);
+  await page.getByRole("checkbox", { name: /Also start a prompt by holding/ }).uncheck();
+  await expect(page.getByRole("button", { name: "Retry Ctrl+Shift monitoring" })).toHaveCount(0);
+  expect(await page.evaluate(() => window.onboardingTest.state.info.modifier_hold_requested)).toBe(false);
 });
 
 test("typing and a native result without a paste cannot complete practice", async ({ page }) => {
