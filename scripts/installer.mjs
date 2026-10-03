@@ -21,15 +21,14 @@ if (!bundles) {
 env.GGML_NATIVE = "OFF";
 if (process.platform === "linux") env.NO_STRIP = "1";
 
-run("cargo", ["build", "--locked", "--release", "-p", "promptify-llm", "-p", "promptify", "--bin", "promptify-cli", "--bin", "promptify-llm", "--features", "promptify/custom-protocol"], { retries: 2 });
+run("cargo", ["build", "--locked", "--release", "-p", "promptify-llm"], { retries: 2 });
 
 // Tauri installs sidecars next to the app without the target suffix, where `worker_exe()` looks.
 // Tauri resolves the path from src-tauri and drops drive letters, so it is staged there.
 const staging = join(root, "src-tauri", "binaries");
 mkdirSync(staging, { recursive: true });
 copyFileSync(join(env.CARGO_TARGET_DIR, "release", `promptify-llm${exe}`), join(staging, `promptify-llm-${triple}${exe}`));
-copyFileSync(join(env.CARGO_TARGET_DIR, "release", `promptify-cli${exe}`), join(staging, `promptify-cli-${triple}${exe}`));
-const config = { bundle: { externalBin: ["binaries/promptify-llm", "binaries/promptify-cli"], resources: {} } };
+const config = { bundle: { externalBin: ["binaries/promptify-llm"], resources: {} } };
 if (process.platform === "linux") {
   config.bundle.linux = {
     deb: { depends: ["libc6 (>= 2.35)", "libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1", "libasound2", "libvulkan1", "libgomp1", "libxdo3", "libxtst6", "libxi6", "libxkbcommon0"] },
@@ -60,5 +59,8 @@ if (process.platform === "win32") {
 }
 
 // The tauri crate is 2.12 but npm has no @tauri-apps/api 2.12 yet; dev builds run this same pair.
-run(process.execPath, [tauriCli, "build", "--bundles", bundles, "--ignore-version-mismatches", "--config", JSON.stringify(config), ...process.argv.slice(2), "--", "--locked"]);
+run(process.execPath, [tauriCli, "build", "--no-bundle", "--ignore-version-mismatches", "--config", JSON.stringify(config), ...process.argv.slice(2), "--", "--locked"]);
+// Tauri builds and bundles the CLI automatically; snapshot that final build for verification.
+copyFileSync(join(env.CARGO_TARGET_DIR, "release", `promptify-cli${exe}`), join(staging, `promptify-cli-${triple}${exe}`));
+run(process.execPath, [tauriCli, "bundle", "--bundles", bundles, "--config", JSON.stringify(config), ...process.argv.slice(2)]);
 console.log(`Installers: ${join(env.CARGO_TARGET_DIR, "release", "bundle")}`);

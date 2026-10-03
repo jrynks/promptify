@@ -57,6 +57,10 @@ The installer:
 - installs the required Visual C++ and OpenMP runtime files alongside the app; and
 - downloads Microsoft WebView2 if it is not already installed.
 
+Install an up-to-date graphics driver that provides the Vulkan runtime. Even when loading models
+on the CPU, the Windows binaries require the Vulkan loader; the installer does not redistribute
+or replace your graphics driver. A Vulkan SDK is not needed to run the app.
+
 ### Linux
 
 Linux packages are built on Ubuntu 22.04 (glibc 2.35) for x86-64 PCs with AVX2, without requiring a source
@@ -157,7 +161,7 @@ and `C:\ptb` on Windows). Both the worker and CLI are staged as sidecars next to
 executable. Linux release packages must be built on Ubuntu 22.04 or an equally old compatible
 build environment, not a newer Fedora host, to retain the glibc 2.35 baseline.
 
-The **Build installers** GitHub Actions workflow builds and verifies Windows and Linux packages
+The **Installers** GitHub Actions workflow builds and verifies Windows and Linux packages
 from the selected ref, and uploads artifacts for inspection. It does not publish a release
 automatically. Publish only artifacts from the same source commit as the release tag, with a
 combined SHA-256 checksum file.
