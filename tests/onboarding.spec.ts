@@ -36,6 +36,7 @@ function fixture(ready = false): Fixture {
       engines_ready: ready, models_installed: ready, engine_error: null,
       history_enabled: true, data_dir: "isolated-test-data", use_gpu: true, gpu_device: null,
       modifier_hold: false, auto_mode: false, vocabulary: { words: [], replacements: [] }, screen_text_apps: [],
+      code_chat_paste: false,
       modifier_hold_error: null,
       modifier_hold_requested: false,
       modifier_keyboard: null,
@@ -49,8 +50,8 @@ function fixture(ready = false): Fixture {
       startup_error: null, practice: { phase: null, attempt_id: null, job_id: null, error: null },
     },
     models: [
-      { id: "whisper-small-en", kind: "stt", tier: "balanced", display_name: "Whisper small English", size_bytes: 487614201, license: "mit", min_ram_gb: 4, installed: ready, selected: ready, downloading: false, partial_bytes: 0 },
-      { id: "qwen3.5-4b-q4km", kind: "llm", tier: "balanced", display_name: "Qwen3.5 4B", size_bytes: 3013027808, license: "apache-2.0", min_ram_gb: 8, installed: ready, selected: ready, downloading: false, partial_bytes: 0 },
+      { id: "whisper-small-en", kind: "stt", tier: "balanced", display_name: "Whisper small English", size_bytes: 487614201, license: "mit", min_ram_gb: 4, compatibility: { supported: true, total_ram_bytes: 8_000_000_000, reason: null }, installed: ready, selected: ready, downloading: false, partial_bytes: 0 },
+      { id: "qwen3.5-4b-q4km", kind: "llm", tier: "balanced", display_name: "Qwen3.5 4B", size_bytes: 3013027808, license: "apache-2.0", min_ram_gb: 8, compatibility: { supported: true, total_ram_bytes: 8_000_000_000, reason: null }, installed: ready, selected: ready, downloading: false, partial_bytes: 0 },
     ],
     failures: {},
     catalog: {
@@ -86,6 +87,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
     const savedStep = sessionStorage.getItem("test.setup.step");
     if (savedStep === "models" || savedStep === "input" || savedStep === "practice") initial.status.step = savedStep;
     if (sessionStorage.getItem("test.setup.complete") === "true") initial.status.required = false;
+    initial.info.code_chat_paste = sessionStorage.getItem("test.code.chat.paste") === "true";
     initial.info.modifier_keyboard = sessionStorage.getItem("test.modifier.keyboard") ?? initial.info.modifier_keyboard;
     for (const model of initial.models) {
       if (sessionStorage.getItem(`test.model.${model.id}`) === "true") model.installed = model.selected = true;
@@ -158,6 +160,11 @@ async function launch(page: Page, state = fixture(), path = "/") {
             case "app_info": return structuredClone(initial.info);
             case "grant_paste_permission":
               initial.info.paste_permission = "granted";
+              changed();
+              return;
+            case "set_code_chat_paste":
+              initial.info.code_chat_paste = args.enabled === true;
+              sessionStorage.setItem("test.code.chat.paste", String(initial.info.code_chat_paste));
               changed();
               return;
             case "set_modifier_hold":
@@ -315,6 +322,78 @@ async function launchPractice(page: Page) {
   await page.getByRole("button", { name: "Prepare practice" }).click();
   await expect(page.locator("#setup-practice")).toBeFocused();
 }
+
+test("models below minimum RAM are grayed out without hiding compatible models", async ({ page }) => {
+  const state = fixture();
+  state.models[1].compatibility = {
+    supported: false, total_ram_bytes: 4_000_000_000,
+    reason: "Below minimum RAM: requires 8 GB; this computer has 4.0 GB.",
+  };
+  await launch(page, state);
+  const unsupported = page.getByRole("row").filter({ hasText: "Qwen3.5 4B" });
+  const supported = page.getByRole("row").filter({ hasText: "Whisper small English" });
+  await expect(unsupported).toHaveClass(/model-unsupported/);
+  await expect(unsupported).toContainText("requires 8 GB");
+  await expect(unsupported.getByText("Recommended")).toHaveCount(0);
+  await expect(supported).not.toHaveClass(/model-unsupported/);
+  await expect(supported).toBeVisible();
+  expect(await unsupported.evaluate((element) => getComputedStyle(element).color))
+    .not.toBe(await supported.evaluate((element) => getComputedStyle(element).color));
+  await expect(unsupported.getByRole("button", { name: /Download/ })).toBeEnabled();
+});
+
+test("code chat automatic paste consent is explicit, remembered and reversible", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  const consent = page.getByRole("checkbox", { name: "Allow automatic prompt paste in VS Code and Cursor AI chat" });
+  await expect(consent).not.toBeChecked();
+  await expect(page.getByText("Promptify cannot distinguish it from an editor", { exact: false })).toBeVisible();
+  await consent.check();
+  await page.reload();
+  await expect(consent).toBeChecked();
+  await consent.uncheck();
+  await page.reload();
+  await expect(consent).not.toBeChecked();
+});
+
+test("unknown hardware compatibility stays visible and reports detection failure", async ({ page }) => {
+  const state = fixture();
+  for (const model of state.models) {
+    model.compatibility = { supported: null, total_ram_bytes: null, reason: "Could not detect total system RAM; model compatibility is unknown." };
+  }
+  await launch(page, state);
+  await expect(page.getByRole("row").filter({ hasText: "Qwen3.5 4B" })).not.toHaveClass(/model-unsupported/);
+  await expect(page.getByText("Could not detect total system RAM", { exact: false })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Download 3.0 GB" })).toBeEnabled();
+});
+
+test("model recommendations fall back to a compatible small model without a GPU", async ({ page }) => {
+  const state = fixture();
+  state.info.use_gpu = false;
+  state.models[1].compatibility = { supported: false, total_ram_bytes: 4_000_000_000, reason: "Below minimum RAM: requires 8 GB; this computer has 4.0 GB." };
+  state.models.push({
+    ...state.models[1], id: "small-writer", tier: "small", display_name: "Small writer", min_ram_gb: 4,
+    compatibility: { supported: true, total_ram_bytes: 4_000_000_000, reason: null },
+  });
+  await launch(page, state);
+  const small = page.getByRole("row").filter({ hasText: "Small writer" });
+  await expect(small).toContainText("Recommended");
+  await expect(small).not.toHaveClass(/model-unsupported/);
+  await expect(small.getByRole("button", { name: /Download/ })).toBeEnabled();
+});
+
+test("installed unsupported models retain selection and deletion controls", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.models[1].compatibility = { supported: false, total_ram_bytes: 4_000_000_000, reason: "Below minimum RAM: requires 8 GB; this computer has 4.0 GB." };
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  const row = page.getByRole("row").filter({ hasText: "Qwen3.5 4B" });
+  await expect(row).toHaveClass(/model-unsupported/);
+  await expect(row.getByRole("radio")).toBeChecked();
+  await expect(row.getByRole("button", { name: "Delete", exact: true })).toBeEnabled();
+});
 
 test("fresh setup overrides remembered tabs and excludes optional features", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("promptify.settings.pane", "advanced"));

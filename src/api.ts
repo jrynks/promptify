@@ -111,6 +111,7 @@ export interface AppInfo {
   modifier_keyboard: string | null;
   modifier_keyboard_devices: { path: string; name: string }[];
   auto_mode: boolean;
+  code_chat_paste: boolean;
   vocabulary: Vocabulary;
   screen_text_apps: string[];
   paste_permission: "not_needed" | "granted" | "required";
@@ -148,6 +149,11 @@ export interface ModelStatus {
   size_bytes: number;
   license: string;
   min_ram_gb: number;
+  compatibility: {
+    supported: boolean | null;
+    total_ram_bytes: number | null;
+    reason: string | null;
+  };
   installed: boolean;
   selected: boolean;
   downloading: boolean;
@@ -294,6 +300,7 @@ export const api = {
   setModifierHold: (enabled: boolean) => invoke<void>("set_modifier_hold", { enabled }),
   setModifierKeyboard: (path: string) => invoke<void>("set_modifier_keyboard", { path }),
   setAutoMode: (enabled: boolean) => invoke<void>("set_auto_mode", { enabled }),
+  setCodeChatPaste: (enabled: boolean) => invoke<void>("set_code_chat_paste", { enabled }),
   setVocabulary: (vocabulary: Vocabulary) => invoke<Vocabulary>("set_vocabulary", { vocabulary }),
   setScreenTextApps: (apps: string[]) => invoke<void>("set_screen_text_apps", { apps }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),

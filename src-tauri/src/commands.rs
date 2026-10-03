@@ -49,6 +49,7 @@ pub struct AppInfo {
     modifier_keyboard: Option<String>,
     modifier_keyboard_devices: Vec<crate::modifier_hook::KeyboardDevice>,
     auto_mode: bool,
+    code_chat_paste: bool,
     vocabulary: promptify_core::dictation::Vocabulary,
     screen_text_apps: Vec<String>,
     /// Wayland only: whether the one-time remote-input permission for pasting was granted.
@@ -122,6 +123,7 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         modifier_keyboard: settings.modifier_keyboard.clone(),
         modifier_keyboard_devices,
         auto_mode: settings.auto_mode,
+        code_chat_paste: settings.code_chat_paste,
         vocabulary: settings.vocabulary.clone(),
         screen_text_apps: settings.screen_text_apps.clone(),
         paste_permission: paste_permission(),
@@ -138,6 +140,7 @@ pub struct ModelStatus {
     size_bytes: u64,
     license: String,
     min_ram_gb: u32,
+    compatibility: crate::hardware::ModelCompatibility,
     installed: bool,
     selected: bool,
     downloading: bool,
@@ -160,6 +163,7 @@ pub fn list_models(state: State<'_, AppState>) -> Vec<ModelStatus> {
             size_bytes: e.size_bytes,
             license: e.license.clone(),
             min_ram_gb: e.min_ram_gb,
+            compatibility: crate::hardware::model_compatibility(e.min_ram_gb),
             installed: is_installed(&state.models_dir, e),
             selected: [&settings.stt_model, &settings.llm_model].iter().any(|s| s.as_deref() == Some(e.id.as_str())),
             downloading: active.contains(&e.id),
@@ -321,6 +325,7 @@ pub fn set_modifier_keyboard(app: AppHandle, state: State<'_, AppState>, path: S
 /// Pushes the text-related settings into the pipeline; called at startup and after each change.
 pub fn apply_text_settings(orchestrator: &promptify_core::pipeline::Orchestrator, settings: &settings::AppSettings) {
     orchestrator.set_auto_mode(settings.auto_mode);
+    orchestrator.set_code_chat_paste(settings.code_chat_paste);
     orchestrator.service().set_vocabulary(settings.vocabulary.clone());
     let apps = settings.screen_text_apps.iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect();
     orchestrator.set_policy(promptify_core::context::ContextPolicy { surrounding_text_apps: apps, ..Default::default() });
@@ -336,6 +341,13 @@ fn update_text_settings(state: &AppState, change: impl FnOnce(&mut settings::App
 #[tauri::command]
 pub fn set_auto_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     update_text_settings(&state, |s| s.auto_mode = enabled)
+}
+
+#[tauri::command]
+pub fn set_code_chat_paste(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    settings::update(&state.settings, &state.data_dir, |settings| settings.code_chat_paste = enabled)?;
+    state.orchestrator.set_code_chat_paste(enabled);
+    Ok(())
 }
 
 #[tauri::command]

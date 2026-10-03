@@ -306,6 +306,7 @@ pub struct Orchestrator {
     busy: Arc<AtomicBool>,
     next_id: AtomicU64,
     auto_mode: AtomicBool,
+    code_chat_paste: AtomicBool,
     rendering: std::sync::RwLock<Rendering>,
     next_routing: std::sync::Mutex<Option<RoutingOptions>>,
 }
@@ -325,6 +326,7 @@ impl Orchestrator {
             busy: Arc::default(),
             next_id: AtomicU64::new(1),
             auto_mode: AtomicBool::new(false),
+            code_chat_paste: AtomicBool::new(false),
             rendering: Default::default(),
             next_routing: Default::default(),
         }
@@ -333,6 +335,10 @@ impl Orchestrator {
     /// With automatic mode on, the prompt hotkey writes plain dictation outside AI apps.
     pub fn set_auto_mode(&self, enabled: bool) {
         self.auto_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_code_chat_paste(&self, enabled: bool) {
+        self.code_chat_paste.store(enabled, Ordering::SeqCst);
     }
 
     pub fn set_rendering(&self, rendering: Rendering) {
@@ -389,11 +395,20 @@ impl Orchestrator {
         } else {
             None
         };
-        let routing = if mode == Mode::Prompt && options.use_personal_context {
+        let mut routing = if mode == Mode::Prompt && options.use_personal_context {
             self.next_routing.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_else(|| self.routing_options())
         } else {
             RoutingOptions::default()
         };
+        let profile = self.profiles().resolve(&target);
+        if routing.rendering == Rendering::Adaptive
+            && routing.surface.is_none()
+            && self.code_chat_paste.load(Ordering::SeqCst)
+            && ["vscode", "cursor"].contains(&profile.id.as_str())
+            && profile.directly_matches(&target)
+        {
+            routing.surface = Some(crate::routing::Surface::CodeChat);
+        }
         Ok(Job {
             id: self.next_id.fetch_add(1, Ordering::SeqCst),
             mode,
@@ -500,7 +515,10 @@ impl Orchestrator {
         on_event(JobEvent::Stage(Stage::Inserting));
         match self.context.foreground() {
             Ok(window) if window == job.target.window => {}
-            Ok(_) => return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: None },
+            Ok(window) => {
+                log::warn!("paste focus changed: target={:?}, foreground={window:?}", job.target.window);
+                return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: None };
+            }
             Err(err) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(err.0) },
         }
         if job.routing.rendering == Rendering::Adaptive {
@@ -790,6 +808,46 @@ mod tests {
         assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         assert!(h.generator.calls.lock().unwrap().is_empty());
         assert!(run(&h, Mode::Prompt).routing.is_none(), "the one-shot override was consumed exactly once");
+    }
+
+    #[test]
+    fn remembered_code_chat_consent_enables_paste_only_in_matching_apps() {
+        for process in ["code", "cursor"] {
+            let ctx = ActiveContext {
+                window: TARGET, process_name: process.into(),
+                window_title: "Promptify - Agents - Visual Studio Code".into(), url: None,
+            };
+            let h = harness(ctx, "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+            h.orchestrator.set_rendering(Rendering::Adaptive);
+            assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+            h.orchestrator.set_code_chat_paste(true);
+            assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { .. }));
+            assert_eq!(inserts(&h), 1);
+            h.orchestrator.set_code_chat_paste(false);
+            assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+        }
+        let ctx = ActiveContext { window: TARGET, process_name: "excel.exe".into(), ..Default::default() };
+        let h = harness(ctx, "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        h.orchestrator.set_code_chat_paste(true);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+        assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn code_chat_consent_preserves_explicit_surface_and_focus_checks() {
+        let ctx = ActiveContext { window: TARGET, process_name: "code".into(), ..Default::default() };
+        let h = harness(ctx, "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        h.orchestrator.set_code_chat_paste(true);
+        h.orchestrator.queue_routing(RoutingOptions {
+            rendering: Rendering::Adaptive, surface: Some(crate::routing::Surface::Literal), ..Default::default()
+        }).unwrap();
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        *h.context.foreground.lock().unwrap() = Some(WindowIdentity { handle: 999, process_id: 999 });
+        assert!(matches!(h.orchestrator.finish(job, &[], &mut |_| {}).outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, .. }));
+        assert_eq!(inserts(&h), 0);
     }
 
     #[test]
