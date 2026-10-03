@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { findInstallers, smokeCli, verifyInstallers, verifyPayload as verify } from "./verify-installers.mjs";
+import { createHash } from "node:crypto";
+import { excerpt, expectedVersion, findInstallers, installerVersion, smokeCli, verifyInstallers, verifyPayload as verify, verifyRpmExtraction } from "./verify-installers.mjs";
 
 const windowsTriple = "x86_64-pc-windows-msvc";
 const linuxTriple = "x86_64-unknown-linux-gnu";
@@ -128,4 +129,38 @@ test("packaged CLI smoke uses isolated data and requires every bundled model", {
   assert.equal(smokeCli(cli, join(root, "smoke")).models, manifest.models.length);
   writeFileSync(cli, "#!/bin/sh\necho 'models folder: elsewhere'\n");
   assert.throws(() => smokeCli(cli, join(root, "smoke")), /did not list model/);
+});
+
+test("tool output in errors and reports stays bounded", () => {
+  const huge = Buffer.alloc(200 * 1024 * 1024, 0);
+  const text = excerpt(huge);
+  assert.ok(text.length <= 8 * 1024 + 64);
+  assert.doesNotThrow(() => JSON.stringify({ error: excerpt("x".repeat(10_000_000), 32 * 1024) }));
+});
+
+test("RPM extraction is checked against manifest sizes, digests and links", { skip: process.platform === "win32" }, (t) => {
+  const { root } = fixture(t);
+  const destination = join(root, "rpm");
+  mkdirSync(join(destination, "usr", "bin"), { recursive: true });
+  writeFileSync(join(destination, "usr", "bin", "promptify-cli"), "cli");
+  symlinkSync("promptify-cli", join(destination, "usr", "bin", "cli-link"));
+  const digest = createHash("sha256").update("cli").digest("hex");
+  const dump = [
+    "/usr/bin 0 0 0000000000000000000000000000000000000000000000000000000000000000 040755 root root 0 0 0 X",
+    `/usr/bin/promptify-cli 3 0 ${digest} 0100755 root root 0 0 0 X`,
+    "/usr/bin/cli-link 13 0 0000000000000000000000000000000000000000000000000000000000000000 0120777 root root 0 0 0 promptify-cli",
+  ].join("\n");
+  assert.equal(verifyRpmExtraction(dump, destination), 1);
+  writeFileSync(join(destination, "usr", "bin", "promptify-cli"), "CLI");
+  assert.throws(() => verifyRpmExtraction(dump, destination), /digest differs/);
+  rmSync(join(destination, "usr", "bin", "promptify-cli"));
+  assert.throws(() => verifyRpmExtraction(dump, destination), /was not extracted/);
+});
+
+test("installer versions come from one agreed source version", () => {
+  const version = expectedVersion();
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.equal(installerVersion("nsis", `C:/x/Promptify_${version}_x64-setup.exe`, true), version);
+  assert.equal(installerVersion("appimage", `/x/Promptify_${version}_amd64.AppImage`, false), version);
+  assert.throws(() => installerVersion("appimage", "/x/Promptify.AppImage", false), /Cannot read version/);
 });

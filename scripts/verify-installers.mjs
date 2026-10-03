@@ -3,18 +3,84 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeDlls = ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"];
 
+const OUTPUT_LIMIT = 8 * 1024;
+
+// Keeps errors and verification.json bounded even if a tool prints binary data.
+export function excerpt(value, limit = OUTPUT_LIMIT) {
+  const text = Buffer.isBuffer(value) ? value.subarray(-limit).toString("utf8") : String(value ?? "");
+  return text.length > limit ? `...[${text.length - limit} characters omitted]\n${text.slice(-limit)}` : text;
+}
+
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", maxBuffer: 512 * 1024 * 1024, ...options });
-  if (result.error) throw result.error;
-  assert.equal(result.status, 0, `${command} ${args.join(" ")} failed:\n${result.stderr?.toString()}\n${result.stdout?.toString()}`);
+  const result = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+  if (result.error) throw new Error(`${command} could not start: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} exited ${result.status ?? result.signal}\nstderr:\n${excerpt(result.stderr)}\nstdout:\n${excerpt(result.stdout)}`);
+  }
   return result.stdout;
+}
+
+// Streams through files and descriptors so large payloads are never buffered by Node.
+function runToFile(command, args, outputPath) {
+  const output = openSync(outputPath, "w");
+  try {
+    const result = spawnSync(command, args, { stdio: ["ignore", output, "pipe"], maxBuffer: OUTPUT_LIMIT * 8 });
+    if (result.error) throw new Error(`${command} could not start: ${result.error.message}`);
+    return { status: result.status, signal: result.signal, stderr: excerpt(result.stderr) };
+  } finally {
+    closeSync(output);
+  }
+}
+
+function runFromFile(command, args, inputPath, cwd) {
+  const input = openSync(inputPath, "r");
+  try {
+    const result = spawnSync(command, args, { cwd, stdio: [input, "ignore", "pipe"], maxBuffer: OUTPUT_LIMIT * 8 });
+    if (result.error) throw new Error(`${command} could not start: ${result.error.message}`);
+    if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} exited ${result.status ?? result.signal}\nstderr:\n${excerpt(result.stderr)}`);
+  } finally {
+    closeSync(input);
+  }
+}
+
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+// rpm 4.17's rpm2cpio can exit 1 after writing a complete archive, so the RPM's
+// own file manifest and SHA-256 digests decide whether extraction was complete.
+export function verifyRpmExtraction(dump, destination) {
+  const entries = dump.trim().split("\n").filter(Boolean);
+  assert.ok(entries.length > 0, "RPM file manifest is empty");
+  let files = 0;
+  for (const line of entries) {
+    const fields = line.split(" ");
+    assert.ok(fields.length >= 11, `Unexpected RPM manifest entry: ${excerpt(line, 512)}`);
+    const tail = fields.slice(-10);
+    const path = fields.slice(0, -10).join(" ");
+    const [size, , digest, mode, , , , , , link] = tail;
+    const extracted = join(destination, path.replace(/^\/+/, ""));
+    const type = Number.parseInt(mode, 8) & 0o170000;
+    if (type === 0o040000) {
+      assert.ok(existsSync(extracted) && lstatSync(extracted).isDirectory(), `RPM directory was not extracted: ${path}`);
+    } else if (type === 0o120000) {
+      assert.equal(readlinkSync(extracted), link, `RPM symlink was not extracted: ${path}`);
+    } else {
+      assert.equal(type, 0o100000, `Unsupported RPM file type for ${path}`);
+      assert.ok(existsSync(extracted) && lstatSync(extracted).isFile(), `RPM file was not extracted: ${path}`);
+      assert.equal(statSync(extracted).size, Number(size), `RPM file size differs after extraction: ${path}`);
+      assert.equal(sha256(extracted), digest, `RPM file digest differs after extraction: ${path}`);
+      files++;
+    }
+  }
+  return files;
 }
 
 function filesUnder(directory) {
@@ -27,9 +93,8 @@ function filesUnder(directory) {
 }
 
 function sameBytes(actual, expected) {
-  const hash = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
   assert.ok(existsSync(expected), `Missing staged reference: ${expected}`);
-  assert.equal(hash(actual), hash(expected), `Packaged file differs from staged sidecar: ${actual}`);
+  assert.equal(sha256(actual), sha256(expected), `Packaged file differs from staged sidecar: ${actual}`);
 }
 
 export function hostTriple() {
@@ -116,12 +181,35 @@ export function findInstallers(bundle, windows = process.platform === "win32") {
   });
 }
 
+// Every version source must agree, so installers can never mix release numbers.
+export function expectedVersion() {
+  const versions = {
+    "package.json": JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version,
+    "src-tauri/tauri.conf.json": JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8")).version,
+    "Cargo.toml": readFileSync(join(root, "Cargo.toml"), "utf8").match(/^\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/ms)?.[1],
+  };
+  const unique = [...new Set(Object.values(versions))];
+  assert.ok(unique.length === 1 && unique[0], `Version sources disagree: ${JSON.stringify(versions)}`);
+  return unique[0];
+}
+
+export function installerVersion(kind, path, windows = process.platform === "win32") {
+  const name = path.split(/[\\/]/).at(-1);
+  if (kind === "deb") return run("dpkg-deb", ["--field", path, "Version"]).trim();
+  if (kind === "rpm") return run("rpm", ["-qp", "--queryformat", "%{VERSION}", path]).trim();
+  const pattern = kind === "nsis" ? /^Promptify_(.+)_x64-setup\.exe$/i : /^Promptify_(.+)_amd64\.AppImage$/;
+  const version = name.match(pattern)?.[1];
+  assert.ok(version, `Cannot read version from ${windows ? "NSIS" : "AppImage"} file name: ${name}`);
+  return version;
+}
+
 export function verifyInstallers() {
   assert.ok(["linux", "win32"].includes(process.platform), "Only Windows and Linux installers are supported");
   const release = resolve(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "release");
   const bundle = join(release, "bundle");
   const staging = join(root, "src-tauri", "binaries");
   const triple = hostTriple();
+  const version = expectedVersion();
   // Scratch payloads stay inside the project/build tree and are always removed.
   mkdirSync(bundle, { recursive: true });
   const scratch = mkdtempSync(join(bundle, ".verify-"));
@@ -131,6 +219,7 @@ export function verifyInstallers() {
     sourceCommit: process.env.SOURCE_COMMIT ?? run("git", ["rev-parse", "HEAD"], { cwd: root }).trim(),
     platform: process.platform,
     hostTriple: triple,
+    expectedVersion: version,
     node: process.version,
     rust: run("rustc", ["--version"]).trim(),
     installers: [],
@@ -144,22 +233,37 @@ export function verifyInstallers() {
       console.log(`Inspecting ${path}`);
       let payload = destination;
       let metadata = "";
+      const warnings = [];
+      const packageVersion = installerVersion(kind, path);
+      assert.equal(packageVersion, version, `${kind} installer version differs from source version`);
       if (kind === "nsis") {
         run("7z", ["x", "-y", `-o${destination}`, path]);
       } else if (kind === "deb") {
         assert.equal(run("dpkg-deb", ["--field", path, "Architecture"]).trim(), "amd64", "Debian package is not amd64");
-        metadata = run("dpkg-deb", ["--info", path]);
+        metadata = excerpt(run("dpkg-deb", ["--info", path]));
         console.log(metadata);
         run("dpkg-deb", ["--extract", path, destination]);
       } else if (kind === "rpm") {
         assert.equal(run("rpm", ["-qp", "--queryformat", "%{ARCH}", path]).trim(), "x86_64", "RPM is not x86_64");
-        metadata = run("rpm", ["-qp", "--requires", path]);
+        metadata = excerpt(run("rpm", ["-qp", "--requires", path]));
         console.log(metadata);
-        const archive = run("rpm2cpio", [path], { encoding: null });
-        run("cpio", ["--extract", "--make-directories", "--no-absolute-filenames"], { cwd: destination, input: archive });
+        assert.equal(run("rpm", ["-qp", "--queryformat", "%{FILEDIGESTALGO}", path]).trim(), "8", "RPM file digests are not SHA-256");
+        const dump = run("rpm", ["-qp", "--dump", path]);
+        const archive = join(scratch, `${index}.cpio`);
+        const converted = runToFile("rpm2cpio", [path], archive);
+        assert.ok(converted.status === 0 || (converted.status === 1 && !converted.stderr.trim()), `rpm2cpio failed (${converted.status ?? converted.signal}):\n${converted.stderr}`);
+        runFromFile("cpio", ["--extract", "--make-directories", "--no-absolute-filenames", "--quiet"], archive, destination);
+        rmSync(archive);
+        const files = verifyRpmExtraction(dump, destination);
+        if (converted.status === 1) {
+          const warning = `rpm2cpio exited 1 without stderr; accepted only because all ${files} extracted files matched the RPM SHA-256 manifest`;
+          warnings.push(warning);
+          console.warn(process.env.GITHUB_ACTIONS ? `::warning title=rpm2cpio exit status::${warning}` : `WARNING: ${warning}`);
+        }
+        metadata += `\nrpm2cpio exit status: ${converted.status}; verified ${files} files against RPM SHA-256 manifest\n`;
       } else {
         chmodSync(path, statSync(path).mode | 0o111);
-        run(path, ["--appimage-extract"], { cwd: destination });
+        run(path, ["--appimage-extract"], { cwd: destination, stdio: ["ignore", "ignore", "pipe"] });
         payload = join(destination, "squashfs-root");
         assert.ok(existsSync(join(payload, "AppRun")), "AppImage is missing AppRun");
       }
@@ -167,16 +271,18 @@ export function verifyInstallers() {
       report.installers.push({
         file: path.slice(bundle.length + 1).replaceAll("\\", "/"),
         kind,
+        version: packageVersion,
         bytes: statSync(path).size,
-        sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+        sha256: sha256(path),
         metadata,
+        warnings,
         checks,
       });
     }
     report.success = true;
     console.log(`Verified ${installers.length} installer(s); safe to upload.`);
   } catch (error) {
-    report.error = error.stack ?? String(error);
+    report.error = excerpt(error?.stack ?? String(error), 32 * 1024);
     throw error;
   } finally {
     rmSync(scratch, { recursive: true, force: true });

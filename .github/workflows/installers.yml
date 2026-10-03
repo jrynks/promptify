@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR (or ref) supersedes in-flight native builds.
+concurrency:
+  group: installers-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   installers:
     name: ${{ matrix.name }}
