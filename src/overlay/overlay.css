@@ -13,7 +13,7 @@ body.overlay-body {
   padding: 8px;
   width: 100%;
   box-sizing: border-box;
-  --overlay-max-height: 400px;
+  --overlay-max-height: calc(100vh - 16px);
 }
 
 .pill {

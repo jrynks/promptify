@@ -260,6 +260,10 @@ fn require_models(state: &AppState) -> Result<(), String> {
 
 fn configuration(state: &AppState) -> Result<Configuration, String> {
     require_models(state)?;
+    #[cfg(target_os = "linux")]
+    crate::wayland_paste::require_ready()?;
+    use promptify_core::pipeline::ContextProvider;
+    crate::system_context::SystemContext.identify().map_err(|e| e.0)?;
     let models = ModelKey::from(&*state.settings.read().unwrap());
     let hotkeys = state.hotkeys.read().unwrap();
     if hotkeys.paused {

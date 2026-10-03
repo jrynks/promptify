@@ -44,6 +44,8 @@ pub struct AppSettings {
     pub lan_discovery: bool,
     /// Holding Ctrl+Shift alone starts a prompt recording.
     pub modifier_hold: bool,
+    /// Explicitly selected physical keyboard on Wayland; prefer a stable by-id path.
+    pub modifier_keyboard: Option<String>,
     /// The prompt hotkey writes plain dictation in apps that are not AI tools.
     pub auto_mode: bool,
     /// Words to expect and corrections for speech recognition.
@@ -68,6 +70,7 @@ impl Default for AppSettings {
             lan_direct: false,
             lan_discovery: false,
             modifier_hold: false,
+            modifier_keyboard: None,
             auto_mode: false,
             vocabulary: Default::default(),
             screen_text_apps: Vec::new(),
@@ -189,6 +192,19 @@ mod tests {
                 eprintln!("could not clean test directory {}: {error}", self.0.display());
             }
         }
+    }
+
+    #[test]
+    fn modifier_keyboard_defaults_to_unselected_and_survives_reload() {
+        let legacy: AppSettings = serde_json::from_str(r#"{"modifier_hold":true}"#).unwrap();
+        assert!(legacy.modifier_hold);
+        assert!(legacy.modifier_keyboard.is_none());
+        let dir = TestDir::new();
+        let settings: SharedSettings = Arc::new(RwLock::new(legacy));
+        update(&settings, &dir.0, |s| s.modifier_keyboard = Some("/dev/input/by-id/keyboard-event-kbd".into())).unwrap();
+        let loaded = load_checked(&dir.0).unwrap().unwrap();
+        assert_eq!(loaded.modifier_keyboard.as_deref(), Some("/dev/input/by-id/keyboard-event-kbd"));
+        assert!(loaded.modifier_hold);
     }
 
     #[test]

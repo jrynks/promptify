@@ -405,6 +405,7 @@ fn run() -> Result<(), String> {
             std::thread::sleep(Duration::from_secs(3));
             let context = promptify_lib::system_context::SystemContext;
             let target = context.identify().map_err(|e| e.0)?;
+            promptify_lib::system_context::shutdown();
             let started = Instant::now();
             let focused = context.focused_text(&target.window).map_err(|e| e.0)?;
             println!("app={} in {:.0?}", target.app_key(), started.elapsed());

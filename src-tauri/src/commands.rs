@@ -44,14 +44,65 @@ pub struct AppInfo {
     use_gpu: bool,
     gpu_device: Option<String>,
     modifier_hold: bool,
+    modifier_hold_requested: bool,
+    modifier_hold_error: Option<String>,
+    modifier_keyboard: Option<String>,
+    modifier_keyboard_devices: Vec<crate::modifier_hook::KeyboardDevice>,
     auto_mode: bool,
     vocabulary: promptify_core::dictation::Vocabulary,
     screen_text_apps: Vec<String>,
+    /// Wayland only: whether the one-time remote-input permission for pasting was granted.
+    paste_permission: &'static str,
+    desktop_error: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn paste_permission() -> &'static str {
+    match crate::wayland_paste::status() {
+        crate::wayland_paste::PermissionState::NotNeeded => "not_needed",
+        crate::wayland_paste::PermissionState::Granted => "granted",
+        crate::wayland_paste::PermissionState::Required => "required",
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn paste_permission() -> &'static str {
+    "not_needed"
+}
+
+#[tauri::command]
+pub async fn grant_paste_permission(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        let closed_app = app.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || crate::wayland_paste::grant(move || {
+            let state = closed_app.state::<AppState>();
+            onboarding::invalidate(&state, Some("Automatic paste permission was closed. Grant permission and try practice again."));
+            onboarding::notify(&closed_app);
+        })).await.map_err(|e| format!("Paste permission request failed: {e}"))?;
+        onboarding::notify(&app);
+        return result;
+    }
+    Ok(())
+}
+
+fn desktop_error() -> Option<String> {
+    use promptify_core::pipeline::ContextProvider;
+    crate::system_context::SystemContext.identify().err().map(|e| e.0)
 }
 
 #[tauri::command]
 pub fn app_info(state: State<'_, AppState>) -> AppInfo {
     let settings = state.settings.read().unwrap().clone();
+    let (modifier_hold, mut modifier_hold_error) = crate::modifier_hook::status(&state.modifier_hook);
+    let modifier_keyboard_devices = match crate::modifier_hook::keyboards() {
+        Ok(keyboards) => keyboards,
+        Err(error) => {
+            log::warn!("could not list Ctrl+Shift keyboards: {error}");
+            modifier_hold_error = Some(error);
+            Vec::new()
+        }
+    };
     AppInfo {
         input_device: crate::audio::default_input_name(),
         hotkeys: state.hotkeys.read().unwrap().config.clone(),
@@ -65,10 +116,16 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         data_dir: state.data_dir.to_string_lossy().into_owned(),
         use_gpu: settings.use_gpu,
         gpu_device: state.llm.device(),
-        modifier_hold: state.modifier_hook.lock().unwrap().is_some(),
+        modifier_hold,
+        modifier_hold_requested: settings.modifier_hold,
+        modifier_hold_error,
+        modifier_keyboard: settings.modifier_keyboard.clone(),
+        modifier_keyboard_devices,
         auto_mode: settings.auto_mode,
         vocabulary: settings.vocabulary.clone(),
         screen_text_apps: settings.screen_text_apps.clone(),
+        paste_permission: paste_permission(),
+        desktop_error: desktop_error(),
     }
 }
 
@@ -236,9 +293,29 @@ pub fn set_use_gpu(app: AppHandle, state: State<'_, AppState>, enabled: bool) ->
 
 #[tauri::command]
 pub fn set_modifier_hold(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let previous = state.settings.read().unwrap().modifier_hold;
     crate::modifier_hook::apply(&app, &state.modifier_hook, enabled)?;
-    state.settings.write().unwrap().modifier_hold = enabled;
-    save_settings(&state)
+    if let Err(error) = settings::update(&state.settings, &state.data_dir, |settings| settings.modifier_hold = enabled) {
+        if let Err(restore_error) = crate::modifier_hook::apply(&app, &state.modifier_hook, previous) {
+            return Err(format!("{error}; could not restore Ctrl+Shift monitoring: {restore_error}"));
+        }
+        return Err(error);
+    }
+    onboarding::notify(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_modifier_keyboard(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+    if !crate::modifier_hook::keyboards()?.iter().any(|keyboard| keyboard.path == path) {
+        return Err("Select a currently connected physical keyboard from the list.".into());
+    }
+    settings::update(&state.settings, &state.data_dir, |settings| settings.modifier_keyboard = Some(path))?;
+    let enabled = state.settings.read().unwrap().modifier_hold;
+    crate::modifier_hook::apply(&app, &state.modifier_hook, false)?;
+    let result = crate::modifier_hook::apply(&app, &state.modifier_hook, enabled);
+    onboarding::notify(&app);
+    result
 }
 
 /// Pushes the text-related settings into the pipeline; called at startup and after each change.
@@ -434,24 +511,37 @@ pub fn hide_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 fn fitted_overlay_height(requested: u32, monitor_height: f64) -> Result<f64, String> {
-    if requested == 0 || requested > 2048 || !monitor_height.is_finite() || monitor_height <= 0.0 {
+    if requested == 0 || !monitor_height.is_finite() || monitor_height <= 0.0 {
         return Err("invalid overlay height".into());
     }
-    let maximum = (monitor_height - 32.0).clamp(64.0, 440.0);
-    Ok(f64::from(requested).clamp(64.0, maximum))
+    let maximum = (monitor_height - 16.0).max(1.0);
+    Ok(f64::from(requested).max(64.0).min(maximum))
+}
+
+fn overlay_monitor(window: &tauri::WebviewWindow) -> Result<tauri::Monitor, String> {
+    window.current_monitor().map_err(|error| format!("could not read overlay monitor: {error}"))?
+        .ok_or_else(|| "overlay monitor is unavailable".into())
+}
+
+#[tauri::command]
+pub fn overlay_max_height(app: AppHandle) -> Result<f64, String> {
+    let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
+    let monitor = overlay_monitor(&overlay)?;
+    fitted_overlay_height(u32::MAX, f64::from(monitor.work_area().size.height) / monitor.scale_factor())
 }
 
 #[tauri::command]
 pub fn resize_overlay(app: AppHandle, height: u32) -> Result<(), String> {
     let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
     let scale = overlay.scale_factor().map_err(|error| format!("could not read overlay scale: {error}"))?;
-    let monitor = overlay.current_monitor().map_err(|error| format!("could not read overlay monitor: {error}"))?;
-    let monitor_height = monitor.as_ref().map_or(480.0, |monitor| f64::from(monitor.size().height) / monitor.scale_factor());
+    let monitor = overlay_monitor(&overlay)?;
+    let monitor_height = f64::from(monitor.work_area().size.height) / monitor.scale_factor();
     let target_height = fitted_overlay_height(height, monitor_height)?;
     let size = overlay.inner_size().map_err(|error| format!("could not read overlay size: {error}"))?.to_logical::<f64>(scale);
     if (size.height - target_height).abs() >= 1.0 {
         overlay.set_size(tauri::LogicalSize::new(size.width, target_height))
             .map_err(|error| format!("could not resize the overlay: {error}"))?;
+        overlay.center().map_err(|error| format!("could not keep the overlay on screen: {error}"))?;
     }
     Ok(())
 }
@@ -464,10 +554,11 @@ mod overlay_tests {
     fn overlay_size_is_bounded_and_respects_small_displays() {
         assert_eq!(fitted_overlay_height(180, 1080.0).unwrap(), 180.0);
         assert_eq!(fitted_overlay_height(416, 1080.0).unwrap(), 416.0);
-        assert_eq!(fitted_overlay_height(900, 1080.0).unwrap(), 440.0);
-        assert_eq!(fitted_overlay_height(416, 400.0).unwrap(), 368.0);
+        assert_eq!(fitted_overlay_height(900, 1080.0).unwrap(), 900.0);
+        assert_eq!(fitted_overlay_height(1800, 1080.0).unwrap(), 1064.0);
+        assert_eq!(fitted_overlay_height(416, 400.0).unwrap(), 384.0);
+        assert_eq!(fitted_overlay_height(3000, 4320.0).unwrap(), 3000.0);
         assert!(fitted_overlay_height(0, 1080.0).is_err());
-        assert!(fitted_overlay_height(2049, 1080.0).is_err());
         assert!(fitted_overlay_height(180, f64::NAN).is_err());
     }
 }

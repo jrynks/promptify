@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type McpInfo, type ModelStatus, type OfferInfo, type OnboardingStatus, type OnboardingStep, type PreviewOutput, type ProfileSummary, type RemoteInfo, type PromptCatalog, type RoutingOptions } from "../api";
 import { OnboardingTour } from "./OnboardingTour";
+import { DesktopIntegration } from "./DesktopIntegration";
 import { PromptRoutingSettings, RoutingControls, RoutingSummary, automaticRouting } from "./PromptRouting";
 import "./settings.css";
 
@@ -63,20 +64,61 @@ function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation" | 
   );
 }
 
-function ModifierHold({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+function ModifierHold({ info, onChange }: { info: AppInfo; onChange: () => void }) {
+  const enabled = info.modifier_hold_requested;
+  const monitorError = info.modifier_hold_error;
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const setEnabled = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setModifierHold(next);
+      onChange();
+    } catch (reason) {
+      setError(String(reason));
+      onChange();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const selectKeyboard = async (path: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setModifierKeyboard(path);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      onChange();
+    }
+  };
   return (
     <div className="stack">
       <label className="inline">
         <input
           type="checkbox"
           checked={enabled}
-          onChange={(e) => void api.setModifierHold(e.target.checked).then(() => { setError(null); onChange(); }, (err) => setError(String(err)))}
+          disabled={busy}
+          onChange={(e) => void setEnabled(e.target.checked)}
         />
         Also start a prompt by holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> on their own
       </label>
       <div className="hint desc indent-check">Shortcuts like Ctrl+Shift+T and the quick Ctrl+Shift layout switch are ignored.</div>
-      {error && <div className="error">{error}</div>}
+      <div className="hint desc indent-check">macOS requires Input Monitoring permission. Linux Wayland requires explicit read access to physical keyboards; keyboard access can expose all keystrokes. Promptify never saves typed text or blocks keys.</div>
+      {info.modifier_keyboard_devices.length > 0 && <label>
+        Ctrl+Shift keyboard
+        <select value={info.modifier_keyboard ?? ""} disabled={busy} onChange={(event) => void selectKeyboard(event.target.value)}>
+          <option value="" disabled>Select a physical keyboard</option>
+          {info.modifier_keyboard && !info.modifier_keyboard_devices.some((device) => device.path === info.modifier_keyboard) &&
+            <option value={info.modifier_keyboard} disabled>Selected keyboard disconnected</option>}
+          {info.modifier_keyboard_devices.map((device) => <option key={device.path} value={device.path}>{device.name} ({device.path})</option>)}
+        </select>
+        <span className="hint desc">Only this keyboard is monitored on Wayland. Grant read-only access to its device if needed.</span>
+      </label>}
+      {(error || monitorError) && <div className="error" role="alert">{error || monitorError}</div>}
+      {monitorError && <button disabled={busy} onClick={() => void setEnabled(true)}>Retry Ctrl+Shift monitoring</button>}
     </div>
   );
 }
@@ -98,7 +140,7 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
         <dd>
           <HotkeyField mode="prompt" value={info.hotkeys.prompt} onSaved={onChange} />
           <div className="hint desc">Hold to talk, or tap to start and tap again to finish.</div>
-          {!guided && <ModifierHold enabled={info.modifier_hold} onChange={onChange} />}
+          {!guided && <ModifierHold info={info} onChange={onChange} />}
         </dd>
         {!guided && <>
         <dt>Dictation</dt>
@@ -127,6 +169,7 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
       <p className="hint indent">Start with “prompt:” or “dictate:” to choose yourself.</p>
       </>}
       <h3>This computer</h3>
+      {!guided && <DesktopIntegration info={info} onChange={onChange} />}
       <dl>
         <dt>Microphone</dt>
         <dd>{info.input_device ? `${info.input_device} (system default)` : <span className="warn">No default microphone found</span>}</dd>

@@ -24,7 +24,9 @@ fn err(msg: impl std::fmt::Display) -> BackendError {
 pub struct ClipboardPaste;
 
 impl Inserter for ClipboardPaste {
-    fn insert(&self, _target: &WindowIdentity, text: &str, chord: PasteChord) -> Result<(), BackendError> {
+    fn insert(&self, target: &WindowIdentity, text: &str, chord: PasteChord) -> Result<(), BackendError> {
+        #[cfg(target_os = "linux")]
+        crate::wayland_paste::require_ready().map_err(err)?;
         let mut clipboard = Clipboard::new().map_err(|e| err(format!("clipboard unavailable: {e}")))?;
         let saved = match clipboard.get_text() {
             Ok(previous) => Saved::Text(previous),
@@ -33,7 +35,7 @@ impl Inserter for ClipboardPaste {
         clipboard.set_text(text.to_owned()).map_err(|e| err(format!("could not set clipboard: {e}")))?;
         sleep(Duration::from_millis(30));
 
-        let pasted = send_paste(chord);
+        let pasted = send_paste(target, chord);
         sleep(RESTORE_DELAY);
 
         // Only restore if the clipboard still holds our text; a newer copy by the user wins.
@@ -48,7 +50,11 @@ impl Inserter for ClipboardPaste {
     }
 }
 
-fn send_paste(chord: PasteChord) -> Result<(), BackendError> {
+fn send_paste(_target: &WindowIdentity, chord: PasteChord) -> Result<(), BackendError> {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        return crate::wayland_paste::paste(_target, chord == PasteChord::Terminal).map_err(err);
+    }
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| err(format!("keyboard input unavailable: {e}")))?;
     let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
     #[cfg(target_os = "windows")]

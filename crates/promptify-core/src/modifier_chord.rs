@@ -108,6 +108,17 @@ mod tests {
     const AFTER: Duration = Duration::from_millis(400);
 
     #[test]
+    fn hold_arms_at_the_exact_delay_not_before() {
+        let start = Instant::now();
+        let mut chord = ModifierChord::default();
+        chord.key_down(ChordKey::Ctrl, start);
+        chord.key_down(ChordKey::Shift, start);
+        assert_eq!(chord.tick(start + ARM_DELAY - Duration::from_nanos(1)), ChordAction::None);
+        assert_eq!(chord.tick(start + ARM_DELAY), ChordAction::Press);
+        assert_eq!(chord.tick(start + ARM_DELAY + Duration::from_secs(1)), ChordAction::None);
+    }
+
+    #[test]
     fn fresh_key_downs_are_not_undone_by_stale_physical_state() {
         let t = Instant::now();
         let mut c = ModifierChord::default();

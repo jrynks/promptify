@@ -1,19 +1,57 @@
 use promptify_core::context::{ActiveContext, FocusedText, WindowIdentity};
 use promptify_core::pipeline::{BackendError, ContextProvider};
 
-/// Foreground-window identity via x-win: window id, process, title and (Windows/macOS) browser URL.
+/// Foreground-window identity via KWin on KDE Wayland, otherwise x-win.
 pub struct SystemContext;
 
+/// Releases desktop window-tracking connections.
+pub fn shutdown() {
+    #[cfg(target_os = "linux")]
+    crate::kwin::shutdown();
+}
+
 fn active_window() -> Result<x_win::WindowInfo, BackendError> {
-    x_win::get_active_window().map_err(|e| BackendError(format!("active window unavailable: {e:?}")))
+    let window = x_win::get_active_window().map_err(|e| BackendError(format!("active window unavailable: {}", friendly(&format!("{e:?}")))))?;
+    if window.id == 0 || window.info.process_id == 0 {
+        return Err(BackendError("The focused window could not be identified. Focus an application window and try again.".into()));
+    }
+    Ok(window)
+}
+
+/// x-win's Wayland backend only exists on GNOME; explain that instead of naming its extension.
+fn friendly(raw: &str) -> String {
+    #[cfg(target_os = "linux")]
+    let wayland = crate::wayland_paste::applies();
+    #[cfg(not(target_os = "linux"))]
+    let wayland = false;
+    let gnome = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_ascii_uppercase().contains("GNOME"));
+    if cfg!(target_os = "linux") && wayland && !gnome {
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "this desktop".into());
+        format!("Promptify has no focused-window integration for {desktop} on Wayland. Use KDE Plasma, GNOME with the x-win extension, or an X11 session.")
+    } else {
+        raw.to_owned()
+    }
 }
 
 fn identity(window: &x_win::WindowInfo) -> WindowIdentity {
     WindowIdentity { handle: u64::from(window.id), process_id: window.info.process_id }
 }
 
+#[cfg(target_os = "linux")]
+fn kde() -> Option<Result<ActiveContext, BackendError>> {
+    crate::kwin::identify()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kde() -> Option<Result<ActiveContext, BackendError>> {
+    None
+}
+
 impl ContextProvider for SystemContext {
     fn identify(&self) -> Result<ActiveContext, BackendError> {
+        if let Some(result) = kde() {
+            return result;
+        }
         let window = active_window()?;
         let url = x_win::get_browser_url(&window).ok().filter(|url| !url.trim().is_empty());
         let process_name = if window.info.exec_name.is_empty() { window.info.name.clone() } else { window.info.exec_name.clone() };
@@ -27,6 +65,9 @@ impl ContextProvider for SystemContext {
     }
 
     fn foreground(&self) -> Result<WindowIdentity, BackendError> {
+        if let Some(result) = kde() {
+            return result.map(|context| context.window);
+        }
         Ok(identity(&active_window()?))
     }
 }

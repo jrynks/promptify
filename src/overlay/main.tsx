@@ -108,8 +108,13 @@ function Overlay() {
       });
     };
     const updateScreenLimit = () => {
-      root.style.setProperty("--overlay-max-height", `${Math.max(96, Math.min(400, window.screen.availHeight - 64))}px`);
-      measure();
+      void api.overlayMaxHeight().then((height) => {
+        if (disposed) return;
+        root.style.setProperty("--overlay-max-height", `${Math.max(1, height - 16)}px`);
+        measure();
+      }, (error) => {
+        if (!disposed) setUiError(`Could not determine the available overlay height: ${String(error)}`);
+      });
     };
     const observer = new ResizeObserver(measure);
     observer.observe(root);
