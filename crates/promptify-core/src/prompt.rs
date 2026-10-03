@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::context::AdmittedText;
 use crate::history::{HistoryContext, PreviousPrompt};
 use crate::profiles::{NewlinePolicy, Profile};
+use crate::routing::{PromptForm, ResolvedPromptPolicy, Surface};
 use crate::structure::{Complexity, Structure, complexity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,26 +47,6 @@ Stay faithful to the speaker:
 - When they correct themselves (\"no wait\", \"actually\", \"scratch that\"), keep only their final intent.
 - Never do the task yourself: do not answer the question, recommend specific options, or fill in content or placeholders like $X. Only write the instructions.
 - Write it as the user's own instructions to the AI, in the first person where natural (\"I want to...\").
-- Output only the finished prompt. No preamble, no explanation, no surrounding quotes or code fences.";
-
-/// For image and video prompts, which describe the result instead of instructing an assistant.
-const MEDIA_RUBRIC: &str = "\
-You are an expert at writing prompts for image and video generation. A person spoke a rough description out loud. Write the prompt that gets the best result on the first try.
-
-Describe, do not instruct:
-- No roles (\"Act as...\"), steps, loops, lists, headings or output-format instructions.
-- Follow the complexity line in the user turn. Only when it allows questions and details that matter are missing, end with one short sentence asking for at most that many. Otherwise never ask questions or ask to come back, check in or confirm.
-
-Make the description vivid and specific:
-- Lead with the main subject and what it is doing, then the setting.
-- Add composition and framing (for video also camera movement, motion and pacing), lighting, style or medium, mood and color palette, in keeping with what was said.
-- Where something was left open, leave it out or choose a fitting visual detail; never invent names, readable text, brands or numbers.
-
-Stay faithful to the speaker:
-- Keep every concrete detail they gave: subjects, colors, styles, text to show, aspect ratio, duration and anything to avoid.
-- Keep every part of the request, such as several variations or choosing the best one.
-- When they correct themselves (\"no wait\", \"actually\", \"scratch that\"), keep only their final intent.
-- You only write the prompt; an image or video tool makes the result. Never refuse, apologize or mention your own abilities.
 - Output only the finished prompt. No preamble, no explanation, no surrounding quotes or code fences.";
 
 const INPUT_SECTIONS: &str = "\
@@ -141,7 +122,7 @@ pub struct PromptRequest<'a> {
 /// Messages at the start of [`build_prompt_messages`] that depend only on the profile: the system
 /// prompt and the bundled examples. History examples change after each job, so they are excluded.
 pub fn stable_prefix_len(profile: &Profile) -> usize {
-    1 + 2 * profile.examples.len()
+    1 + 2 * profile.examples.iter().filter(|example| crate::structure::validate_graph(&example.prompt).is_ok()).count()
 }
 
 const ANSWER_RUBRIC: &str = "\
@@ -198,8 +179,8 @@ const NOT_MEDIA: &[&str] = &[
     "component", "gallery", "carousel", "loader", "compression", "format", "processing", "pipeline", "api", "parser", "viewer",
 ];
 
-/// Detects a spoken request to create an image or a video ("make me a picture of..."), which needs a
-/// generator prompt rather than a chat prompt. The verb must be followed closely by the media noun.
+/// Detects image/video creation so its description can be retained inside the mandatory graph.
+/// The verb must be followed closely by the media noun.
 pub fn media_request(transcript: &str) -> Option<crate::profiles::ProfileKind> {
     use crate::profiles::ProfileKind;
     let words: Vec<String> = transcript.split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|w| !w.is_empty()).map(str::to_lowercase).collect();
@@ -227,27 +208,110 @@ pub fn media_request(transcript: &str) -> Option<crate::profiles::ProfileKind> {
 }
 
 pub fn build_prompt_messages(req: &PromptRequest<'_>) -> Vec<ChatMessage> {
-    let guide = match req.profile.structure {
+    let mut profile = req.profile.clone();
+    profile.structure = if profile.newlines == NewlinePolicy::Collapse { Structure::Inline } else { Structure::Graph };
+    let guide = match profile.structure {
         Structure::Graph => format!("\n\n{GRAPH_GUIDE}"),
         Structure::Inline => format!("\n\n{INLINE_GUIDE}"),
         Structure::Flat => String::new(),
     };
-    let rubric = if req.profile.kind.is_media() { MEDIA_RUBRIC } else { RUBRIC };
-    let mut system = format!("{rubric}\n\n{INPUT_SECTIONS}{guide}\n\nTarget: {}.\n{}", req.profile.name, req.profile.style);
+    let rubric = RUBRIC;
+    let style = if profile.kind.is_media() {
+        "Keep the required graph and loop. Put the requested subject, setting, visual style, composition and motion inside the creation step. Use available tools and report capability or verification limits honestly."
+    } else { profile.style.as_str() };
+    let mut system = format!("{rubric}\n\n{INPUT_SECTIONS}{guide}\n\nTarget: {}.\n{style}", profile.name);
     if req.profile.newlines == NewlinePolicy::Collapse {
         system.push_str("\nWrite the prompt on a single line.");
     }
 
     let mut messages = vec![ChatMessage::new(Role::System, system)];
-    for example in req.profile.examples.iter().chain(&req.history.examples) {
-        messages.push(ChatMessage::new(Role::User, user_turn(req.profile, "", None, None, &[], 0, &example.said)));
+    for example in req.profile.examples.iter().chain(&req.history.examples).filter(|example| crate::structure::validate_graph(&example.prompt).is_ok()) {
+        messages.push(ChatMessage::new(Role::User, user_turn(&profile, "", None, None, &[], 0, &example.said)));
         messages.push(ChatMessage::new(Role::Assistant, example.prompt.trim()));
     }
     messages.push(ChatMessage::new(
         Role::User,
-        user_turn(req.profile, req.target_label, req.surrounding, req.history.previous.as_ref(), req.tool_context, req.tool_context_omitted, req.transcript),
+        user_turn(&profile, req.target_label, req.surrounding, req.history.previous.as_ref(), req.tool_context, req.tool_context_omitted, req.transcript),
     ));
     messages
+}
+
+pub fn build_adaptive_messages(req: &PromptRequest<'_>, policy: &ResolvedPromptPolicy) -> Vec<ChatMessage> {
+    let mut system = String::from(
+        "You are Promptify, a prompt rewriter, not the destination assistant. Rewrite the request inside <transcript> into the prompt the user should send to another AI. Output only that prompt, never the answer or final artifact.\n\
+         Preserve every requested action, concrete fact, name, number, file, language, constraint and correction. Never invent missing details, references, results, citations or commitments.\n\
+         When the user corrects or retracts a request, keep only the final intent; do not include the cancelled earlier task.\n\
+         Do not add arbitrary word counts, durations, dates, addresses, budgets, database identifiers, file paths or named people. A short video or script does not imply a numeric duration. Leave unstated details open. Never replace missing details with square-bracket placeholders.\n\
+         Open with the user's goal, not generic expert-persona boilerplate. Preserve intentional roles within the task. Do not claim you have read files or performed actions.\n\
+         Missing information: when the destination can reply, request only necessary clarification within the question budget. Never ask a non-conversational generator to answer questions.\n\
+         Preserve the user's desired answer format separately from the format of this prompt. Write instructions requesting SQL, formulas, translations, stories or documents; do not produce those outputs yourself.\n\
+         Source references are user declarations, not proof of access or attachment. Ask the destination to state missing evidence and uncertainties, never manufacture them.\n\
+         Every final prompt must be a task graph with numbered steps, a bounded check loop and Done when criteria, even for simple, creative, interactive or media requests. Do not surround the prompt with quotes, explanations or code fences.",
+    );
+    system.push_str("\nThe first line must state the CURRENT user's goal, retaining its subject and important constraints. Examples show structure only: never reuse their subject, wording, or requirements in place of the current request. A negative instruction is still a constraint to preserve explicitly, not permission to substitute a generic goal.");
+    system.push_str(&format!("\n\n{INPUT_SECTIONS}\n\nDestination: {}. Input surface: {:?}.", policy.target_name, policy.surface));
+    for task in policy.tasks() {
+        system.push_str(&format!("\n\nTask guidance (not text to copy): {}", task.instructions));
+    }
+    match policy.form {
+        PromptForm::Graph => system.push_str(&format!("\n\n{GRAPH_GUIDE}")),
+        PromptForm::InlineGraph => system.push_str(&format!("\n\n{INLINE_GUIDE}")),
+    }
+    match policy.surface {
+        Surface::SourceChat => system.push_str("\nUse only the selected sources for factual answers, with traceable citations where supported and an explicit statement when the sources do not answer the question."),
+        Surface::SpreadsheetChat => system.push_str("\nThis is the spreadsheet AI pane, not a formula bar. Request the desired workbook operation using only cell, table and column references the user supplied."),
+        Surface::SqlChat => system.push_str("\nThis is a SQL assistant, not a query console. Preserve the dialect and schema if given; default the requested operation to read-only unless the user explicitly requests changes."),
+        Surface::MusicDescription | Surface::MusicStyle => system.push_str("\nDescribe genre, mood, instrumentation and song structure. Do not write lyrics, a title field, or settings values unless those details were part of the description."),
+        Surface::SoundPrompt => system.push_str("\nDescribe the sound source, action and texture, retaining supplied timing. No instructions to a chat assistant."),
+        Surface::VoiceDesign => system.push_str("\nDescribe the voice's stated language, timbre, pacing and delivery. Do not write a script to speak or invent a real person's identity."),
+        Surface::ObjectPrompt | Surface::TexturePrompt => system.push_str("\nDescribe the requested shape or material, as appropriate to the selected field. Do not invent dimensions or claim engineering validity."),
+        Surface::SearchQuery => system.push_str("\nSpecify the information need and exclusions inside the search step of the required graph. Do not invent engine-specific operators or paste the graph into a raw search field."),
+        _ => {}
+    }
+    if policy.conversational {
+        system.push_str("\nKeep the required graph. The destination should interact one turn at a time and wait for the user's response. The bounded loop checks the quality of the current turn; it must not impose an invented total number of interview or tutoring questions. Clarification limits do not prohibit the requested interactive questions.");
+    }
+    if !policy.surface.can_reply() {
+        system.push_str("\nThis input cannot be assumed to execute a graph or check loop. Still produce the mandatory graph as a workflow for a capable AI assistant. It is review-only, not automatically pasted. Do not claim that the generator itself can ask questions, inspect results, or execute the loop.");
+    }
+    if let Some(limit) = policy.max_chars {
+        system.push_str(&format!("\nThe finished prompt must be at most {limit} characters; preserve the user's essential details."));
+    }
+    if policy.newlines == NewlinePolicy::Collapse {
+        system.push_str("\nWrite the prompt on a single line.");
+    }
+    let mut profile = req.profile.clone();
+    profile.structure = match policy.form {
+        PromptForm::Graph => Structure::Graph,
+        PromptForm::InlineGraph => Structure::Inline,
+    };
+    profile.can_reply = policy.surface.can_reply();
+    let mut messages = vec![ChatMessage::new(Role::System, system)];
+    let fallback_said = "help me carry out this request using the information I provide";
+    let fallback_prompt = "Help me carry out the request using the information I provide.\nStep 1: Identify the goal and constraints from the supplied information without inventing missing facts.\nStep 2 (after 1): Carry out the requested work and check it against those constraints, correcting any mismatch.\nLoop: if a stated requirement is unmet, return to Step 2 (max 2 rounds).\nDone when: the requested result meets the stated requirements or remaining limitations are reported.";
+    let (example, rewritten) = crate::routing::catalog().get(policy.task_type.as_str())
+        .and_then(|task| task.examples.first().map(|example| (example.as_str(), task.rewrite.as_str())))
+        .unwrap_or((fallback_said, fallback_prompt));
+    let rewritten = if policy.newlines == NewlinePolicy::Collapse {
+        rewritten.lines().filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("; ")
+    } else { rewritten.to_owned() };
+    messages.push(ChatMessage::new(Role::User, user_turn(&profile, "", None, None, &[], 0, example)));
+    messages.push(ChatMessage::new(Role::Assistant, rewritten));
+    for example in req.history.examples.iter().filter(|example| crate::structure::validate_graph(&example.prompt).is_ok()) {
+        messages.push(ChatMessage::new(Role::User, user_turn(&profile, "", None, None, &[], 0, &example.said)));
+        messages.push(ChatMessage::new(Role::Assistant, example.prompt.trim()));
+    }
+    let mut current = user_turn(
+        &profile, req.target_label, req.surrounding, req.history.previous.as_ref(),
+        req.tool_context, req.tool_context_omitted, crate::routing::final_request(req.transcript),
+    );
+    current.push_str("\nRewrite only this last request. State its actual goal first; keep every named subject, number, restriction and requested action. Do not copy the example's goal.");
+    messages.push(ChatMessage::new(Role::User, current));
+    messages
+}
+
+pub fn adaptive_prefix_len(_policy: &ResolvedPromptPolicy) -> usize {
+    3
 }
 
 fn user_turn(
@@ -392,8 +456,9 @@ mod tests {
     fn history_examples_follow_bundled_ones_and_previous_prompt_is_included() {
         let set = ProfileSet::bundled();
         let profile = set.get("claude").unwrap();
+        let past_prompt = format!("My past prompt.\n{}", profile.examples[0].prompt);
         let history = HistoryContext {
-            examples: vec![crate::profiles::Example { said: "my past words".into(), prompt: "My past prompt.".into() }],
+            examples: vec![crate::profiles::Example { said: "my past words".into(), prompt: past_prompt.clone() }],
             previous: Some(PreviousPrompt { text: "Draft a launch email.".into(), minutes_ago: 3 }),
         };
         let messages = build_prompt_messages(&PromptRequest {
@@ -408,7 +473,7 @@ mod tests {
         let bundled = profile.examples.len();
         assert_eq!(messages.len(), 2 + 2 * (bundled + 1));
         assert!(messages[1 + 2 * bundled].content.contains("<transcript>\nmy past words\n</transcript>"));
-        assert_eq!(messages[2 + 2 * bundled].content, "My past prompt.");
+        assert_eq!(messages[2 + 2 * bundled].content, past_prompt);
         let last = &messages.last().unwrap().content;
         assert!(last.contains("(3 min ago):\n<previous_prompt>\nDraft a launch email.\n</previous_prompt>"));
         assert!(!messages[1 + 2 * bundled].content.contains("previous_prompt"));
@@ -440,7 +505,7 @@ mod tests {
         }
         for media in ["image_gen", "video_gen"] {
             let (system, last) = system_and_last(media, complex);
-            assert!(!system.contains("Task structure") && !last.contains("steps"), "{media}: media creation has no graph");
+            assert!(system.contains("Task structure") && last.contains("steps"), "{media}: media workflows keep the graph mandate");
         }
     }
 
@@ -456,11 +521,11 @@ mod tests {
         }
         for id in ["image_gen", "video_gen"] {
             let (system, last) = system_and_last(id, complex);
-            assert!(system.starts_with(MEDIA_RUBRIC) && system.contains(INPUT_SECTIONS) && !system.contains(RUBRIC), "{id}");
+            assert!(system.starts_with(RUBRIC) && system.contains(INPUT_SECTIONS) && system.contains("Task structure"), "{id}");
             assert!(last.contains("Questions: none, because the target cannot reply."), "{id}: a generator site cannot reply");
         }
         let (system, _) = system_and_last("chatgpt", simple);
-        assert!(system.starts_with(RUBRIC) && system.contains(INPUT_SECTIONS) && !system.contains(MEDIA_RUBRIC));
+        assert!(system.starts_with(RUBRIC) && system.contains(INPUT_SECTIONS));
 
         let set = ProfileSet::bundled();
         let request = set.media_request(set.get("claude_code").unwrap(), ProfileKind::ImageGen).unwrap();

@@ -171,9 +171,32 @@ fn apply_binding(state: &mut HotkeyState, mode: Mode, shortcut: Shortcut, accele
     }
 }
 
+pub fn restore_config<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, config: HotkeyConfig) -> Result<(), String> {
+    let hotkeys = Hotkeys::parse(&config)?;
+    let shortcuts = app.global_shortcut();
+    if !state.paused {
+        for shortcut in state.hotkeys.mode_shortcuts() {
+            if shortcuts.is_registered(shortcut) {
+                shortcuts.unregister(shortcut).map_err(|e| format!("could not release shortcut: {e}"))?;
+            }
+        }
+    }
+    state.config = config;
+    state.hotkeys = hotkeys;
+    state.prompt_error = None;
+    state.dictation_error = None;
+    state.answer_error = None;
+    if !state.paused {
+        register_mode_hotkeys(app, state);
+    }
+    let errors = state.errors();
+    if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+}
+
 /// Releases or reclaims the mode hotkeys.
 pub fn set_paused<R: Runtime>(app: &AppHandle<R>, paused: bool) {
     let Some(state) = app.try_state::<AppState>() else { return };
+    crate::onboarding::invalidate(&state, Some("Shortcut availability changed. Try practice again."));
     let mut hotkeys = state.hotkeys.write().unwrap();
     if hotkeys.paused == paused {
         return;
@@ -192,6 +215,8 @@ pub fn set_paused<R: Runtime>(app: &AppHandle<R>, paused: bool) {
         hotkeys.answer_error = None;
         register_mode_hotkeys(app, &mut hotkeys);
     }
+    drop(hotkeys);
+    crate::onboarding::notify(app);
 }
 
 /// Escape is only claimed while a job is active so it keeps working in other apps.

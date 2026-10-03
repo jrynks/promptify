@@ -4,12 +4,13 @@ use promptify_core::history::HistoryEntry;
 use promptify_core::models::{ModelKind, ModelTier, final_path, is_installed, part_path};
 use promptify_core::pipeline::Mode;
 use promptify_core::profiles::ProfileKind;
-use promptify_core::prompt::{ChatMessage, PromptRequest, build_prompt_messages};
+use promptify_core::prompt::{ChatMessage, PromptRequest, build_adaptive_messages, build_prompt_messages};
+use promptify_core::routing::{self, Rendering, ResolvedPromptPolicy, RoutingOptions, Surface};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::hotkeys::HotkeyConfig;
-use crate::{AppState, ensure_selection, preload_engines, settings};
+use crate::{AppState, ensure_selection, onboarding, preload_engines, settings};
 
 const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_SURROUNDING_CHARS: usize = 4_000;
@@ -33,7 +34,11 @@ pub struct AppInfo {
     input_device: Option<String>,
     hotkeys: HotkeyConfig,
     hotkey_errors: Vec<String>,
+    prompt_hotkey_error: Option<String>,
+    hotkeys_paused: bool,
     engines_ready: bool,
+    models_installed: bool,
+    engine_error: Option<String>,
     history_enabled: bool,
     data_dir: String,
     use_gpu: bool,
@@ -47,12 +52,15 @@ pub struct AppInfo {
 #[tauri::command]
 pub fn app_info(state: State<'_, AppState>) -> AppInfo {
     let settings = state.settings.read().unwrap().clone();
-    let ready = |id: &Option<String>| id.as_deref().and_then(|id| state.manifest.get(id)).is_some_and(|e| is_installed(&state.models_dir, e));
     AppInfo {
         input_device: crate::audio::default_input_name(),
         hotkeys: state.hotkeys.read().unwrap().config.clone(),
         hotkey_errors: state.hotkeys.read().unwrap().errors(),
-        engines_ready: ready(&settings.stt_model) && ready(&settings.llm_model),
+        prompt_hotkey_error: state.hotkeys.read().unwrap().prompt_error.clone(),
+        hotkeys_paused: state.hotkeys.read().unwrap().paused,
+        engines_ready: state.onboarding.ready(&settings) && onboarding::models_installed(&state, &settings),
+        models_installed: onboarding::models_installed(&state, &settings),
+        engine_error: state.onboarding.engine_error(),
         history_enabled: state.history.is_enabled(),
         data_dir: state.data_dir.to_string_lossy().into_owned(),
         use_gpu: settings.use_gpu,
@@ -115,10 +123,11 @@ struct DownloadEvent {
 
 #[tauri::command]
 pub fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    onboarding::available(&state)?;
     let entry = state.manifest.get(&id).cloned().ok_or("unknown model")?;
     let cancel = state.downloads.start(&id).ok_or("already downloading")?;
     let models_dir = state.models_dir.clone();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name(format!("download-{id}"))
         .spawn(move || {
             let emit = |event: DownloadEvent| {
@@ -129,18 +138,23 @@ pub fn download_model(app: AppHandle, state: State<'_, AppState>, id: String) ->
             });
             let state = app.state::<AppState>();
             state.downloads.finish(&entry.id);
-            let error = result.err();
+            let mut error = result.err();
             if error.is_none() {
-                let changed = ensure_selection(&state.manifest, &state.models_dir, &mut state.settings.write().unwrap());
-                if changed {
-                    let _ = save_settings(&state);
+                if let Err(message) = settings::update(&state.settings, &state.data_dir, |settings| {
+                    ensure_selection(&state.manifest, &state.models_dir, settings);
+                }) {
+                    error = Some(message);
+                } else {
+                    preload_engines(&app);
                 }
-                preload_engines(state.stt.clone(), state.llm.clone());
             }
             log::info!("model download {} finished ok={}", entry.id, error.is_none());
             emit(DownloadEvent { id: entry.id.clone(), downloaded: 0, total: entry.size_bytes, verifying: false, done: true, error });
-        })
-        .map_err(|e| e.to_string())?;
+        });
+    if let Err(error) = spawned {
+        state.downloads.finish(&id);
+        return Err(format!("could not start model download: {error}"));
+    }
     Ok(())
 }
 
@@ -150,7 +164,8 @@ pub fn cancel_download(state: State<'_, AppState>, id: String) -> bool {
 }
 
 #[tauri::command]
-pub fn delete_model(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub fn delete_model(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    onboarding::available(&state)?;
     let entry = state.manifest.get(&id).ok_or("unknown model")?;
     if state.downloads.active_ids().contains(&id) {
         return Err("cancel the download first".into());
@@ -162,25 +177,28 @@ pub fn delete_model(state: State<'_, AppState>, id: String) -> Result<(), String
             Err(e) => return Err(format!("could not delete: {e}")),
         }
     }
-    ensure_selection(&state.manifest, &state.models_dir, &mut state.settings.write().unwrap());
-    save_settings(&state)
+    onboarding::invalidate(&state, Some("A model was removed. Check the models and try practice again."));
+    let result = settings::update(&state.settings, &state.data_dir, |settings| {
+        ensure_selection(&state.manifest, &state.models_dir, settings);
+    });
+    preload_engines(&app);
+    result
 }
 
 #[tauri::command]
-pub fn select_model(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub fn select_model(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    onboarding::available(&state)?;
     let entry = state.manifest.get(&id).ok_or("unknown model")?;
     if !is_installed(&state.models_dir, entry) {
         return Err("download the model first".into());
     }
-    {
-        let mut settings = state.settings.write().unwrap();
+    settings::update(&state.settings, &state.data_dir, |settings| {
         match entry.kind {
             ModelKind::Stt => settings.stt_model = Some(id),
             ModelKind::Llm => settings.llm_model = Some(id),
         }
-    }
-    save_settings(&state)?;
-    preload_engines(state.stt.clone(), state.llm.clone());
+    })?;
+    preload_engines(&app);
     Ok(())
 }
 
@@ -209,10 +227,10 @@ pub fn set_history_enabled(state: State<'_, AppState>, enabled: bool) -> Result<
 }
 
 #[tauri::command]
-pub fn set_use_gpu(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    state.settings.write().unwrap().use_gpu = enabled;
-    save_settings(&state)?;
-    preload_engines(state.stt.clone(), state.llm.clone());
+pub fn set_use_gpu(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    onboarding::available(&state)?;
+    settings::update(&state.settings, &state.data_dir, |s| s.use_gpu = enabled)?;
+    preload_engines(&app);
     Ok(())
 }
 
@@ -259,18 +277,29 @@ pub fn set_screen_text_apps(state: State<'_, AppState>, apps: Vec<String>) -> Re
 
 #[tauri::command]
 pub fn set_hotkey(app: AppHandle, state: State<'_, AppState>, mode: Mode, accelerator: String) -> Result<(), String> {
+    onboarding::available(&state)?;
     check_len("hotkey", &accelerator, 64)?;
+    let previous = state.hotkeys.read().unwrap().config.clone();
     crate::hotkeys::rebind(&app, &mut state.hotkeys.write().unwrap(), mode, &accelerator)?;
-    crate::tray::refresh(&app);
-    {
-        let mut settings = state.settings.write().unwrap();
+    let saved = settings::update(&state.settings, &state.data_dir, |settings| {
         match mode {
             Mode::Prompt => settings.prompt_hotkey = Some(accelerator),
             Mode::Dictation => settings.dictation_hotkey = Some(accelerator),
             Mode::Answer => settings.answer_hotkey = Some(accelerator),
         }
+    });
+    if let Err(error) = saved {
+        let restored = crate::hotkeys::restore_config(&app, &mut state.hotkeys.write().unwrap(), previous);
+        crate::tray::refresh(&app);
+        return Err(match restored {
+            Ok(()) => error,
+            Err(restore) => format!("{error}. The previous shortcut also could not be restored: {restore}"),
+        });
     }
-    save_settings(&state)
+    onboarding::invalidate(&state, Some("The shortcut changed. Try practice again with the new shortcut."));
+    onboarding::notify(&app);
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -291,6 +320,33 @@ pub fn list_profiles(state: State<'_, AppState>) -> Vec<ProfileSummary> {
         .collect()
 }
 
+#[tauri::command]
+pub fn routing_state(state: State<'_, AppState>) -> settings::RoutingState {
+    state.routing.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn set_rendering(state: State<'_, AppState>, rendering: Rendering) -> Result<settings::RoutingState, String> {
+    let mut current = state.routing.lock().unwrap();
+    settings::save_routing(&state.data_dir, rendering)?;
+    state.orchestrator.set_rendering(rendering);
+    *current = settings::RoutingState { rendering, error: None };
+    Ok(current.clone())
+}
+
+#[tauri::command]
+pub fn queue_prompt_routing(state: State<'_, AppState>, options: RoutingOptions) -> Result<(), String> {
+    state.orchestrator.queue_routing(options)
+}
+
+#[tauri::command]
+pub fn prompt_catalog() -> serde_json::Value {
+    serde_json::json!({
+        "version": routing::CATALOG_VERSION, "tasks": routing::catalog().all(), "surfaces": Surface::all(),
+        "required_structure": { "numbered_steps": true, "bounded_loop": true, "done_when": true }
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreviewInput {
@@ -299,6 +355,8 @@ pub struct PreviewInput {
     window_title: String,
     url: Option<String>,
     surrounding_text: Option<String>,
+    #[serde(default)]
+    routing: Option<RoutingOptions>,
 }
 
 #[derive(Serialize)]
@@ -307,6 +365,7 @@ pub struct PreviewOutput {
     profile_id: String,
     profile_name: String,
     messages: Vec<ChatMessage>,
+    routing: Option<ResolvedPromptPolicy>,
 }
 
 /// Shows which profile a context resolves to and the exact messages the model would receive.
@@ -327,22 +386,32 @@ pub fn preview_prompt(state: State<'_, AppState>, input: PreviewInput) -> Result
         ..Default::default()
     };
     let profile = state.orchestrator.profiles().resolve(&ctx);
+    let options = input.routing.unwrap_or_else(|| state.orchestrator.routing_options());
+    let (profile, routing) = routing::prepare_profile(state.orchestrator.profiles(), profile, &ctx, &input.transcript, &options)?;
     let surrounding = input
         .surrounding_text
         .filter(|s| !s.trim().is_empty())
         .map(|text| AdmittedText { text, truncated: false });
     let label = ctx.url_host().unwrap_or_else(|| ctx.normalized_process());
-    let history = state.history.context(&profile.id, &ctx.app_key());
-    let messages = build_prompt_messages(&PromptRequest {
+    let history = match &routing {
+        Some(policy) => state.history.routed_context(&profile.id, &ctx.app_key(), policy, routing::is_follow_up(&input.transcript))
+            .map_err(|error| format!("could not load compatible prompt history: {error}"))?,
+        None => state.history.context(&profile.id, &ctx.app_key()),
+    };
+    let request = PromptRequest {
         transcript: &input.transcript,
-        profile,
+        profile: &profile,
         target_label: &label,
         surrounding: surrounding.as_ref(),
         history: &history,
         tool_context: &[],
         tool_context_omitted: 0,
-    });
-    Ok(PreviewOutput { profile_id: profile.id.clone(), profile_name: profile.name.clone(), messages })
+    };
+    let messages = match &routing {
+        Some(policy) => build_adaptive_messages(&request, policy),
+        None => build_prompt_messages(&request),
+    };
+    Ok(PreviewOutput { profile_id: profile.id.clone(), profile_name: profile.name.clone(), messages, routing })
 }
 
 #[tauri::command]
@@ -359,8 +428,46 @@ pub fn copy_last_result(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn hide_overlay(app: AppHandle) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let _ = overlay.hide();
+pub fn hide_overlay(app: AppHandle) -> Result<(), String> {
+    let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
+    overlay.hide().map_err(|error| format!("could not hide the overlay: {error}"))
+}
+
+fn fitted_overlay_height(requested: u32, monitor_height: f64) -> Result<f64, String> {
+    if requested == 0 || requested > 2048 || !monitor_height.is_finite() || monitor_height <= 0.0 {
+        return Err("invalid overlay height".into());
+    }
+    let maximum = (monitor_height - 32.0).clamp(64.0, 440.0);
+    Ok(f64::from(requested).clamp(64.0, maximum))
+}
+
+#[tauri::command]
+pub fn resize_overlay(app: AppHandle, height: u32) -> Result<(), String> {
+    let overlay = app.get_webview_window("overlay").ok_or("overlay window is unavailable")?;
+    let scale = overlay.scale_factor().map_err(|error| format!("could not read overlay scale: {error}"))?;
+    let monitor = overlay.current_monitor().map_err(|error| format!("could not read overlay monitor: {error}"))?;
+    let monitor_height = monitor.as_ref().map_or(480.0, |monitor| f64::from(monitor.size().height) / monitor.scale_factor());
+    let target_height = fitted_overlay_height(height, monitor_height)?;
+    let size = overlay.inner_size().map_err(|error| format!("could not read overlay size: {error}"))?.to_logical::<f64>(scale);
+    if (size.height - target_height).abs() >= 1.0 {
+        overlay.set_size(tauri::LogicalSize::new(size.width, target_height))
+            .map_err(|error| format!("could not resize the overlay: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::fitted_overlay_height;
+
+    #[test]
+    fn overlay_size_is_bounded_and_respects_small_displays() {
+        assert_eq!(fitted_overlay_height(180, 1080.0).unwrap(), 180.0);
+        assert_eq!(fitted_overlay_height(416, 1080.0).unwrap(), 416.0);
+        assert_eq!(fitted_overlay_height(900, 1080.0).unwrap(), 440.0);
+        assert_eq!(fitted_overlay_height(416, 400.0).unwrap(), 368.0);
+        assert!(fitted_overlay_height(0, 1080.0).is_err());
+        assert!(fitted_overlay_height(2049, 1080.0).is_err());
+        assert!(fitted_overlay_height(180, f64::NAN).is_err());
     }
 }

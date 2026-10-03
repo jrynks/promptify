@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::pipeline::Mode;
 use crate::profiles::Example;
+use crate::routing::ResolvedPromptPolicy;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoutedHistoryEntry {
+    id: u64,
+    routing: ResolvedPromptPolicy,
+}
 
 /// One saved job. Never contains surrounding screen text or audio.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,13 +74,17 @@ pub struct HistoryContext {
 }
 
 pub fn select_context(entries: &[HistoryEntry], profile_id: &str, app_key: &str, now_ms: u64, limits: &HistoryLimits) -> HistoryContext {
+    select_context_with_previous(entries, profile_id, app_key, now_ms, limits, true)
+}
+
+fn select_context_with_previous(entries: &[HistoryEntry], profile_id: &str, app_key: &str, now_ms: u64, limits: &HistoryLimits, include_previous: bool) -> HistoryContext {
     let usable = |e: &&HistoryEntry| e.mode == Mode::Prompt && e.inserted;
     let previous_entry = entries
         .iter()
         .rev()
         .filter(usable)
         .find(|e| e.app_key == app_key)
-        .filter(|e| now_ms.saturating_sub(e.created_ms) <= limits.follow_up_window.as_millis() as u64);
+        .filter(|e| include_previous && now_ms.saturating_sub(e.created_ms) <= limits.follow_up_window.as_millis() as u64);
     let previous = previous_entry.map(|e| PreviousPrompt {
         text: e.output.clone(),
         minutes_ago: now_ms.saturating_sub(e.created_ms) / 60_000,
@@ -133,6 +145,16 @@ impl HistoryLog {
         if report.skipped > 0 || over > 0 {
             log.rewrite(&entries)?;
         }
+        if log.routing_path().exists() {
+            match log.load_routing() {
+                Ok(mut metadata) => {
+                    let count = metadata.len();
+                    metadata.retain(|saved| entries.iter().any(|entry| entry.id == saved.id));
+                    if metadata.len() != count { log.rewrite_routing(&metadata)?; }
+                }
+                Err(error) => log::warn!("routing history is unavailable: {error}"),
+            }
+        }
         report.loaded = entries.len();
         drop(_lock);
         Ok((log, report))
@@ -174,13 +196,37 @@ impl HistoryLog {
         select_context(&self.entries(), profile_id, app_key, now_ms(), &self.limits)
     }
 
+    pub fn routed_context(&self, profile_id: &str, app_key: &str, policy: &ResolvedPromptPolicy, follow_up: bool) -> io::Result<HistoryContext> {
+        if !self.is_enabled() {
+            return Ok(HistoryContext::default());
+        }
+        let _lock = self.lock()?;
+        let (entries, _) = self.load()?;
+        let metadata = self.load_routing()?;
+        let compatible: Vec<_> = entries.iter().filter(|entry| {
+            metadata.iter().any(|saved| saved.id == entry.id && saved.routing.compatible_with(policy))
+        }).cloned().collect();
+        let mut context = select_context_with_previous(&compatible, profile_id, app_key, now_ms(), &self.limits, follow_up);
+        context.previous = if follow_up {
+            select_context(&entries, profile_id, app_key, now_ms(), &self.limits).previous
+        } else {
+            None
+        };
+        Ok(context)
+    }
+
     /// Returns the stored entry, or `None` when history is turned off.
     pub fn record(&self, new: NewHistoryEntry) -> io::Result<Option<HistoryEntry>> {
+        self.record_routed(new, None)
+    }
+
+    pub fn record_routed(&self, new: NewHistoryEntry, routing: Option<&ResolvedPromptPolicy>) -> io::Result<Option<HistoryEntry>> {
         if !self.is_enabled() {
             return Ok(None);
         }
         let _lock = self.lock()?;
         let (mut entries, report) = self.load()?;
+        let mut metadata = self.load_routing()?;
         let now = now_ms();
         // Time-based ids stay unique across processes and after a clear.
         let id = entries.iter().map(|e| e.id + 1).max().unwrap_or(0).max(now);
@@ -202,6 +248,13 @@ impl HistoryLog {
         } else {
             append_line(&self.path, &entry)?;
         }
+        metadata.retain(|saved| entries.iter().any(|entry| entry.id == saved.id));
+        if let Some(routing) = routing {
+            metadata.push(RoutedHistoryEntry { id, routing: routing.clone() });
+        }
+        if !metadata.is_empty() || self.routing_path().exists() {
+            self.rewrite_routing(&metadata)?;
+        }
         Ok(Some(entry))
     }
 
@@ -212,13 +265,55 @@ impl HistoryLog {
         if next.len() == entries.len() {
             return Ok(false);
         }
+        if self.routing_path().exists() {
+            let mut metadata = self.load_routing()?;
+            metadata.retain(|saved| next.iter().any(|entry| entry.id == saved.id));
+            self.rewrite_routing(&metadata)?;
+        }
         self.rewrite(&next)?;
         Ok(true)
     }
 
     pub fn clear(&self) -> io::Result<()> {
         let _lock = self.lock()?;
+        if self.routing_path().exists() {
+            self.rewrite_routing(&[])?;
+        }
         self.rewrite(&[])
+    }
+
+    fn routing_path(&self) -> PathBuf {
+        self.path.with_extension("routing.jsonl")
+    }
+
+    fn load_routing(&self) -> io::Result<Vec<RoutedHistoryEntry>> {
+        let file = match File::open(self.routing_path()) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut entries = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let entry: RoutedHistoryEntry = serde_json::from_str(&line?).map_err(io::Error::other)?;
+            if entry.routing.version != crate::routing::CATALOG_VERSION {
+                return Err(io::Error::other("unsupported routing history version"));
+            }
+            entries.push(entry);
+        }
+        Ok(entries)
+    }
+
+    fn rewrite_routing(&self, entries: &[RoutedHistoryEntry]) -> io::Result<()> {
+        let path = self.routing_path();
+        let tmp = path.with_extension("jsonl.tmp");
+        {
+            let mut file = File::create(&tmp)?;
+            for entry in entries {
+                writeln!(file, "{}", serde_json::to_string(entry)?)?;
+            }
+            file.sync_all()?;
+        }
+        fs::rename(tmp, path)
     }
 
     fn rewrite(&self, entries: &[HistoryEntry]) -> io::Result<()> {
@@ -363,6 +458,61 @@ mod tests {
         assert_eq!(log.context("claude", "claude.ai"), HistoryContext::default());
         assert_eq!(log.entries().len(), 1);
         assert!(!fs::read_to_string(&path).unwrap().contains("dropped"));
+    }
+
+    fn routing_policy(text: &str) -> ResolvedPromptPolicy {
+        let profiles = crate::profiles::ProfileSet::bundled();
+        let context = crate::context::ActiveContext { url: Some("https://claude.ai".into()), ..Default::default() };
+        crate::routing::resolve(&context, profiles.resolve(&context), text, &crate::routing::RoutingOptions {
+            rendering: crate::routing::Rendering::Adaptive, ..Default::default()
+        }).unwrap()
+    }
+
+    #[test]
+    fn routed_history_preserves_legacy_format_and_isolates_examples() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        let (log, _) = HistoryLog::open(path.clone(), HistoryLimits::default(), true).unwrap();
+        log.record(new("legacy graph")).unwrap();
+        let email = routing_policy("Write an email to my team");
+        let debug = routing_policy("Debug the checkout crash");
+        let saved = log.record_routed(new("email details"), Some(&email)).unwrap().unwrap();
+        log.record_routed(new("debug details"), Some(&debug)).unwrap();
+        let context = log.routed_context("claude", "claude.ai", &email, false).unwrap();
+        assert_eq!(context.examples.len(), 1);
+        assert_eq!(context.examples[0].said, "email details");
+        assert!(context.previous.is_none());
+        let follow_up = log.routed_context("claude", "claude.ai", &email, true).unwrap();
+        assert_eq!(follow_up.previous.unwrap().text, "P: debug details");
+        for line in fs::read_to_string(&path).unwrap().lines() {
+            let _: HistoryEntry = serde_json::from_str(line).unwrap();
+        }
+        let metadata = fs::read_to_string(log.routing_path()).unwrap();
+        assert!(!metadata.contains("email details"));
+        assert!(!metadata.contains("debug details"));
+        log.delete(saved.id).unwrap();
+        assert!(log.routed_context("claude", "claude.ai", &email, false).unwrap().examples.is_empty());
+        log.clear().unwrap();
+        assert_eq!(fs::read_to_string(log.routing_path()).unwrap(), "");
+    }
+
+    #[test]
+    fn routed_history_respects_disable_retention_and_version_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, _) = HistoryLog::open(dir.path().join("history.jsonl"), HistoryLimits { max_entries: 2, ..Default::default() }, true).unwrap();
+        let policy = routing_policy("Write an email");
+        for text in ["one", "two", "three"] {
+            log.record_routed(new(text), Some(&policy)).unwrap();
+        }
+        assert_eq!(log.load_routing().unwrap().len(), 2);
+        log.set_enabled(false);
+        assert!(log.record_routed(new("four"), Some(&policy)).unwrap().is_none());
+        assert_eq!(log.routed_context("claude", "claude.ai", &policy, true).unwrap(), HistoryContext::default());
+        assert_eq!(log.load_routing().unwrap().len(), 2);
+        log.set_enabled(true);
+        let text = fs::read_to_string(log.routing_path()).unwrap().replace("\"version\":1", "\"version\":99");
+        fs::write(log.routing_path(), text).unwrap();
+        assert!(log.routed_context("claude", "claude.ai", &policy, false).is_err());
     }
 
     #[test]

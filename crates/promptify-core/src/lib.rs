@@ -12,6 +12,7 @@ pub mod pipeline;
 pub mod prefix_cache;
 pub mod profiles;
 pub mod prompt;
+pub mod routing;
 pub mod sanitize;
 pub mod scheduler;
 pub mod structure;

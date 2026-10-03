@@ -2,11 +2,65 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type Mode = "prompt" | "dictation" | "answer";
 export type Stage = "transcribing" | "researching" | "generating" | "revising" | "inserting";
+export type Rendering = "legacy" | "adaptive";
+export type PromptForm = "graph" | "inline_graph";
+export type PromptSurface =
+  | "chat" | "code_chat" | "research_chat" | "source_chat" | "document_chat"
+  | "spreadsheet_chat" | "sql_chat" | "builder_chat" | "presentation_chat"
+  | "image_prompt" | "video_prompt" | "music_description" | "music_style"
+  | "sound_prompt" | "voice_design" | "object_prompt" | "texture_prompt"
+  | "search_query" | "literal" | "unknown";
+
+export interface RoutingOptions {
+  rendering: Rendering;
+  task_type: string | null;
+  surface: PromptSurface | null;
+}
+
+export interface RoutingState {
+  rendering: Rendering;
+  error: string | null;
+}
+
+export interface PromptType {
+  id: string;
+  family: string;
+  label: string;
+  inputs: string;
+  priority: "P1" | "P2" | "P3" | "B";
+  feasibility: "F1" | "F2" | "F3";
+  status: "proposed" | "validated" | "enabled" | "retired";
+  form: PromptForm;
+  conversational: boolean;
+}
+
+export interface PromptCatalog {
+  version: number;
+  tasks: PromptType[];
+  surfaces: PromptSurface[];
+}
+
+export interface PromptRouting {
+  version: number;
+  target_profile_id: string;
+  target_name: string;
+  surface: PromptSurface;
+  task_type: string;
+  task_label: string;
+  secondary_tasks: string[];
+  form: PromptForm;
+  conversational: boolean;
+  reason: "explicit" | "matched" | "surface_default" | "uncertain";
+  auto_paste: boolean;
+  warnings: string[];
+  max_chars: number | null;
+  newlines: "keep" | "collapse";
+}
 
 export type Outcome =
   | { kind: "inserted"; text: string }
   | { kind: "answered"; text: string }
-  | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed"; detail: string | null }
+  | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed" | "surface_unconfirmed" | "graph_unsupported"; detail: string | null }
   | { kind: "no_speech" }
   | { kind: "cancelled" }
   | { kind: "failed"; reason: string; detail: string | null };
@@ -18,6 +72,7 @@ export interface JobReport {
   elapsed_ms: number;
   history_saved: boolean;
   structure: "valid" | "repaired" | "kept_original" | null;
+  routing?: PromptRouting | null;
 }
 
 export type OverlayEvent =
@@ -27,6 +82,7 @@ export type OverlayEvent =
   | { type: "stage"; stage: Stage }
   | { type: "transcript"; text: string }
   | { type: "token"; text: string }
+  | { type: "routing"; routing: PromptRouting }
   | { type: "finished"; report: JobReport; capped: boolean }
   | { type: "error"; message: string }
   | { type: "cancelled" };
@@ -40,7 +96,11 @@ export interface AppInfo {
   input_device: string | null;
   hotkeys: { prompt: string; dictation: string; answer: string | null; cancel: string };
   hotkey_errors: string[];
+  prompt_hotkey_error: string | null;
+  hotkeys_paused: boolean;
   engines_ready: boolean;
+  models_installed: boolean;
+  engine_error: string | null;
   history_enabled: boolean;
   data_dir: string;
   use_gpu: boolean;
@@ -49,6 +109,29 @@ export interface AppInfo {
   auto_mode: boolean;
   vocabulary: Vocabulary;
   screen_text_apps: string[];
+}
+
+export type OnboardingStep = "models" | "input" | "practice";
+export type EngineStatus = { state: "missing" | "loading" | "ready" } | { state: "error"; message: string };
+export type PracticePhase = "armed" | "recording" | "processing" | "awaiting_paste" | "passed" | "failed";
+
+export interface OnboardingStatus {
+  required: boolean;
+  step: OnboardingStep;
+  speech: EngineStatus;
+  language: EngineStatus;
+  startup_error: string | null;
+  practice: {
+    phase: PracticePhase | null;
+    attempt_id: number | null;
+    job_id: number | null;
+    error: string | null;
+  };
+}
+
+export interface PracticeEvent {
+  attempt_id: number;
+  event: OverlayEvent;
 }
 
 export interface ModelStatus {
@@ -100,6 +183,7 @@ export interface PreviewOutput {
   profileId: string;
   profileName: string;
   messages: ChatMessage[];
+  routing?: PromptRouting | null;
 }
 
 export interface PreviewInput {
@@ -108,6 +192,7 @@ export interface PreviewInput {
   windowTitle: string;
   url: string | null;
   surroundingText: string | null;
+  routing?: RoutingOptions;
 }
 
 export interface Device {
@@ -167,11 +252,26 @@ export interface McpFile {
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
+  onboardingStatus: () => invoke<OnboardingStatus>("onboarding_status"),
+  retryOnboardingStartup: () => invoke<void>("retry_onboarding_startup"),
+  retryModelLoading: () => invoke<void>("retry_model_loading"),
+  setOnboardingStep: (step: OnboardingStep) => invoke<OnboardingStatus>("set_onboarding_step", { step }),
+  armOnboardingPractice: () => invoke<OnboardingStatus>("arm_onboarding_practice"),
+  disarmOnboardingPractice: () => invoke<void>("disarm_onboarding_practice"),
+  confirmOnboardingPaste: (attemptId: number, jobId: number, text: string) =>
+    invoke<OnboardingStatus>("confirm_onboarding_paste", { attemptId, jobId, text }),
+  completeOnboarding: () => invoke<OnboardingStatus>("complete_onboarding"),
+  resumeOnboardingHotkeys: () => invoke<OnboardingStatus>("resume_onboarding_hotkeys"),
   listProfiles: () => invoke<ProfileSummary[]>("list_profiles"),
+  routingState: () => invoke<RoutingState>("routing_state"),
+  setRendering: (rendering: Rendering) => invoke<RoutingState>("set_rendering", { rendering }),
+  promptCatalog: () => invoke<PromptCatalog>("prompt_catalog"),
+  queuePromptRouting: (options: RoutingOptions) => invoke<void>("queue_prompt_routing", { options }),
   previewPrompt: (input: PreviewInput) => invoke<PreviewOutput>("preview_prompt", { input }),
   cleanDictation: (text: string) => invoke<string>("clean_dictation", { text }),
   copyLastResult: () => invoke<void>("copy_last_result"),
   hideOverlay: () => invoke<void>("hide_overlay"),
+  resizeOverlay: (height: number) => invoke<void>("resize_overlay", { height }),
   listModels: () => invoke<ModelStatus[]>("list_models"),
   downloadModel: (id: string) => invoke<void>("download_model", { id }),
   cancelDownload: (id: string) => invoke<boolean>("cancel_download", { id }),

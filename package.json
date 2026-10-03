@@ -1,14 +1,16 @@
 {
   "name": "promptify",
   "private": false,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "app": "node scripts/dev.mjs",
+    "desktop": "npm run build && node scripts/desktop.mjs",
     "installer": "node scripts/installer.mjs",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test:onboarding": "npm run build && playwright test",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2.11.5",
     "@types/node": "^26.6.2",
     "@types/react": "^19.3.0",

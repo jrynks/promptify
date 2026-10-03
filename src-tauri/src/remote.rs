@@ -50,7 +50,7 @@ pub fn apply(state: &AppState) {
     }
     let mut error = state.remote.error.lock().unwrap();
     *error = None;
-    if !settings.server_enabled {
+    if !settings.server_enabled || crate::onboarding::required(state) {
         return;
     }
     match RemoteServer::start(config_for(&settings, &state.data_dir), state.orchestrator.service().clone()) {
@@ -114,6 +114,7 @@ fn update_settings(settings: &mut AppSettings, enabled: bool, relay_url: Option<
 
 #[tauri::command]
 pub fn set_remote_settings(state: State<'_, AppState>, enabled: bool, relay_url: Option<String>, lan_direct: bool, lan_discovery: bool) -> Result<(), String> {
+    crate::onboarding::require_complete(&state)?;
     {
         let mut settings = state.settings.write().unwrap();
         update_settings(&mut settings, enabled, relay_url, lan_direct, lan_discovery)?;

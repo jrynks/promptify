@@ -1,0 +1,2868 @@
+# Bundled prompt taxonomy. P2/P3 entries remain discoverable but are not active classifiers.
+# Task categories and sources: README.md, Prompt types and adaptive routing.
+version = 1
+
+[[task]]
+id = "info.fact"
+family = "Information, explanation, and practical guidance"
+label = "Ask a factual question without adding an artificial workflow"
+inputs = "Question, scope, need for current facts"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.explain"
+family = "Information, explanation, and practical guidance"
+label = "Explain a heat pump to a beginner"
+inputs = "Concept, audience, desired depth"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:explain|what is|what are|how does|why does)\\b"]
+instructions = "Ask for an accurate explanation at the user's level, with useful examples and uncertainty where needed."
+examples = ["Explain how a heat pump works", "What is photosynthesis", "How does inflation work", "Why does the moon have phases"]
+negatives = ["Explain this Python function", "Teach me calculus interactively"]
+rewrite = "Explain how a heat pump works.\nStep 1: Explain how a heat pump works in clear language, using a practical example and defining any necessary technical terms.\nStep 2 (after 1): Check that the explanation is accurate, understandable at the requested level, and clear about uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "info.how_to"
+family = "Information, explanation, and practical guidance"
+label = "Explain how to organize a personal document archive"
+inputs = "Goal, environment, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.troubleshoot"
+family = "Information, explanation, and practical guidance"
+label = "Troubleshoot a non-code software or configuration problem"
+inputs = "Symptoms, environment, attempted fixes"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.glossary"
+family = "Information, explanation, and practical guidance"
+label = "Define specialist terms in a supplied document"
+inputs = "Terms, domain, audience"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.compare_concepts"
+family = "Information, explanation, and practical guidance"
+label = "Contrast two concepts such as authentication and authorization"
+inputs = "Concepts, comparison dimensions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.examples"
+family = "Information, explanation, and practical guidance"
+label = "Give examples and counterexamples of a concept"
+inputs = "Concept, level, example count if specified"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.recommend"
+family = "Information, explanation, and practical guidance"
+label = "Recommend an approach or product against stated preferences"
+inputs = "Needs, criteria, budget if supplied"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.simplify"
+family = "Information, explanation, and practical guidance"
+label = "Re-explain a difficult passage at a simpler level"
+inputs = "Passage reference, reading level"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "info.faq"
+family = "Information, explanation, and practical guidance"
+label = "Build an FAQ from a service description"
+inputs = "Source, intended readers, unanswered questions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.query"
+family = "Search, retrieval, and evidence"
+label = "Turn a rough information need into a focused search query"
+inputs = "Terms, exclusions, source/date filters"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.web"
+family = "Search, retrieval, and evidence"
+label = "Research current options and cite primary sources"
+inputs = "Question, recency, geography, source preferences"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["(?:^\\s*(?:please\\s+)?|\\b(?:please|you|to|then)\\s+)research\\b", "\\b(?:look up|find (?:recent|current|reliable|sources|studies|papers)|search (?:for|the web))\\b"]
+instructions = "Specify the research question, source quality and recency if given. Ask for citations and distinguish verified findings from uncertainty. Do not invent current facts."
+examples = ["Research recent battery technology", "Find reliable sources on urban transport", "Look up current electric car prices", "Search the web for public transit funding"]
+negatives = ["Answer only from the attached document", "Synthesize these studies"]
+suppresses = ["info.explain"]
+rewrite = "Research recent battery technology.\nStep 1: Research recent battery technology using reliable, current sources. Compare the key findings, cite the evidence, and distinguish established results from uncertainty.\nStep 2 (after 1): Check source support, requested scope, citations, contradictions, and any remaining uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "research.literature"
+family = "Search, retrieval, and evidence"
+label = "Review academic literature on a defined question"
+inputs = "Research question, scope, inclusion criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.source_qa"
+family = "Search, retrieval, and evidence"
+label = "Answer only from selected documents with traceable citations"
+inputs = "Source references, question, abstention rule"
+priority = "P1"
+feasibility = "F2"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:answer (?:only )?from|based (?:only )?on (?:the |these |my )?(?:attached|provided|selected|uploaded)|use only (?:the |these )?(?:sources|documents)|ask (?:the |this )?document)\\b"]
+instructions = "Request answers grounded only in the named sources, with traceable citations when supported. Require abstention for missing evidence; never claim to have opened recipient-side files."
+examples = ["Answer only from the attached document", "Based on the provided sources explain the warranty", "Use only these documents to answer my question", "Ask this document what the refund policy is"]
+negatives = ["Research current tax rules on the web", "Write a summary of this article"]
+suppresses = ["info.explain", "research.web"]
+rewrite = "Answer only from the attached document.\nStep 1: Answer my question using only the document I attach. Cite the supporting passages where possible, and say when the document does not contain the answer. Ask for the document or question if either is missing.\nStep 2 (after 1): Check source support, requested scope, citations, contradictions, and any remaining uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "research.synthesize"
+family = "Search, retrieval, and evidence"
+label = "Reconcile findings across several supplied sources"
+inputs = "Source set, question, conflicts to preserve"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:synthesi[sz]e|reconcile (?:the |these )?(?:sources|findings)|combine (?:the |this )?evidence|compare (?:the |these )?findings)\\b"]
+instructions = "Ask for an evidence synthesis across the supplied sources, retaining disagreements, limitations, provenance, and unanswered questions."
+examples = ["Synthesize these studies", "Reconcile the findings of these reports", "Combine the evidence from these interviews", "Compare the findings across these sources"]
+negatives = ["Summarize one article in three bullets", "Research available project tools"]
+suppresses = ["summary.brief", "research.web"]
+rewrite = "Synthesize these studies.\nStep 1: Synthesize the studies I provide, identifying common findings, disagreements, evidence quality, and limitations. Keep claims tied to their sources and do not invent missing evidence.\nStep 2 (after 1): Check source support, requested scope, citations, contradictions, and any remaining uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "research.fact_check"
+family = "Search, retrieval, and evidence"
+label = "Check specific claims and separate verified from uncertain"
+inputs = "Claims, evidence scope, recency"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.citation_audit"
+family = "Search, retrieval, and evidence"
+label = "Check whether cited material actually supports each claim"
+inputs = "Claims, citations, access constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.source_quality"
+family = "Search, retrieval, and evidence"
+label = "Assess reliability and limitations of sources"
+inputs = "Sources, evaluation criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.competitive_scan"
+family = "Search, retrieval, and evidence"
+label = "Compare competitors using cited public information"
+inputs = "Competitors, comparison dimensions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.product_compare"
+family = "Search, retrieval, and evidence"
+label = "Compare products against a buyer's requirements"
+inputs = "Candidates, must-haves, budget and locale if known"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.news_brief"
+family = "Search, retrieval, and evidence"
+label = "Assemble a current-events brief with dates and sources"
+inputs = "Topic, date window, source preferences"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "research.plan"
+family = "Search, retrieval, and evidence"
+label = "Design a research approach before gathering evidence"
+inputs = "Question, available sources, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "summary.brief"
+family = "Summarization and synthesis"
+label = "Request a short summary of an article"
+inputs = "Source reference, length, audience"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:summari[sz]e|summary|summarization|tl[;:]?dr)\\b"]
+instructions = "Ask for a faithful summary of the referenced source. Preserve its scope, qualifications, requested length and audience. Do not supply the summary yourself."
+examples = ["Summarize this article in three bullets", "Give me a summary of this chapter", "I need a TLDR of this post", "Summarize the attached report"]
+negatives = ["Summarize this meeting", "Create an executive summary"]
+rewrite = "Summarize this article in three bullets.\nStep 1: Summarize this article in three bullet points. Preserve its key findings and qualifications without adding facts that are not in the article.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "summary.executive"
+family = "Summarization and synthesis"
+label = "Request a decision-focused executive summary"
+inputs = "Source, decision context, risks"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\bexecutive summary\\b", "\\b(?:summari[sz]e|summary)\\b.*\\b(?:boss|board|leadership|executives)\\b"]
+instructions = "Request a decision-focused executive summary grounded in the source, with key findings, implications, risks and unresolved issues as relevant."
+examples = ["Create an executive summary", "Summarize this report for my boss", "Write a summary for the board", "Summarize these findings for leadership"]
+negatives = ["Summarize this meeting", "Write an email to my boss"]
+suppresses = ["summary.brief", "writing.draft"]
+rewrite = "Create an executive summary.\nStep 1: Create an executive summary of the material I provide, emphasizing key findings, decisions, risks, and unresolved questions. Keep it grounded in the source.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "summary.meeting"
+family = "Summarization and synthesis"
+label = "Turn a meeting transcript into organized notes"
+inputs = "Transcript reference, participants if known"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:summari[sz]e|notes from|recap|summary of)\\b.*\\b(?:meeting|call|conference|discussion)\\b", "\\bmeeting (?:notes|summary|recap)\\b"]
+instructions = "Request meeting notes grounded in the transcript, separating discussion, decisions, open questions and actions. Never invent attendees, commitments or deadlines."
+examples = ["Summarize this meeting", "Write meeting notes from the transcript", "Recap our conference call", "Give me notes from the discussion"]
+negatives = ["Write a meeting invitation email", "Summarize this article"]
+suppresses = ["summary.brief", "writing.draft"]
+rewrite = "Summarize this meeting.\nStep 1: Summarize the meeting from the material I provide. Separate the main discussion, decisions, open questions, and actions without inventing attendees or commitments.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "summary.actions"
+family = "Summarization and synthesis"
+label = "Extract action items without inventing owners or deadlines"
+inputs = "Transcript/document, required fields"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:extract|identify|list|pull out|find)\\b.*\\b(?:action items|follow[- ]ups|assigned tasks)\\b"]
+instructions = "Request action items with explicitly stated owners and deadlines, marking unknown values as unknown. Distinguish commitments from suggestions and retain source references."
+examples = ["Extract action items from these notes", "List the assigned tasks from the meeting", "Identify follow-ups in this transcript", "Pull out action items with owners and deadlines"]
+negatives = ["Plan a project with tasks", "Summarize the article"]
+suppresses = ["summary.brief", "summary.meeting", "extract.fields"]
+rewrite = "Extract action items from these notes.\nStep 1: Extract action items from these notes. Include owners and deadlines only when stated; otherwise mark them as unknown. Distinguish commitments from suggestions.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "summary.decisions"
+family = "Summarization and synthesis"
+label = "Separate decisions from discussion and open questions"
+inputs = "Source, decision criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "summary.long_document"
+family = "Summarization and synthesis"
+label = "Summarize a long document section by section"
+inputs = "Document reference, coverage, length"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "summary.cross_document"
+family = "Summarization and synthesis"
+label = "Produce a common-theme summary across documents"
+inputs = "Documents, grouping criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "summary.change_digest"
+family = "Summarization and synthesis"
+label = "Summarize differences between versions or updates"
+inputs = "Versions, significance criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "summary.conversation"
+family = "Summarization and synthesis"
+label = "Condense a discussion into context for a handoff"
+inputs = "Conversation, recipient, unresolved items"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "summary.abstract"
+family = "Summarization and synthesis"
+label = "Produce a structured research or technical abstract"
+inputs = "Source, required abstract sections"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "extract.fields"
+family = "Extraction, classification, and normalization"
+label = "Extract named fields from supplied records"
+inputs = "Source, field schema, null/unknown rules"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:extract (?:the |these |all )?(?:fields|names|dates|amounts|entities)|structured extraction|parse (?:this |the |an? )?invoice|convert (?:these |the )?records (?:to|into) json)\\b"]
+instructions = "Specify the required fields and schema, source references, provenance and null/unknown policy. Ask the destination to extract only supported values, without inventing missing information."
+examples = ["Extract the fields from these invoices", "Extract names and dates from this text", "Parse this invoice into structured data", "Convert these records into JSON"]
+negatives = ["Extract action items from this meeting", "Classify support tickets"]
+rewrite = "Extract the fields from these invoices.\nStep 1: Extract the requested fields from these invoices into the schema I provide. Use null for missing values and retain source references. Ask for the schema if it is not available; do not invent fields or values.\nStep 2 (after 1): Check the requested fields, schema, source support, and explicit handling of missing values.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "extract.entities"
+family = "Extraction, classification, and normalization"
+label = "Extract people, organizations, dates, or identifiers"
+inputs = "Source, entity types, provenance requirement"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "extract.relations"
+family = "Extraction, classification, and normalization"
+label = "Extract relationships between named entities"
+inputs = "Source, relation definitions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "extract.events"
+family = "Extraction, classification, and normalization"
+label = "Build an event timeline from records"
+inputs = "Source, date handling, uncertainty"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "extract.tables"
+family = "Extraction, classification, and normalization"
+label = "Extract a table from a document or image"
+inputs = "Asset reference, columns, layout constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "classify.topic"
+family = "Extraction, classification, and normalization"
+label = "Label support tickets using an explicit taxonomy"
+inputs = "Text set, allowed labels, multi-label policy"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:classify|categorize|categorise|label (?:the |these )?(?:tickets|records|messages)|tag (?:the |these )?(?:posts|tickets))\\b"]
+instructions = "Specify the allowed labels and their meanings, single- or multi-label policy, and unknown/ambiguous handling. Preserve a user-supplied taxonomy rather than inventing categories."
+examples = ["Classify these support tickets by topic", "Categorize the customer messages", "Label these records using my taxonomy", "Tag these posts by category"]
+negatives = ["Extract dates from text", "Summarize these tickets"]
+rewrite = "Classify these support tickets by topic.\nStep 1: Classify these support tickets by topic using the labels and definitions I provide. Mark ambiguous or unmatched tickets explicitly rather than inventing categories.\nStep 2 (after 1): Check that the supplied labels and definitions are followed and ambiguous cases are identified.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "classify.intent"
+family = "Extraction, classification, and normalization"
+label = "Classify the intent behind requests"
+inputs = "Text, intent definitions, unknown label"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "classify.sentiment"
+family = "Extraction, classification, and normalization"
+label = "Assess sentiment with a stated rating scale"
+inputs = "Text, scale, unit of analysis"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "classify.cluster"
+family = "Extraction, classification, and normalization"
+label = "Group qualitative feedback into themes"
+inputs = "Feedback, desired granularity"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "transform.normalize"
+family = "Extraction, classification, and normalization"
+label = "Standardize dates, units, or naming conventions"
+inputs = "Records, locale, target conventions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "transform.deduplicate"
+family = "Extraction, classification, and normalization"
+label = "Identify likely duplicate records without silent deletion"
+inputs = "Records, match criteria, review rules"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "transform.redact"
+family = "Extraction, classification, and normalization"
+label = "Request removal of specified sensitive information"
+inputs = "Source, redaction scope, replacement policy"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.draft"
+family = "Writing and editing"
+label = "Draft prose for a defined purpose"
+inputs = "Purpose, audience, facts, length"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:write|draft|compose)\\b.*\\b(?:article|essay|paragraph|blog post|prose|text|script)\\b"]
+instructions = "Request the text for the user's purpose, audience and constraints. Preserve supplied facts; leave missing facts open. Write only the instructions, not the final prose."
+examples = ["Draft an article about urban gardens", "Write an essay about renewable energy", "Compose a paragraph for our introduction", "Write a video script for a product tutorial"]
+negatives = ["Write an email to the team", "Write a Python function"]
+exclude = ["\\b(?:python|shell|bash|powershell|javascript)\\s+script\\b"]
+rewrite = "Draft an article about urban gardens.\nStep 1: Draft an article about urban gardens. Use the facts and audience details I provide, keep the writing clear and engaging, and do not invent local examples, names, statistics, or quotations.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "writing.outline"
+family = "Writing and editing"
+label = "Build an outline before drafting"
+inputs = "Topic, purpose, coverage"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.expand"
+family = "Writing and editing"
+label = "Expand a draft without inventing supporting facts"
+inputs = "Draft, sections to expand, source material"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.shorten"
+family = "Writing and editing"
+label = "Shorten text while retaining key meaning"
+inputs = "Source, target length, protected details"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:shorten|condense|make (?:it|this|that|the text) (?:shorter|concise)|cut (?:it|this) down)\\b"]
+instructions = "Ask for a shorter version while preserving key meaning, named facts, numbers and commitments. Preserve a requested length rather than making one up."
+examples = ["Shorten this paragraph", "Condense the draft", "Make it shorter", "Cut this down without losing the key facts"]
+negatives = ["Summarize this report", "Expand the introduction"]
+rewrite = "Shorten this paragraph.\nStep 1: Shorten this paragraph while preserving its meaning, key details, names, numbers, and commitments. Do not add new information.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "writing.proofread"
+family = "Writing and editing"
+label = "Correct spelling and grammar without rewriting intent"
+inputs = "Source, language variant, edit scope"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:proofread|fix (?:the |my )?(?:grammar|spelling)|correct (?:the |my )?(?:grammar|spelling)|check (?:the |my )?spelling)\\b"]
+instructions = "Request spelling and grammar corrections with minimal changes to meaning, voice and commitments. Use the specified language variant."
+examples = ["Proofread my draft", "Fix the grammar in this paragraph", "Correct spelling in this letter", "Check my spelling"]
+negatives = ["Debug the parser", "Change the tone to friendly"]
+rewrite = "Proofread my draft.\nStep 1: Proofread my draft for spelling, grammar, and punctuation. Preserve its meaning and voice, and avoid unnecessary rewrites.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "writing.clarity"
+family = "Writing and editing"
+label = "Improve readability, flow, and sentence structure"
+inputs = "Source, audience, preservation constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.tone"
+family = "Writing and editing"
+label = "Change tone while preserving commitments and facts"
+inputs = "Source, desired tone, protected details"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:change (?:the )?tone|make (?:it|this|that) (?:warmer|friendlier|more formal|more professional)|rewrite\\b.*\\b(?:friendly|formal|professional|warm)|professional tone)\\b"]
+instructions = "Request the stated tone while preserving facts, obligations, promises and intent. Do not invent a relationship or change what the user is committing to."
+examples = ["Change the tone to friendly", "Make this more formal", "Rewrite this in a professional tone", "Make it warmer without changing the facts"]
+negatives = ["Proofread the letter", "Summarize the report"]
+rewrite = "Change the tone to friendly.\nStep 1: Rewrite the text in a friendly tone while preserving its facts, meaning, and commitments. Do not invent details or change what is being promised.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "writing.audience"
+family = "Writing and editing"
+label = "Adapt a draft for a different audience"
+inputs = "Source, audience knowledge, purpose"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.plain_language"
+family = "Writing and editing"
+label = "Rewrite specialist prose in plain language"
+inputs = "Source, terms to retain, reading level"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.style_guide"
+family = "Writing and editing"
+label = "Apply a supplied style or brand guide"
+inputs = "Draft, style-guide reference"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.critique"
+family = "Writing and editing"
+label = "Critique a draft against a stated rubric"
+inputs = "Draft, rubric, actionable feedback format"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "writing.reformat"
+family = "Writing and editing"
+label = "Reorganize prose into a requested document structure"
+inputs = "Source, target structure, preservation rules"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.email"
+family = "Professional communication and career documents"
+label = "Draft an email with a clear purpose and call to action"
+inputs = "Recipient, purpose, supplied facts, tone"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:write|draft|compose|create)\\b.*\\b(?:email|e-mail)\\b"]
+instructions = "Request an email using the stated recipient, purpose, facts and tone, with a clear call to action where appropriate. Do not send it or invent commitments."
+examples = ["Write an email asking for the meeting notes", "Draft an email to our supplier", "Compose a thank you email", "Create an email requesting a refund"]
+negatives = ["Reply to this email", "Summarize this email"]
+suppresses = ["writing.draft"]
+rewrite = "Write an email asking for the meeting notes.\nStep 1: Write a concise email asking for the meeting notes. Keep the tone polite and direct; do not invent recipient names, deadlines, or commitments.\nStep 2 (after 1): Review the draft for the requested purpose, tone, recipient, and preservation of facts and commitments.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "communication.reply"
+family = "Professional communication and career documents"
+label = "Draft a reply grounded in the existing conversation"
+inputs = "Thread reference, desired response, commitments"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:reply (?:to|with)|respond to (?:this|the|their)|draft (?:a |an )?response)\\b"]
+instructions = "Request a reply grounded in the referenced thread and the user's intended response. Preserve commitments, boundaries and tone; never claim to send it."
+examples = ["Reply to this email politely declining", "Respond to their invitation", "Draft a response to the customer", "Reply with a request for clarification"]
+negatives = ["Write a new email", "Summarize this conversation"]
+suppresses = ["communication.email", "writing.draft"]
+rewrite = "Reply to this email politely declining.\nStep 1: Draft a polite reply declining the invitation in this email. Preserve the context and do not invent an excuse, commitment, or personal detail.\nStep 2 (after 1): Review the draft for the requested purpose, tone, recipient, and preservation of facts and commitments.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "communication.brief"
+family = "Professional communication and career documents"
+label = "Write a concise handoff or decision brief"
+inputs = "Situation, audience, decision needed"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.memo"
+family = "Professional communication and career documents"
+label = "Draft an internal memo"
+inputs = "Purpose, audience, facts, requested action"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.proposal"
+family = "Professional communication and career documents"
+label = "Draft a proposal against stated requirements"
+inputs = "Requirements, scope, evidence, exclusions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.talk_script"
+family = "Professional communication and career documents"
+label = "Request speaking notes or a presentation script"
+inputs = "Audience, source content, allotted length"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.agenda"
+family = "Professional communication and career documents"
+label = "Create an outcome-oriented meeting agenda"
+inputs = "Participants, objectives, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.status"
+family = "Professional communication and career documents"
+label = "Produce a status update without inventing progress"
+inputs = "Completed work, blockers, next actions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.resume"
+family = "Professional communication and career documents"
+label = "Tailor a resume to a role without fabricating experience"
+inputs = "Resume, job description, truthful constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "communication.cover_letter"
+family = "Professional communication and career documents"
+label = "Draft a cover letter grounded in supplied experience"
+inputs = "Resume, role, employer facts"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.campaign"
+family = "Marketing, sales, and publishing"
+label = "Plan a campaign around a defined offer and audience"
+inputs = "Goal, audience, channels, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.ad_copy"
+family = "Marketing, sales, and publishing"
+label = "Request advertising variants without unsupported claims"
+inputs = "Offer, audience, channel limits"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.social"
+family = "Marketing, sales, and publishing"
+label = "Draft platform-appropriate social posts"
+inputs = "Topic, audience, platform, tone"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.product_copy"
+family = "Marketing, sales, and publishing"
+label = "Turn verified product facts into descriptions"
+inputs = "Features, benefits, evidence, exclusions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.landing_copy"
+family = "Marketing, sales, and publishing"
+label = "Write landing-page copy with a clear conversion goal"
+inputs = "Offer, audience, proof, call to action"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.seo"
+family = "Marketing, sales, and publishing"
+label = "Draft search-oriented content from a keyword brief"
+inputs = "Keywords, reader intent, source facts"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.brand_voice"
+family = "Marketing, sales, and publishing"
+label = "Define or apply a brand-voice guide"
+inputs = "Examples, audience, voice constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.newsletter"
+family = "Marketing, sales, and publishing"
+label = "Assemble a newsletter from supplied material"
+inputs = "Source items, audience, structure"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.outreach"
+family = "Marketing, sales, and publishing"
+label = "Draft individualized, truthful business outreach"
+inputs = "Recipient context, offer, relationship"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "marketing.objections"
+family = "Marketing, sales, and publishing"
+label = "Prepare responses to common customer objections"
+inputs = "Product facts, objections, limits"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.brainstorm"
+family = "Creative writing and ideation"
+label = "Generate varied ideas against a brief"
+inputs = "Goal, constraints, diversity criteria"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:brainstorm|come up with ideas|generate (?:some |several |creative )?ideas|give me ideas)\\b"]
+instructions = "Ask for varied, concrete ideas against the user's brief and constraints. Preserve requested breadth and selection criteria without choosing the ideas yourself."
+examples = ["Brainstorm ideas for a science fair", "Come up with ideas for a community event", "Generate creative ideas for our campaign", "Give me ideas for a short film"]
+negatives = ["Write a story about a lighthouse", "Research science fair safety"]
+rewrite = "Brainstorm ideas for a science fair.\nStep 1: Brainstorm varied ideas for a science fair. Keep them practical and distinct, and explain the core concept of each without assuming a budget or participant age.\nStep 2 (after 1): Review the result against the stated creative brief and audience without imposing new numeric or factual constraints.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "creative.naming"
+family = "Creative writing and ideation"
+label = "Suggest names without claiming trademark clearance"
+inputs = "Subject, tone, exclusions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.story"
+family = "Creative writing and ideation"
+label = "Request an original story"
+inputs = "Premise, audience, genre, length"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:write|draft|create|tell)\\b.*\\b(?:story|fiction|tale)\\b"]
+instructions = "Request original creative writing with the given premise, audience, genre, tone and constraints. Keep those details in the creation step and check the result against them. Do not write the story yourself or invent numeric limits."
+examples = ["Write a story about a lighthouse", "Create a short fictional tale", "Tell a story about a curious robot", "Draft a science fiction story"]
+negatives = ["Create a video of a lighthouse", "Write a product launch plan"]
+suppresses = ["writing.draft"]
+rewrite = "Write a story about a lighthouse.\nStep 1: Write an original story about a lighthouse. Develop a coherent setting and engaging narrative without adding a fixed word count, viewpoint, or other constraints I did not request.\nStep 2 (after 1): Review the result against the stated creative brief and audience without imposing new numeric or factual constraints.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "creative.plot"
+family = "Creative writing and ideation"
+label = "Develop a plot outline with coherent progression"
+inputs = "Premise, characters, desired structure"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.world"
+family = "Creative writing and ideation"
+label = "Develop a consistent fictional setting"
+inputs = "Genre, rules, existing canon supplied by user"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.character"
+family = "Creative writing and ideation"
+label = "Develop a fictional character and motivations"
+inputs = "Role, setting, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.dialogue"
+family = "Creative writing and ideation"
+label = "Write a scene's dialogue in distinct character voices"
+inputs = "Characters, scene goals, tone"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.poetry"
+family = "Creative writing and ideation"
+label = "Request original poetry with specified form"
+inputs = "Subject, form, mood, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.songwriting"
+family = "Creative writing and ideation"
+label = "Ask a writing assistant for original lyrics"
+inputs = "Theme, language, song structure"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "creative.screenplay"
+family = "Creative writing and ideation"
+label = "Draft a screenplay or video script as text"
+inputs = "Story, scenes, audience, script format"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.character"
+family = "Role-play and interactive simulation"
+label = "Hold a conversation with an original fictional character"
+inputs = "Character, setting, boundaries"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.interview"
+family = "Role-play and interactive simulation"
+label = "Conduct a practice job interview one question at a time"
+inputs = "Role, experience level, feedback preferences"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:mock interview|practice (?:a )?(?:job )?interview|interview me|simulate\\b.*\\binterview|be the interviewer)\\b"]
+instructions = "Ask the destination to conduct a practice interview in the specified role, one question at a time, waiting for replies. Preserve requested feedback and stopping rules. Begin with the practice goal, not generic expert boilerplate."
+examples = ["Run a mock interview for a developer job", "Practice a job interview with me", "Interview me for a data analyst role", "Simulate a technical interview"]
+negatives = ["Summarize an interview transcript", "Write interview questions for a survey"]
+conversational = true
+rewrite = "Run a mock interview with me for a developer job.\nStep 1: Prepare an appropriate interview question using the role and goals I supplied.\nStep 2 (after 1): Ask one question at a time, wait for my response, and give useful feedback before continuing as I direct.\nLoop: if the current question or feedback needs improvement, return to Step 1 (max 2 rounds).\nDone when: The current turn fits the requested role and the practice goal is met or I choose to stop."
+
+[[task]]
+id = "roleplay.language"
+family = "Role-play and interactive simulation"
+label = "Practice a conversation in a target language"
+inputs = "Language, level, situation, correction style"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.negotiation"
+family = "Role-play and interactive simulation"
+label = "Rehearse a negotiation with feedback"
+inputs = "Scenario, roles, objectives, boundaries"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.customer"
+family = "Role-play and interactive simulation"
+label = "Practice a customer-service interaction"
+inputs = "Situation, policy, desired coaching"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.debate"
+family = "Role-play and interactive simulation"
+label = "Explore opposing arguments in a structured discussion"
+inputs = "Topic, positions, evidence standard"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.tabletop"
+family = "Role-play and interactive simulation"
+label = "Facilitate a fictional tabletop scenario"
+inputs = "Setting, rules, player agency, boundaries"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "roleplay.scenario"
+family = "Role-play and interactive simulation"
+label = "Simulate a professional training scenario"
+inputs = "Context, roles, decision points, debrief"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.tutor"
+family = "Education and learning"
+label = "Teach interactively with questions and feedback"
+inputs = "Topic, learner level, goals"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:tutor me|teach me|help me learn|socratic)\\b"]
+instructions = "Request tutoring matched to the learner's level and goals. Ask one question at a time, use hints and feedback, and adapt to the learner rather than delivering a complete lesson unasked."
+examples = ["Tutor me in algebra", "Teach me calculus interactively", "Help me learn French", "Use Socratic questions to teach fractions"]
+negatives = ["Explain what algebra is", "Write a lesson plan"]
+conversational = true
+suppresses = ["info.explain"]
+rewrite = "Tutor me in algebra using hints and guided practice.\nStep 1: Choose an appropriate explanation or practice question based on my stated goals and responses.\nStep 2 (after 1): Present one question or hint at a time, wait for my response, and adapt without giving every solution immediately.\nLoop: if the current explanation or hint is not helpful, return to Step 1 (max 2 rounds).\nDone when: The current concept is understood or I choose to pause; any remaining difficulty is made explicit."
+
+[[task]]
+id = "learning.lesson"
+family = "Education and learning"
+label = "Draft a lesson with learning objectives"
+inputs = "Topic, audience, objectives, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.study_plan"
+family = "Education and learning"
+label = "Organize study around a syllabus"
+inputs = "Syllabus, learner goals, availability"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.quiz"
+family = "Education and learning"
+label = "Generate practice questions with answer checks"
+inputs = "Material, difficulty, question formats"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.flashcards"
+family = "Education and learning"
+label = "Build flashcards from supplied material"
+inputs = "Source, granularity, answer length"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.worked_example"
+family = "Education and learning"
+label = "Request an explained example of a method"
+inputs = "Problem type, level, notation"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.hints"
+family = "Education and learning"
+label = "Offer incremental hints instead of giving the answer"
+inputs = "Problem, learner attempt, hint policy"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.assess_answer"
+family = "Education and learning"
+label = "Evaluate a learner's answer against criteria"
+inputs = "Question, answer, rubric"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.rubric"
+family = "Education and learning"
+label = "Create a scoring rubric for an assignment"
+inputs = "Assignment, outcomes, performance levels"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "learning.curriculum"
+family = "Education and learning"
+label = "Map topics and prerequisites into a curriculum"
+inputs = "Outcomes, audience, prerequisites"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.tradeoffs"
+family = "Reasoning, mathematics, and decisions"
+label = "Compare alternatives and recommend against criteria"
+inputs = "Options, constraints, priorities"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:trade[- ]?offs|pros and cons|help me (?:choose|decide)|compare\\b.*\\b(?:options|alternatives))\\b"]
+instructions = "Ask for options compared against the user's criteria and constraints, including risks, uncertainty and a justified recommendation. Do not invent prices or weights."
+examples = ["Compare these options for our team", "Explain the tradeoffs of renting versus buying", "Help me choose between these approaches", "List the pros and cons of these alternatives"]
+negatives = ["Explain photosynthesis", "Synthesize these research findings"]
+suppresses = ["info.explain"]
+rewrite = "Compare these options for our team.\nStep 1: Compare these options for our team against the criteria and constraints I provide. Explain the tradeoffs, risks, and uncertainties, and give a justified recommendation without inventing prices or requirements.\nStep 2 (after 1): Check that the reasoning and recommendation follow from the supplied criteria and acknowledge uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "reasoning.decision_matrix"
+family = "Reasoning, mathematics, and decisions"
+label = "Build a weighted decision matrix"
+inputs = "Options, criteria, weights if supplied"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.logic"
+family = "Reasoning, mathematics, and decisions"
+label = "Analyze a logic problem or consistency constraint"
+inputs = "Problem, assumptions, required result"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.math"
+family = "Reasoning, mathematics, and decisions"
+label = "Solve or explain a mathematical problem"
+inputs = "Problem, notation, answer checks"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.proof_review"
+family = "Reasoning, mathematics, and decisions"
+label = "Check a proposed proof for gaps"
+inputs = "Statement, proof, allowed assumptions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.estimate"
+family = "Reasoning, mathematics, and decisions"
+label = "Estimate an unknown with explicit assumptions"
+inputs = "Quantity, known facts, uncertainty bounds"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.scenarios"
+family = "Reasoning, mathematics, and decisions"
+label = "Compare outcomes under different assumptions"
+inputs = "Baseline, variables, scenario definitions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.risk"
+family = "Reasoning, mathematics, and decisions"
+label = "Identify and prioritize risks with mitigations"
+inputs = "Objective, environment, risk criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.prioritize"
+family = "Reasoning, mathematics, and decisions"
+label = "Rank a backlog against explicit criteria"
+inputs = "Items, criteria, dependencies"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "reasoning.argument"
+family = "Reasoning, mathematics, and decisions"
+label = "Evaluate an argument's evidence and alternatives"
+inputs = "Argument, evidence, evaluation criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.project"
+family = "Planning and productivity"
+label = "Build a project plan with dependencies and completion criteria"
+inputs = "Goal, scope, constraints, deliverables"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:project plan|launch plan|plan (?:the |a |our )?(?:project|launch|migration)|plan out\\b.*\\bproject)\\b"]
+instructions = "Request a scoped project plan with deliverables, dependencies, independent work, risks and verifiable completion criteria. Preserve supplied dates and resources; do not invent them."
+examples = ["Create a project plan for the rollout", "Make a launch plan for our product", "Plan the migration of our service", "Plan out the website project"]
+negatives = ["Write a launch announcement email", "Explain project management"]
+suppresses = ["writing.draft"]
+rewrite = "Create a project plan for the rollout.\nStep 1: Identify the scope, deliverables, constraints, and missing information.\nStep 2 (after 1): Organize the work with dependencies, review checkpoints, and verifiable completion criteria.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The plan covers the requested scope, dependencies, checkpoints, and completion criteria without invented dates or resources."
+
+[[task]]
+id = "planning.breakdown"
+family = "Planning and productivity"
+label = "Break a goal into actionable tasks"
+inputs = "Goal, boundaries, desired granularity"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.schedule"
+family = "Planning and productivity"
+label = "Arrange tasks around supplied availability"
+inputs = "Tasks, durations if known, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.checklist"
+family = "Planning and productivity"
+label = "Produce a practical completion checklist"
+inputs = "Process, failure risks, completion criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.resources"
+family = "Planning and productivity"
+label = "Identify resources needed for an objective"
+inputs = "Scope, capacity, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.budget"
+family = "Planning and productivity"
+label = "Draft a budget framework without inventing prices"
+inputs = "Categories, amounts if supplied, assumptions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.event"
+family = "Planning and productivity"
+label = "Plan an event around its participants and constraints"
+inputs = "Purpose, audience, venue/budget if known"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.travel"
+family = "Planning and productivity"
+label = "Build a travel plan using verified current information"
+inputs = "Destinations, dates, preferences, constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.routine"
+family = "Planning and productivity"
+label = "Create a personal routine from stated preferences"
+inputs = "Goal, availability, preferences"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "planning.process"
+family = "Planning and productivity"
+label = "Improve a workflow and identify bottlenecks"
+inputs = "Current process, objective, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.requirements"
+family = "Product, business, and user research"
+label = "Draft product requirements with scope boundaries"
+inputs = "Problem, audience, constraints, success criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.user_stories"
+family = "Product, business, and user research"
+label = "Turn requirements into user stories"
+inputs = "Personas, goals, requirements"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.acceptance"
+family = "Product, business, and user research"
+label = "Write measurable acceptance criteria"
+inputs = "Feature, expected behaviors, edge cases"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.roadmap"
+family = "Product, business, and user research"
+label = "Prioritize product outcomes and dependencies"
+inputs = "Goals, evidence, capacity constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.market"
+family = "Product, business, and user research"
+label = "Analyze a market with sourced claims"
+inputs = "Market scope, questions, evidence requirements"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.business_model"
+family = "Product, business, and user research"
+label = "Compare business-model options"
+inputs = "Offer, customers, constraints, assumptions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.pricing"
+family = "Product, business, and user research"
+label = "Evaluate pricing approaches and validation experiments"
+inputs = "Product, customers, evidence, objectives"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.interviews"
+family = "Product, business, and user research"
+label = "Write a neutral user-interview guide"
+inputs = "Research goals, participant context"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.survey"
+family = "Product, business, and user research"
+label = "Design a survey tied to decisions"
+inputs = "Population, goals, bias constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "product.feedback"
+family = "Product, business, and user research"
+label = "Synthesize feedback into evidence-backed opportunities"
+inputs = "Feedback, segmentation, decision context"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.implement"
+family = "Software development"
+label = "Implement a feature without unrelated changes"
+inputs = "Requirements, repository context, tests"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\bimplement\\b", "\\b(?:build|create|write|add)\\b.*\\b(?:function|endpoint|api|service|parser|python script|shell script|feature)\\b"]
+instructions = "Request implementation of the stated behavior in the named codebase and stack. Preserve scope, existing behavior and constraints; require relevant tests and verification, not unrelated rewrites."
+examples = ["Implement retry support for the client", "Write a Python function to parse dates", "Build an API endpoint for search", "Add a feature to export records"]
+negatives = ["Explain this Python function", "Build a React component"]
+suppresses = ["writing.draft"]
+rewrite = "Implement retry support for the client.\nStep 1: Inspect the existing client behavior, relevant code, and tests.\nStep 2 (after 1): Make a scoped implementation using existing patterns and run relevant tests.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: Retry support meets the request, existing behavior is preserved, and relevant checks pass or remaining failures are reported."
+
+[[task]]
+id = "code.explain"
+family = "Software development"
+label = "Explain existing code and its behavior"
+inputs = "Code reference, audience, scope"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:explain|walk me through|what does)\\b.*\\b(?:code|function|method|class|module|script|algorithm|component)\\b"]
+instructions = "Request an explanation of the referenced code's purpose, flow, assumptions and relevant edge cases at the user's level. Do not modify code unless requested."
+examples = ["Explain this Python function", "Walk me through the code", "What does this module do", "Explain the algorithm in this class"]
+negatives = ["Implement a function", "Explain how a heat pump works"]
+suppresses = ["info.explain"]
+rewrite = "Explain this Python function.\nStep 1: Explain this Python function's purpose, control flow, assumptions, and relevant edge cases. Use the code I provide and do not modify it.\nStep 2 (after 1): Check the result against the user's stated requirements.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "code.debug"
+family = "Software development"
+label = "Reproduce, diagnose, fix, and verify a defect"
+inputs = "Symptoms, errors, reproduction, expected behavior"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\bdebug\\b", "\\b(?:fix|diagnose|investigate|reproduce)\\b.*\\b(?:bug|crash|exception|error|defect)\\b"]
+instructions = "Ask the agent to reproduce the issue, identify the root cause from evidence, make a scoped fix, and verify with a regression test. Preserve exact errors and expected behavior."
+examples = ["Debug the checkout crash", "Fix the bug in login", "Diagnose this exception", "Investigate the parser error"]
+negatives = ["Fix the formula in cell A1", "Explain how this function works"]
+rewrite = "Debug the checkout crash.\nStep 1: Reproduce the crash and identify its root cause from the code and available evidence.\nStep 2 (after 1): Apply a minimal fix and add or run a relevant regression test.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The checkout issue is addressed, relevant checks pass, and any unverified behavior is reported honestly."
+
+[[task]]
+id = "code.refactor"
+family = "Software development"
+label = "Improve structure while preserving behavior"
+inputs = "Scope, constraints, tests"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:refactor|restructure (?:the |this )?(?:code|module|function)|split (?:the |this )?module)\\b"]
+instructions = "Request a scoped refactor that preserves observable behavior and public contracts. Use existing patterns and verify with relevant tests; do not change unrelated features."
+examples = ["Refactor the payment module", "Restructure this code for clarity", "Split the module into smaller functions", "Refactor this service without changing behavior"]
+negatives = ["Explain this module", "Review this diff"]
+rewrite = "Refactor the payment module while preserving its behavior.\nStep 1: Inspect the module's responsibilities, public contracts, and tests.\nStep 2 (after 1): Improve its structure using existing patterns and run the relevant checks.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The refactor is scoped, public behavior is preserved, and verification results are reported."
+
+[[task]]
+id = "code.review"
+family = "Software development"
+label = "Review a change for concrete correctness problems"
+inputs = "Diff/repository reference, review scope"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:review|audit|inspect)\\b.*\\b(?:code|diff|pull request|pr|patch|changes)\\b"]
+instructions = "Request an evidence-based code review of the supplied change, prioritizing correctness and actionable findings with locations. Do not modify files unless asked."
+examples = ["Review this diff for bugs", "Audit the code for correctness", "Inspect this pull request", "Review the patch before merging"]
+negatives = ["Refactor the module", "Proofread the proposal"]
+rewrite = "Review this diff for bugs.\nStep 1: Review this diff for concrete correctness bugs and regressions. Give actionable findings with code locations and supporting reasoning. Do not modify the code unless I ask.\nStep 2 (after 1): Check the result against the user's stated requirements.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "code.optimize"
+family = "Software development"
+label = "Improve performance against an explicit benchmark"
+inputs = "Baseline, bottleneck, measurable target"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.migrate"
+family = "Software development"
+label = "Migrate an API, framework, or language version"
+inputs = "Current/target versions, compatibility needs"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.document"
+family = "Software development"
+label = "Produce accurate API or implementation documentation"
+inputs = "Code, audience, documentation conventions"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.architecture"
+family = "Software development"
+label = "Compare architecture options for a system"
+inputs = "Requirements, constraints, current system"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.api_design"
+family = "Software development"
+label = "Design an API contract with errors and examples"
+inputs = "Consumers, operations, compatibility constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.regex"
+family = "Software development"
+label = "Create or explain a regular expression with examples"
+inputs = "Engine, positive/negative cases, flags"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "code.configuration"
+family = "Software development"
+label = "Create or repair a configuration file"
+inputs = "Tool, version, desired behavior, existing config"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "testing.unit"
+family = "Testing, reliability, and operations"
+label = "Add unit tests for specified behavior and edge cases"
+inputs = "Code, test framework, expected behavior"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:write|add|create|generate)\\b.*\\bunit tests?\\b", "^unit tests? for\\b"]
+instructions = "Request unit tests in the existing framework covering stated behavior, boundaries and regressions. Use appropriate mocks and run the relevant tests."
+examples = ["Add unit tests for checkout", "Write unit tests for this function", "Generate unit tests for the parser", "Create unit tests covering empty input"]
+negatives = ["Explain what unit tests are", "Debug the checkout crash"]
+suppresses = ["code.implement"]
+rewrite = "Add unit tests for checkout.\nStep 1: Inspect checkout behavior and the existing test framework.\nStep 2 (after 1): Add focused tests for expected behavior and edge cases, then run them.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The tests cover the requested behavior and pass, or failures are explicitly reported."
+
+[[task]]
+id = "testing.integration"
+family = "Testing, reliability, and operations"
+label = "Test interactions across components"
+inputs = "Interfaces, environment, fixtures"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "testing.e2e"
+family = "Testing, reliability, and operations"
+label = "Test a user workflow end to end"
+inputs = "Workflow, environment, acceptance criteria"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "testing.property"
+family = "Testing, reliability, and operations"
+label = "Define invariants and property-based tests"
+inputs = "Component, invariants, input constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "testing.fixtures"
+family = "Testing, reliability, and operations"
+label = "Create representative synthetic test fixtures"
+inputs = "Schema, edge cases, privacy constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "operations.ci"
+family = "Testing, reliability, and operations"
+label = "Diagnose and fix a CI failure with evidence"
+inputs = "Failure logs, workflow, relevant changes"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:fix|debug|diagnose|investigate)\\b.*\\b(?:ci|continuous integration|build pipeline|workflow failure)\\b", "\\bci (?:failure|failed|is failing)\\b"]
+instructions = "Ask for CI failure diagnosis using relevant logs and changes, a minimal corrective change, and verification of the affected checks. Keep credentials and deployment permissions out of the prompt."
+examples = ["Fix the CI failure", "Diagnose the build pipeline failure", "Investigate why continuous integration is broken", "CI is failing after the last change"]
+negatives = ["Explain continuous integration", "Fix the checkout crash"]
+suppresses = ["code.debug"]
+rewrite = "Fix the CI failure.\nStep 1: Read the failing check's logs and relevant changes to identify the cause.\nStep 2 (after 1): Make a minimal correction and rerun the affected checks.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The affected checks pass or remaining failures and verification limits are reported."
+
+[[task]]
+id = "operations.logs"
+family = "Testing, reliability, and operations"
+label = "Analyze logs for causes and correlations"
+inputs = "Logs, incident window, symptoms"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "operations.incident"
+family = "Testing, reliability, and operations"
+label = "Draft an incident analysis or postmortem"
+inputs = "Timeline, impact, evidence, unknowns"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "operations.deployment"
+family = "Testing, reliability, and operations"
+label = "Plan a deployment with checks and rollback"
+inputs = "Environment, change, approvals, rollback criteria"
+priority = "P3"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "operations.security_review"
+family = "Testing, reliability, and operations"
+label = "Request an authorized defensive review"
+inputs = "Scope, threat assumptions, review permissions"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.query"
+family = "Databases, SQL, and data engineering"
+label = "Ask for a read-only SQL query answering a question"
+inputs = "SQL dialect, schema, question, result shape"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:write|generate|create|build)\\b.*\\b(?:sql|query)\\b"]
+instructions = "Ask the SQL assistant for a read-only query matching the question, declared dialect and schema, with null/duplicate handling and expected columns. Do not invent schema identifiers or execute SQL."
+examples = ["Write a SQL query for active customers", "Generate a query for monthly revenue", "Create SQL to list overdue invoices", "Build a query joining the supplied tables"]
+negatives = ["Explain this SQL query", "Fix a spreadsheet formula"]
+suppresses = ["code.implement", "writing.draft"]
+rewrite = "Write a SQL query for active customers.\nStep 1: Write a read-only SQL query for active customers using the schema and SQL dialect I provide. State assumptions and handle missing values appropriately. Ask for missing schema details rather than inventing table or column names.\nStep 2 (after 1): Check that the requested query matches the supplied dialect, schema, and intended result without invented identifiers.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "database.explain"
+family = "Databases, SQL, and data engineering"
+label = "Explain what an existing query does"
+inputs = "Query, dialect, schema context"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.debug"
+family = "Databases, SQL, and data engineering"
+label = "Diagnose an incorrect or failing query"
+inputs = "Query, error, expected/actual results"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.optimize"
+family = "Databases, SQL, and data engineering"
+label = "Improve a query using its execution plan"
+inputs = "Query, plan, indexes, performance goal"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.schema"
+family = "Databases, SQL, and data engineering"
+label = "Design a schema with constraints and relationships"
+inputs = "Entities, access patterns, database"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.migration"
+family = "Databases, SQL, and data engineering"
+label = "Plan a reversible schema migration"
+inputs = "Existing/target schema, compatibility rules"
+priority = "P3"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.etl"
+family = "Databases, SQL, and data engineering"
+label = "Specify an extraction/transformation pipeline"
+inputs = "Sources, target schema, transformation rules"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.quality"
+family = "Databases, SQL, and data engineering"
+label = "Define data-quality checks and exception handling"
+inputs = "Dataset/schema, business rules"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.catalog"
+family = "Databases, SQL, and data engineering"
+label = "Document tables, columns, and business meanings"
+inputs = "Schema, definitions, known owners"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "database.lineage"
+family = "Databases, SQL, and data engineering"
+label = "Explain dependencies and movement of data"
+inputs = "Queries/pipelines, source references"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.formula"
+family = "Spreadsheets and business intelligence"
+label = "Ask an AI assistant to create a formula"
+inputs = "App, cells/columns, desired calculation, locale"
+priority = "P1"
+feasibility = "F2"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:write|create|generate|build|add|need)\\b.*\\b(?:formula|xlookup|vlookup)\\b"]
+instructions = "Ask the spreadsheet AI for a formula using the supplied cells, columns, locale and application. Specify desired calculation and error/blank handling; do not invent cell references or paste a formula yourself."
+examples = ["Create a formula for profit margin", "Write an Excel formula using these columns", "Generate an XLOOKUP for the inventory", "I need a formula to count matching rows"]
+negatives = ["Fix the formula in A1", "Explain this formula"]
+suppresses = ["writing.draft", "code.implement"]
+rewrite = "Create a formula for profit margin.\nStep 1: Create a formula for profit margin using the workbook, columns, and spreadsheet application I specify. Handle blank values and division by zero appropriately, and explain the formula. Ask for missing references instead of inventing them.\nStep 2 (after 1): Check that the proposed formula matches the stated references and expected calculation, including relevant error cases.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "spreadsheet.explain_formula"
+family = "Spreadsheets and business intelligence"
+label = "Explain a selected formula"
+inputs = "Formula reference, workbook context"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.fix_formula"
+family = "Spreadsheets and business intelligence"
+label = "Diagnose a formula's error or wrong result"
+inputs = "Formula, error, expected result, locale"
+priority = "P1"
+feasibility = "F2"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:fix|debug|repair|diagnose)\\b.*\\b(?:formula|xlookup|vlookup|spreadsheet)\\b"]
+instructions = "Request diagnosis of the supplied formula, error and expected result using the correct workbook, locale and cell references. Preserve existing intent and explain the correction; do not guess missing cells."
+examples = ["Fix the formula in cell A1", "Debug this XLOOKUP error", "Repair the spreadsheet formula", "Diagnose why the formula returns an error"]
+negatives = ["Write a new formula", "Fix the parser exception"]
+suppresses = ["code.debug", "spreadsheet.formula"]
+rewrite = "Fix the formula in cell A1.\nStep 1: Diagnose and fix the formula in cell A1 using its current expression, error, and expected result. Preserve the intended calculation and explain the correction. Ask for any essential missing context.\nStep 2 (after 1): Check that the proposed formula matches the stated references and expected calculation, including relevant error cases.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "spreadsheet.cleanup"
+family = "Spreadsheets and business intelligence"
+label = "Request a reversible cleanup of a table"
+inputs = "Table, rules, protected columns"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.pivot"
+family = "Spreadsheets and business intelligence"
+label = "Summarize data in a PivotTable"
+inputs = "Table, dimensions, measures, aggregation"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.lookup"
+family = "Spreadsheets and business intelligence"
+label = "Build a lookup between supplied tables"
+inputs = "Keys, tables, missing/duplicate-key handling"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.chart"
+family = "Spreadsheets and business intelligence"
+label = "Select and create an appropriate chart"
+inputs = "Data, question, chart constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.model"
+family = "Spreadsheets and business intelligence"
+label = "Build a scenario or financial workbook model"
+inputs = "Inputs, assumptions, outputs, formulas"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.audit"
+family = "Spreadsheets and business intelligence"
+label = "Check formulas, assumptions, and inconsistencies"
+inputs = "Workbook, expected invariants, scope"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spreadsheet.dashboard"
+family = "Spreadsheets and business intelligence"
+label = "Design a dashboard of defined metrics"
+inputs = "Data, metric definitions, audience"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.explore"
+family = "Data analysis, statistics, and machine learning"
+label = "Explore a dataset and identify patterns and caveats"
+inputs = "Dataset reference, question, data dictionary"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:analy[sz]e|explore|investigate)\\b.*\\b(?:data|dataset|churn|sales|survey results)\\b", "\\bexploratory data analysis\\b"]
+instructions = "Ask for exploratory analysis of the supplied data, including quality checks, patterns, appropriate visualizations, assumptions and limitations. Distinguish correlation from causation and do not invent findings."
+examples = ["Analyze our churn data", "Explore this dataset for trends", "Investigate sales patterns in the data", "Do exploratory data analysis on this file"]
+negatives = ["Summarize a news article", "Generate a SQL query"]
+suppresses = ["info.explain"]
+rewrite = "Analyze our churn data.\nStep 1: Analyze our churn data for patterns and possible contributing factors. Check data quality, explain the method, distinguish association from causation, and report limitations without inventing findings.\nStep 2 (after 1): Check that conclusions follow from the data and method, with assumptions and limitations stated explicitly.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "analysis.describe"
+family = "Data analysis, statistics, and machine learning"
+label = "Compute descriptive statistics for defined groups"
+inputs = "Data, measures, missing-value policy"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.segment"
+family = "Data analysis, statistics, and machine learning"
+label = "Compare cohorts or customer segments"
+inputs = "Data, segment definitions, metrics"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.correlate"
+family = "Data analysis, statistics, and machine learning"
+label = "Examine associations without claiming causation"
+inputs = "Variables, data, confounders"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.regress"
+family = "Data analysis, statistics, and machine learning"
+label = "Fit and interpret a regression model"
+inputs = "Outcome, predictors, assumptions"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.hypothesis"
+family = "Data analysis, statistics, and machine learning"
+label = "Choose and perform a justified statistical test"
+inputs = "Question, data, assumptions, error criteria"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.experiment"
+family = "Data analysis, statistics, and machine learning"
+label = "Design or analyze an A/B experiment"
+inputs = "Hypothesis, metrics, randomization, data"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.forecast"
+family = "Data analysis, statistics, and machine learning"
+label = "Forecast a time series with uncertainty"
+inputs = "Series, horizon, evaluation approach"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.anomaly"
+family = "Data analysis, statistics, and machine learning"
+label = "Identify unusual observations and investigate causes"
+inputs = "Data, baseline, anomaly definition"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.causal"
+family = "Data analysis, statistics, and machine learning"
+label = "Assess whether a causal claim is justified"
+inputs = "Study design, variables, assumptions"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.ml_plan"
+family = "Data analysis, statistics, and machine learning"
+label = "Design an ML workflow with evaluation and leakage checks"
+inputs = "Objective, data, deployment constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "analysis.sensitivity"
+family = "Data analysis, statistics, and machine learning"
+label = "Test how assumptions change model outcomes"
+inputs = "Model, variables, plausible ranges"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.report"
+family = "Documents, presentations, and diagrams"
+label = "Request a report built from supplied evidence"
+inputs = "Audience, sources, required sections"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.presentation"
+family = "Documents, presentations, and diagrams"
+label = "Request a presentation with a coherent narrative"
+inputs = "Topic, audience, purpose, length if specified"
+priority = "P1"
+feasibility = "F2"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:create|make|build|draft|generate)\\b.*\\b(?:presentation|slide deck|slides)\\b"]
+instructions = "Request a presentation tailored to the audience and purpose, with a coherent narrative and the supplied content, style and length constraints. Refer to files only as supplied; do not assume a specific mode accepts attachments."
+examples = ["Create a presentation for the board", "Make a slide deck about our product", "Build slides for a training session", "Draft a presentation from this outline"]
+negatives = ["Write an email to the board", "Summarize this slide deck"]
+suppresses = ["writing.draft", "code.implement"]
+rewrite = "Create a presentation for the board.\nStep 1: Create a presentation for the board using the content and objectives I provide. Build a clear narrative with decision-relevant information, and do not invent figures, sources, or a slide count.\nStep 2 (after 1): Review the artifact against the requested content, audience, narrative, and constraints.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "artifact.source_to_slides"
+family = "Documents, presentations, and diagrams"
+label = "Convert a document into a presentation"
+inputs = "Source reference, audience, selected tool mode"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.slide_revision"
+family = "Documents, presentations, and diagrams"
+label = "Improve existing slides without changing facts"
+inputs = "Slide reference, design/content goals"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.diagram"
+family = "Documents, presentations, and diagrams"
+label = "Create an architecture or relationship diagram"
+inputs = "Entities, relationships, notation"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.flowchart"
+family = "Documents, presentations, and diagrams"
+label = "Diagram a process with decisions and exceptions"
+inputs = "Process, decisions, notation"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.mind_map"
+family = "Documents, presentations, and diagrams"
+label = "Organize a topic or sources as a mind map"
+inputs = "Topic/source, hierarchy, scope"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.template"
+family = "Documents, presentations, and diagrams"
+label = "Design a reusable document template"
+inputs = "Purpose, sections, placeholder rules"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.form"
+family = "Documents, presentations, and diagrams"
+label = "Design a form and validation requirements"
+inputs = "Data to collect, users, constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "artifact.accessibility"
+family = "Documents, presentations, and diagrams"
+label = "Review a document or presentation for accessibility"
+inputs = "Artifact, audience needs, applicable criteria"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "ui.component"
+family = "UI, website, and app builders"
+label = "Build a component with specified states and behavior"
+inputs = "Stack, props, states, accessibility"
+priority = "P1"
+feasibility = "F2"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:build|create|implement|write)\\b.*\\b(?:component|widget)\\b"]
+instructions = "Ask the UI builder to implement the requested component, preserving the stack, visual constraints, interaction states, responsiveness and accessibility. Distinguish functional UI from an image mockup and verify behavior."
+examples = ["Build a React component for sign in", "Create a reusable search widget", "Implement a dialog component", "Write a tab component with keyboard support"]
+negatives = ["Explain this component", "Generate an image of a dashboard"]
+suppresses = ["code.implement", "writing.draft"]
+rewrite = "Build a React component for sign in.\nStep 1: Inspect the existing stack, design conventions, and authentication interface.\nStep 2 (after 1): Implement the requested component with relevant states, keyboard accessibility, and tests.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The sign-in component meets the request and relevant checks pass or verification limits are explained."
+
+[[task]]
+id = "ui.page"
+family = "UI, website, and app builders"
+label = "Build a landing page or application screen"
+inputs = "Purpose, content, design, responsive behavior"
+priority = "P1"
+feasibility = "F2"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:build|create|implement|design)\\b.*\\b(?:landing page|web page|webpage|application screen)\\b"]
+instructions = "Request implementation of the specified page or screen with its content, responsive layout, interactions, stack and accessibility requirements. Do not reinterpret implementation as image creation."
+examples = ["Build a landing page for the product", "Create a web page with a contact form", "Implement the application screen", "Design a webpage for our event"]
+negatives = ["Generate an image of a web page", "Summarize this web page"]
+suppresses = ["code.implement", "writing.draft"]
+exclude = ["\\b(?:image|picture|photo) of\\b"]
+rewrite = "Build a landing page for the product.\nStep 1: Review the supplied content, design requirements, and existing project conventions.\nStep 2 (after 1): Implement the responsive page and check its interactions and accessibility.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The requested page works across relevant layouts without invented product claims, and checks are reported."
+
+[[task]]
+id = "ui.site"
+family = "UI, website, and app builders"
+label = "Build a multi-page website"
+inputs = "Pages, navigation, content, constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "ui.full_stack"
+family = "UI, website, and app builders"
+label = "Build an application with data and authentication"
+inputs = "Requirements, stack, data, authorization"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "ui.dashboard"
+family = "UI, website, and app builders"
+label = "Build an interactive dashboard rather than a static image"
+inputs = "Data, metrics, filters, interactions"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "ui.prototype"
+family = "UI, website, and app builders"
+label = "Produce a prototype for a user flow"
+inputs = "Flow, fidelity, mock-data boundaries"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "ui.design_to_code"
+family = "UI, website, and app builders"
+label = "Implement a supplied design or screenshot"
+inputs = "Design asset, stack, behavior not visible in image"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "ui.accessibility_review"
+family = "UI, website, and app builders"
+label = "Assess and fix UI accessibility issues"
+inputs = "Interface, assistive needs, test criteria"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.workflow"
+family = "Workflow automation and agents"
+label = "Design a repeatable workflow across permitted systems"
+inputs = "Trigger, steps, systems, permissions"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.agent"
+family = "Workflow automation and agents"
+label = "Specify an agent's purpose and boundaries"
+inputs = "Goal, tools, allowed actions, stop rules"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.tool_use"
+family = "Workflow automation and agents"
+label = "Ask an agent to use named, available tools"
+inputs = "Tools, arguments, evidence/approval requirements"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.browser"
+family = "Workflow automation and agents"
+label = "Describe an authorized browser task with review before submission"
+inputs = "Site, objective, sensitive/irreversible steps"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.api_chain"
+family = "Workflow automation and agents"
+label = "Plan a workflow across documented APIs"
+inputs = "Contracts, credentials handled externally, errors"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.approvals"
+family = "Workflow automation and agents"
+label = "Define approval checkpoints in an automated workflow"
+inputs = "Actions, reviewers, stop conditions"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.monitor"
+family = "Workflow automation and agents"
+label = "Specify monitoring and alerting behavior"
+inputs = "Signal, threshold, destination, permissions"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "automation.repair_loop"
+family = "Workflow automation and agents"
+label = "Request bounded check-and-revise execution"
+inputs = "Task, checks, round limit, failure report"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "meta.improve_prompt"
+family = "Prompt, instruction, and evaluation authoring"
+label = "Improve an existing prompt against a stated goal"
+inputs = "Existing prompt, failure cases, target"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "meta.prompt_template"
+family = "Prompt, instruction, and evaluation authoring"
+label = "Create a reusable prompt with deliberate variables"
+inputs = "Use case, allowed variables, target contract"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "meta.system_instructions"
+family = "Prompt, instruction, and evaluation authoring"
+label = "Draft application/agent instructions with boundaries"
+inputs = "Role, tools, priorities, allowed behavior"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "meta.evaluation"
+family = "Prompt, instruction, and evaluation authoring"
+label = "Design prompt-evaluation cases and rubrics"
+inputs = "Task, expected behavior, failure modes"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "meta.output_contract"
+family = "Prompt, instruction, and evaluation authoring"
+label = "Specify an answer schema and validation rules"
+inputs = "Fields, types, constraints, examples"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "meta.context_pack"
+family = "Prompt, instruction, and evaluation authoring"
+label = "Select and organize reference context for a task"
+inputs = "Sources, task, context budget"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.translate"
+family = "Translation, localization, and language transformation"
+label = "Translate while preserving names, numbers, and meaning"
+inputs = "Source, target language, locale"
+priority = "P1"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:translate|translation (?:of|into|to))\\b"]
+instructions = "Request translation into the specified language and locale while preserving meaning, names, numbers, formatting and terminology. Do not invent a target language or translate the text locally."
+examples = ["Translate this into French", "Translate the paragraph to Spanish", "I need a translation of this into German", "Translate this email without changing the names"]
+negatives = ["Teach me French interactively", "Write a new email"]
+suppresses = ["writing.draft"]
+rewrite = "Translate this into French.\nStep 1: Translate this into French, preserving its meaning, names, numbers, and formatting. Keep technical terminology consistent and flag any ambiguity rather than inventing context.\nStep 2 (after 1): Check that the translation preserves meaning, names, numbers, terminology, and requested formatting.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
+
+[[task]]
+id = "language.localize"
+family = "Translation, localization, and language transformation"
+label = "Adapt content for a locale and its conventions"
+inputs = "Source, locale, terminology, constraints"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.transcreate"
+family = "Translation, localization, and language transformation"
+label = "Adapt creative copy while preserving purpose"
+inputs = "Source, audience, non-negotiable meaning"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.terminology"
+family = "Translation, localization, and language transformation"
+label = "Build or apply a multilingual term glossary"
+inputs = "Terms, domain, language pairs"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.bilingual_compare"
+family = "Translation, localization, and language transformation"
+label = "Check a translation against its source"
+inputs = "Original, translation, error categories"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.subtitles"
+family = "Translation, localization, and language transformation"
+label = "Translate subtitles while preserving timing constraints"
+inputs = "Subtitle reference, language, line limits"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.transliterate"
+family = "Translation, localization, and language transformation"
+label = "Convert writing systems without translating meaning"
+inputs = "Text, transliteration convention"
+priority = "P2"
+feasibility = "F1"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "language.alt_text"
+family = "Translation, localization, and language transformation"
+label = "Request accessible descriptions of images"
+inputs = "Asset reference, audience, relevant context"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.ocr"
+family = "Multimodal understanding"
+label = "Extract visible text from a supplied image"
+inputs = "Image, language, layout/uncertainty rules"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.image_qa"
+family = "Multimodal understanding"
+label = "Answer questions about a supplied image"
+inputs = "Image reference, question, uncertainty"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.chart_qa"
+family = "Multimodal understanding"
+label = "Interpret a chart without inventing hidden values"
+inputs = "Chart, labels, question"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.diagram_qa"
+family = "Multimodal understanding"
+label = "Explain a diagram's entities and relationships"
+inputs = "Diagram, notation, question"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.document_layout"
+family = "Multimodal understanding"
+label = "Interpret a visually structured document"
+inputs = "Document, fields, layout constraints"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.transcription"
+family = "Multimodal understanding"
+label = "Ask a capable destination to transcribe an audio asset"
+inputs = "Audio reference, language, speaker/timestamp needs"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.speaker_summary"
+family = "Multimodal understanding"
+label = "Summarize an audio conversation by speaker"
+inputs = "Audio/transcript, known speakers, attribution limits"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "perception.video_qa"
+family = "Multimodal understanding"
+label = "Analyze events in a supplied video"
+inputs = "Video reference, time scope, question"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.image_generate"
+family = "Image and video creation or editing"
+label = "Describe an image to generate"
+inputs = "Subject, scene, composition, style, constraints"
+priority = "B"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:create|generate|make|draw|paint|render|design)\\b(?:\\s+\\w+){0,5}\\s+(?:image|picture|photo|illustration|logo|portrait|poster)\\b"]
+instructions = "Request media creation using a capable AI assistant's available tools. Preserve the requested visual description inside the creation step, check the result against the stated constraints, and report unavailable capabilities honestly. Keep the mandatory task graph and bounded loop."
+examples = ["Generate an image of a fox", "Draw a picture of a lighthouse", "Create a watercolor illustration of a forest", "Design a logo for a cafe"]
+negatives = ["Create an image parser", "Write a video script"]
+exclude = ["\\b(?:image|picture|photo|logo)\\s+(?:parser|editor|component|gallery|script|prompt|api)\\b"]
+rewrite = "Generate an image of a fox.\nStep 1: Use available image-generation tools to create the requested subject, preserving supplied visual constraints and leaving unspecified details open.\nStep 2 (after 1): Review the result against the described subject, style, motion, and constraints; report any unavailable tool or verification capability honestly.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The requested image meets the stated requirements, or unavailable capabilities and unmet criteria are reported."
+
+[[task]]
+id = "visual.image_edit"
+family = "Image and video creation or editing"
+label = "Change a supplied image while preserving named details"
+inputs = "Source image, requested edits, protected regions"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.inpaint"
+family = "Image and video creation or editing"
+label = "Replace content inside a selected region"
+inputs = "Image, mask/selection, replacement description"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.outpaint"
+family = "Image and video creation or editing"
+label = "Extend an image beyond its original boundaries"
+inputs = "Image, canvas/selection, continuity constraints"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.variation"
+family = "Image and video creation or editing"
+label = "Create controlled variations of a reference"
+inputs = "Reference, aspects to vary or preserve"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.vector"
+family = "Image and video creation or editing"
+label = "Request a vector-style icon or illustration"
+inputs = "Subject, style, genuine vector-output capability"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.product"
+family = "Image and video creation or editing"
+label = "Create a product visual grounded in a supplied reference"
+inputs = "Product reference, setting, protected details"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.storyboard"
+family = "Image and video creation or editing"
+label = "Request a visual sequence with scene continuity"
+inputs = "Scenes, characters, panel requirements"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.video_generate"
+family = "Image and video creation or editing"
+label = "Describe a video to generate"
+inputs = "Subject/action, scene, camera, motion, constraints"
+priority = "B"
+feasibility = "F1"
+status = "enabled"
+form = "graph"
+patterns = ["\\b(?:create|generate|make|produce|animate)\\b(?:\\s+\\w+){0,5}\\s+(?:video|clip|animation|film)\\b"]
+instructions = "Request media creation using a capable AI assistant's available tools. Preserve the requested visual description inside the creation step, check the result against the stated constraints, and report unavailable capabilities honestly. Keep the mandatory task graph and bounded loop."
+examples = ["Create a short video of waves", "Generate a cinematic clip of a lighthouse", "Make an animation of a bouncing ball", "Produce a video of a forest"]
+negatives = ["Create a video script", "Build a video player"]
+exclude = ["\\b(?:video|clip|film|animation)\\s+(?:script|outline|plan|editor|player|prompt|api|summary)\\b"]
+rewrite = "Create a short video of waves.\nStep 1: Use available video-generation tools to create the requested waves and motion, preserving supplied constraints without inventing a duration.\nStep 2 (after 1): Review the result against the described subject, style, motion, and constraints; report any unavailable tool or verification capability honestly.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The requested video meets the stated requirements, or unavailable capabilities and unmet criteria are reported."
+
+[[task]]
+id = "visual.image_to_video"
+family = "Image and video creation or editing"
+label = "Animate a supplied image with controlled motion"
+inputs = "Image, motion, camera, preserved appearance"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.video_edit"
+family = "Image and video creation or editing"
+label = "Request an edit to an existing video"
+inputs = "Video, edits, time ranges, protected content"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "visual.video_extend"
+family = "Image and video creation or editing"
+label = "Extend a clip while preserving continuity"
+inputs = "Clip, continuation, target mode"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.song"
+family = "Music, sound, and voice design"
+label = "Describe an original song in a music-generation prompt field"
+inputs = "Theme, genre, mood, instruments, vocals"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.instrumental"
+family = "Music, sound, and voice design"
+label = "Describe instrumental music"
+inputs = "Genre, instrumentation, mood, structure"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.sound_effect"
+family = "Music, sound, and voice design"
+label = "Describe a sound effect"
+inputs = "Sound source, action, texture, duration if supplied"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.ambience"
+family = "Music, sound, and voice design"
+label = "Describe an ambient or loopable soundscape"
+inputs = "Environment, layers, transitions, loop requirement"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.voice_design"
+family = "Music, sound, and voice design"
+label = "Describe a fictional or authorized synthetic voice"
+inputs = "Language, timbre, pacing, delivery"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.speech_direction"
+family = "Music, sound, and voice design"
+label = "Specify delivery for a prompt-capable speech tool"
+inputs = "Script reference, supported controls, delivery"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.dubbing"
+family = "Music, sound, and voice design"
+label = "Brief a dubbing/localization workflow"
+inputs = "Authorized source, languages, timing, review needs"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "audio.music_edit"
+family = "Music, sound, and voice design"
+label = "Specify changes to an existing music asset"
+inputs = "Authorized asset, mode, changes, preservation rules"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.object"
+family = "3D, spatial, and technical design"
+label = "Describe a 3D object for a compatible generator"
+inputs = "Shape, parts, style, intended asset use"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.material"
+family = "3D, spatial, and technical design"
+label = "Describe a material or surface appearance"
+inputs = "Material, finish, scale, target capability"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.texture"
+family = "3D, spatial, and technical design"
+label = "Request texturing of existing geometry"
+inputs = "Mesh/reference, material, preserved features"
+priority = "P2"
+feasibility = "F2"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.scene"
+family = "3D, spatial, and technical design"
+label = "Describe a composed 3D scene"
+inputs = "Objects, layout, lighting, target mode"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.animation"
+family = "3D, spatial, and technical design"
+label = "Brief a 3D animation or rigging assistant"
+inputs = "Asset, rig, motion, tool capabilities"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.asset_variation"
+family = "3D, spatial, and technical design"
+label = "Request constrained variations of a 3D asset"
+inputs = "Reference, variation parameters, topology constraints"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.cad"
+family = "3D, spatial, and technical design"
+label = "Brief a CAD assistant for a reviewed parametric design"
+inputs = "Dimensions, constraints, standards, qualified review"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"
+
+[[task]]
+id = "spatial.gis"
+family = "3D, spatial, and technical design"
+label = "Ask a geospatial assistant for a spatial query or analysis"
+inputs = "Layers, coordinate systems, question, data access"
+priority = "P3"
+feasibility = "F3"
+status = "proposed"
+form = "graph"

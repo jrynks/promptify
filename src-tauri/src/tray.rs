@@ -89,7 +89,14 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
 /// Shows what Promptify is doing in the tray tooltip and menu.
 pub fn set_status(app: &AppHandle, status: &str) {
     let paused = app.try_state::<crate::AppState>().is_some_and(|s| s.hotkeys.read().unwrap().paused);
-    let text = if paused && status == "ready" { "Promptify \u{2014} hotkeys paused".to_owned() } else { format!("Promptify \u{2014} {status}") };
+    let setup = app.try_state::<crate::AppState>().is_some_and(|s| crate::onboarding::required(&s));
+    let text = if setup && status == "ready" {
+        "Promptify \u{2014} finish setup".to_owned()
+    } else if paused && status == "ready" {
+        "Promptify \u{2014} hotkeys paused".to_owned()
+    } else {
+        format!("Promptify \u{2014} {status}")
+    };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(&text));
     }

@@ -41,7 +41,7 @@ url = "https://www.perplexity.ai/"
 [[case]]
 id = "c07"
 said = "a cozy cabin in snowy mountains at dusk warm light in the windows painted in watercolor"
-expect = "flat"
+expect = "graph"
 url = "https://www.midjourney.com/imagine"
 
 [[case]]
@@ -128,19 +128,19 @@ title = "pwsh"
 [[case]]
 id = "c21"
 said = "a slow aerial shot of a lighthouse at sunset with waves crashing below cinematic and calm"
-expect = "flat"
+expect = "graph"
 url = "https://runwayml.com/"
 
 [[case]]
 id = "c22"
 said = "make me a picture of a fox in a snowy forest painted in watercolor"
-expect = "flat"
+expect = "graph"
 url = "https://chatgpt.com/"
 
 [[case]]
 id = "c23"
 said = "create a short cinematic video of waves at sunset"
-expect = "flat"
+expect = "graph"
 url = "https://claude.ai/new"
 
 [[case]]

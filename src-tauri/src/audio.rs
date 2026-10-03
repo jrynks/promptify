@@ -7,16 +7,38 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use promptify_core::audio::{CaptureBuffer, CapturedAudio};
 
+const NO_INPUT: &str = "No microphone found. Connect one or set a default input device in system settings.";
+
 pub fn default_input_name() -> Option<String> {
     let device = cpal::default_host().default_input_device()?;
-    device.description().ok().map(|d| d.name().to_owned())
+    Some(device_name(&device))
 }
 
-/// Sent once by the capture thread: the device name and the shared buffer, or why it failed.
-type Ready = Result<(String, Arc<Mutex<CaptureBuffer>>), String>;
+pub fn default_input_id() -> Result<String, String> {
+    let device = cpal::default_host().default_input_device().ok_or(NO_INPUT)?;
+    device.id().map(|id| id.to_string()).map_err(|e| format!("Could not identify the default microphone: {e}"))
+}
+
+fn device_name(device: &cpal::Device) -> String {
+    match device.description() {
+        Ok(description) if !description.name().is_empty() => description.name().to_owned(),
+        Ok(_) => {
+            log::warn!("the default microphone has an empty device name");
+            "System default microphone (name unavailable)".into()
+        }
+        Err(error) => {
+            log::warn!("could not read the default microphone name: {error}");
+            "System default microphone (name unavailable)".into()
+        }
+    }
+}
+
+/// Sent once by the capture thread: device ID, display name and buffer, or why it failed.
+type Ready = Result<(Option<String>, String, Arc<Mutex<CaptureBuffer>>), String>;
 
 /// An in-progress capture from the system default microphone.
 pub struct Recording {
+    pub device_id: Option<String>,
     stop_tx: mpsc::Sender<()>,
     thread: JoinHandle<Result<CapturedAudio, String>>,
     buffer: Arc<Mutex<CaptureBuffer>>,
@@ -45,9 +67,9 @@ impl Recording {
             .spawn(move || capture_thread(max_samples, on_level, ready_tx, stop_rx))
             .map_err(|e| format!("could not start capture thread: {e}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok((device, buffer))) => {
-                log::info!("recording from default input device {device:?}");
-                Ok(Self { stop_tx, thread, buffer })
+            Ok(Ok((device_id, name, buffer))) => {
+                log::info!("recording from default input device {name:?}");
+                Ok(Self { device_id, stop_tx, thread, buffer })
             }
             Ok(Err(err)) => Err(err),
             Err(_) => {
@@ -79,9 +101,16 @@ fn capture_thread(
     };
     let host = cpal::default_host();
     let Some(device) = host.default_input_device() else {
-        return fail("No microphone found. Connect one or set a default input device in system settings.".into());
+        return fail(NO_INPUT.into());
     };
-    let name = device.description().map(|d| d.name().to_owned()).unwrap_or_else(|_| "default".into());
+    let id = match device.id() {
+        Ok(id) => Some(id.to_string()),
+        Err(error) => {
+            log::warn!("could not identify the recording microphone: {error}");
+            None
+        }
+    };
+    let name = device_name(&device);
     let supported = match device.default_input_config() {
         Ok(config) => config,
         Err(e) => return fail(format!("The default microphone is unavailable: {e}")),
@@ -107,7 +136,7 @@ fn capture_thread(
     if let Err(e) = stream.play() {
         return fail(format!("Could not start the microphone: {e}"));
     }
-    let _ = ready_tx.send(Ok((name, buffer.clone())));
+    let _ = ready_tx.send(Ok((id, name, buffer.clone())));
 
     let _ = stop_rx.recv();
     drop(stream);

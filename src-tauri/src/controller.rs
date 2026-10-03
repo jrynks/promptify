@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 
 use promptify_core::hotkey::{Gesture, GestureAction};
 use promptify_core::live::{ChunkPolicy, LiveTranscript, next_cut};
-use promptify_core::pipeline::{BeginError, CancelToken, Job, JobEvent, JobReport, Mode, Orchestrator, Outcome, Stage};
+use promptify_core::pipeline::{BeginError, CancelToken, Job, JobEvent, JobOptions, JobReport, Mode, Orchestrator, Outcome, Stage};
 use promptify_core::transform::TransformService;
+use promptify_core::routing::ResolvedPromptPolicy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -29,6 +30,7 @@ pub enum OverlayEvent {
     Stage { stage: Stage },
     Transcript { text: String },
     Token { text: String },
+    Routing { routing: ResolvedPromptPolicy },
     Finished { report: JobReport, capped: bool },
     Error { message: String },
     Cancelled,
@@ -43,7 +45,7 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
         OverlayEvent::Stage { stage: Stage::Revising } => Some("revising prompt\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
         OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),
-        OverlayEvent::Level { .. } | OverlayEvent::Partial { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } => None,
+        OverlayEvent::Level { .. } | OverlayEvent::Partial { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } | OverlayEvent::Routing { .. } => None,
     };
     if let Some(status) = status {
         crate::tray::set_status(app, status);
@@ -51,10 +53,18 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
     let _ = app.emit_to("overlay", "overlay-event", event);
 }
 
+fn emit_for(app: &AppHandle, practice: Option<u64>, event: OverlayEvent) {
+    if let Some(attempt) = practice {
+        crate::onboarding::emit_practice(app, attempt, event);
+    } else {
+        emit(app, event);
+    }
+}
+
 enum Phase {
     Idle,
-    Recording { job: Box<Job>, recording: Recording, live: LiveLoop },
-    Processing { cancel: CancelToken },
+    Recording { job: Box<Job>, recording: Recording, live: LiveLoop, practice: Option<u64> },
+    Processing { cancel: CancelToken, practice: Option<u64> },
 }
 
 /// How often the live loop looks for a finished chunk, and how long a chunk may wait for the engines.
@@ -68,7 +78,7 @@ struct LiveLoop {
 }
 
 impl LiveLoop {
-    fn spawn(app: AppHandle, service: Arc<TransformService>, audio: LiveAudio, cancel: CancelToken) -> std::io::Result<Self> {
+    fn spawn(app: AppHandle, service: Arc<TransformService>, audio: LiveAudio, cancel: CancelToken, practice: Option<u64>) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::Builder::new().name("live-transcription".into()).spawn(move || {
@@ -81,7 +91,7 @@ impl LiveLoop {
                 // A chunk that could not run now is transcribed with the rest at the end.
                 if let Some(text) = service.transcribe_chunk(&tail[..cut], &cancel, LIVE_ENGINE_WAIT) {
                     live.commit(cut, &text);
-                    emit(&app, OverlayEvent::Partial { text: live.text() });
+                    emit_for(&app, practice, OverlayEvent::Partial { text: live.text() });
                 }
             }
             live
@@ -164,16 +174,33 @@ impl Worker {
             self.gesture.reset();
             return;
         }
-        let job = match self.orchestrator.begin(mode) {
+        let practice = match crate::onboarding::claim_practice(&self.app, mode) {
+            Ok(practice) => practice,
+            Err(message) => {
+                self.gesture.reset();
+                crate::onboarding::record_error(&self.app, &message);
+                crate::tray::show_settings(&self.app);
+                return;
+            }
+        };
+        let started = if practice.is_some() {
+            self.orchestrator.begin_with_options(mode, JobOptions { use_personal_context: false, use_tools: false, auto_mode: false })
+        } else {
+            self.orchestrator.begin(mode)
+        };
+        let job = match started {
             Ok(job) => job,
             Err(BeginError::Busy) => {
                 self.gesture.reset();
+                if practice.is_some() {
+                    emit_for(&self.app, practice, OverlayEvent::Error { message: "The engines are still busy. Try practice again.".into() });
+                }
                 return;
             }
             Err(err) => {
                 self.gesture.reset();
-                self.show_overlay();
-                emit(&self.app, OverlayEvent::Error { message: err.to_string() });
+                self.show_overlay(practice);
+                emit_for(&self.app, practice, OverlayEvent::Error { message: err.to_string() });
                 return;
             }
         };
@@ -184,7 +211,7 @@ impl Worker {
             let mut last = last_emit.lock().unwrap();
             if last.elapsed() >= Duration::from_millis(50) {
                 *last = Instant::now();
-                emit(&app, OverlayEvent::Level { level });
+                emit_for(&app, practice, OverlayEvent::Level { level });
             }
         };
         let recording = match Recording::start(self.orchestrator.limits().max_audio_samples, on_level) {
@@ -192,37 +219,48 @@ impl Worker {
             Err(message) => {
                 drop(job);
                 self.gesture.reset();
-                self.show_overlay();
-                emit(&self.app, OverlayEvent::Error { message });
+                self.show_overlay(practice);
+                emit_for(&self.app, practice, OverlayEvent::Error { message });
                 return;
             }
         };
+        if let Some(attempt) = practice
+            && let Err(message) = crate::onboarding::attach_job(&self.app, attempt, &job, recording.device_id.as_deref())
+        {
+            job.cancel_token().cancel();
+            if let Err(error) = recording.stop() {
+                log::warn!("could not stop interrupted practice capture: {error}");
+            }
+            self.gesture.reset();
+            emit_for(&self.app, practice, OverlayEvent::Error { message });
+            return;
+        }
         (self.on_active)(true);
-        self.show_overlay();
-        emit(&self.app, listening(&self.orchestrator, &job, false));
-        let live = match LiveLoop::spawn(self.app.clone(), self.orchestrator.service().clone(), recording.live(), job.cancel_token()) {
+        self.show_overlay(practice);
+        emit_for(&self.app, practice, listening(&self.orchestrator, &job, false));
+        let live = match LiveLoop::spawn(self.app.clone(), self.orchestrator.service().clone(), recording.live(), job.cancel_token(), practice) {
             Ok(live) => live,
             Err(e) => {
                 let _ = recording.stop();
                 drop(job);
                 self.gesture.reset();
                 (self.on_active)(false);
-                emit(&self.app, OverlayEvent::Error { message: format!("could not start live transcription: {e}") });
+                emit_for(&self.app, practice, OverlayEvent::Error { message: format!("could not start live transcription: {e}") });
                 return;
             }
         };
-        *phase = Phase::Recording { job: Box::new(job), recording, live };
+        *phase = Phase::Recording { job: Box::new(job), recording, live, practice };
     }
 
     fn relisten(&self, latched: bool) {
-        if let Phase::Recording { job, .. } = &*self.phase.lock().unwrap() {
-            emit(&self.app, listening(&self.orchestrator, job, latched));
+        if let Phase::Recording { job, practice, .. } = &*self.phase.lock().unwrap() {
+            emit_for(&self.app, *practice, listening(&self.orchestrator, job, latched));
         }
     }
 
     fn stop(&mut self) {
         let mut phase = self.phase.lock().unwrap();
-        let Phase::Recording { job, recording, live } = std::mem::replace(&mut *phase, Phase::Idle) else {
+        let Phase::Recording { job, recording, live, practice } = std::mem::replace(&mut *phase, Phase::Idle) else {
             return;
         };
         let audio = match recording.stop() {
@@ -232,11 +270,11 @@ impl Worker {
                 let _ = live.finish();
                 drop(job);
                 (self.on_active)(false);
-                emit(&self.app, OverlayEvent::Error { message });
+                emit_for(&self.app, practice, OverlayEvent::Error { message });
                 return;
             }
         };
-        *phase = Phase::Processing { cancel: job.cancel_token() };
+        *phase = Phase::Processing { cancel: job.cancel_token(), practice };
         drop(phase);
 
         let app = self.app.clone();
@@ -254,8 +292,9 @@ impl Worker {
                         JobEvent::Stage(stage) => OverlayEvent::Stage { stage },
                         JobEvent::Transcript(text) => OverlayEvent::Transcript { text: text.to_owned() },
                         JobEvent::Token(text) => OverlayEvent::Token { text: text.to_owned() },
+                        JobEvent::Routing(routing) => OverlayEvent::Routing { routing: routing.clone() },
                     };
-                    emit(&app, payload);
+                    emit_for(&app, practice, payload);
                 });
                 log::info!(
                     "job {} profile={} outcome={} elapsed_ms={} history_saved={}",
@@ -273,7 +312,7 @@ impl Worker {
                 }
                 *phase.lock().unwrap() = Phase::Idle;
                 on_active(false);
-                emit(&app, OverlayEvent::Finished { report, capped: audio.capped });
+                emit_for(&app, practice, OverlayEvent::Finished { report, capped: audio.capped });
             })
             .expect("spawn processing thread");
     }
@@ -281,25 +320,25 @@ impl Worker {
     fn cancel(&mut self) {
         let mut phase = self.phase.lock().unwrap();
         match std::mem::replace(&mut *phase, Phase::Idle) {
-            Phase::Recording { job, recording, live } => {
+            Phase::Recording { job, recording, live, practice } => {
                 job.cancel_token().cancel();
                 let _ = recording.stop();
                 drop(live);
                 drop(job);
                 self.gesture.reset();
                 (self.on_active)(false);
-                emit(&self.app, OverlayEvent::Cancelled);
+                emit_for(&self.app, practice, OverlayEvent::Cancelled);
             }
-            Phase::Processing { cancel } => {
+            Phase::Processing { cancel, practice } => {
                 cancel.cancel();
-                *phase = Phase::Processing { cancel };
+                *phase = Phase::Processing { cancel, practice };
             }
             Phase::Idle => {}
         }
     }
 
-    fn show_overlay(&self) {
-        if let Some(overlay) = self.app.get_webview_window("overlay") {
+    fn show_overlay(&self, practice: Option<u64>) {
+        if practice.is_none() && let Some(overlay) = self.app.get_webview_window("overlay") {
             let _ = overlay.show();
         }
     }

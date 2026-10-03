@@ -162,7 +162,7 @@ static HEADING: LazyLock<Regex> = LazyLock::new(|| {
 });
 static LOOP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bloop(?:\*\*)?[ \t]*:").expect("valid loop regex"));
 static LOOP_END: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bdone when\b|\bloop(?:\*\*)?[ \t]*:").expect("valid loop end regex"));
+    LazyLock::new(|| Regex::new(r"(?i)\bdone when(?:\*\*)?[ \t]*:|\bloop(?:\*\*)?[ \t]*:").expect("valid loop end regex"));
 static STEP_REFS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bsteps?[ \t]+(\d+(?:[ \t]*(?:-|–|,|and|to|or)[ \t]*\d+)*)").expect("valid step reference regex")
 });
@@ -283,6 +283,15 @@ Done when: the suite passes 5 times in a row.";
         assert_eq!(validate_structure(markdown), Ok(GraphSummary { steps: 2, loops: 1 }));
         let inline = "Fix the build. Step 1: find the cause; Step 2 (after 1): fix it; Step 3 (after 2): run the tests; Loop: if tests fail, return to Step 2 (max 3 rounds); Done when: all tests pass.";
         assert_eq!(validate_structure(inline), Ok(GraphSummary { steps: 3, loops: 1 }));
+    }
+
+    #[test]
+    fn a_reference_to_done_when_inside_a_loop_does_not_end_it() {
+        let graph = "Research the evidence.\nStep 1: Find reliable sources.\nStep 2 (after 1): Check the findings.\nLoop: if the criteria in Done when are not met, return to Step 2 (max 3 rounds).\nDone when: every claim has a reliable source.";
+        assert!(validate_graph(graph).is_ok());
+        assert!(validate_graph(&graph.replace('\n', "; ")).is_ok());
+        let missing = graph.replace("return to Step 2 (max 3 rounds)", "revise the findings (max 3 rounds)");
+        assert_eq!(validate_graph(&missing), Err(GraphError::LoopWithoutTarget));
     }
 
     #[test]

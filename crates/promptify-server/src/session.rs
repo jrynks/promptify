@@ -233,6 +233,7 @@ fn start(shared: &Arc<Shared>, device_id: &str, pending: &mut PendingJob, text: 
                 JobEvent::Stage(stage) => ServerMessage::Stage { id, stage: serde_json::to_value(stage).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default() },
                 JobEvent::Transcript(text) => ServerMessage::Transcript { id, text: text.to_owned() },
                 JobEvent::Token(text) => ServerMessage::Token { id, text: text.to_owned() },
+                JobEvent::Routing(_) => return,
             };
             let _ = events.blocking_send(message);
         };
