@@ -4256,7 +4256,7 @@ dependencies = [
 
 [[package]]
 name = "promptify"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "arboard",
  "ashpd",
@@ -4294,7 +4294,7 @@ dependencies = [
 
 [[package]]
 name = "promptify-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "hex",
  "log",
@@ -4310,7 +4310,7 @@ dependencies = [
 
 [[package]]
 name = "promptify-llm"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "llama-cpp-2",
  "llama-cpp-sys-2",
@@ -4320,7 +4320,7 @@ dependencies = [
 
 [[package]]
 name = "promptify-mcp"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "futures-util",
  "log",
@@ -4335,7 +4335,7 @@ dependencies = [
 
 [[package]]
 name = "promptify-protocol"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "base64 0.22.1",
  "schemars 1.2.2",
@@ -4349,7 +4349,7 @@ dependencies = [
 
 [[package]]
 name = "promptify-relay"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4362,7 +4362,7 @@ dependencies = [
 
 [[package]]
 name = "promptify-server"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
