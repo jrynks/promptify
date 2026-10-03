@@ -1,27 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { api, type OverlayEvent, type Outcome } from "../api";
+import { api, type OverlayEvent, type Outcome, type PromptRouting } from "../api";
 import "./overlay.css";
 
 type View =
   | { kind: "idle" }
   | { kind: "listening"; mode: string; profile: string; target: string; latched: boolean }
   | { kind: "working"; label: string }
-  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; canCopy: boolean };
+  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean };
 
 const BLOCK_MESSAGES: Record<string, string> = {
   focus_changed: "You switched windows, so nothing was pasted.",
   focus_unknown: "Couldn't confirm the target window, so nothing was pasted.",
   output_truncated: "The result was cut off, so it wasn't pasted.",
   insert_failed: "Couldn't paste into the app.",
+  surface_unconfirmed: "AI input not confirmed. Review and copy this prompt.",
+  graph_unsupported: "This graph needs a capable AI assistant. Review before copying.",
 };
 
 const FAIL_MESSAGES: Record<string, string> = {
   recording_too_long: "That recording was too long. Try a shorter request.",
   transcription_failed: "Couldn't transcribe the recording.",
   generation_failed: "The prompt model stopped unexpectedly.",
-  invalid_prompt: "Couldn't produce a valid goal-first prompt.",
+  invalid_prompt: "Couldn't produce a valid prompt for this input.",
   timed_out: "The prompt model took too long. Try a shorter request or a smaller model.",
   empty_output: "The prompt model returned nothing.",
   engine_busy: "Promptify is busy with another request. Try again in a moment.",
@@ -35,7 +37,7 @@ function describe(outcome: Outcome, capped: boolean): View {
     case "answered":
       return { kind: "result", tone: "ok", title: "Answer" + note, body: outcome.text, canCopy: true };
     case "blocked":
-      return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, canCopy: true };
+      return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, detail: outcome.detail ?? undefined, canCopy: true };
     case "no_speech":
       return { kind: "result", tone: "warn", title: "Didn't catch any speech.", canCopy: false };
     case "cancelled":
@@ -55,7 +57,7 @@ const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing…",
   researching: "Looking up context…",
   generating: "Writing your prompt…",
-  revising: "Fixing the prompt's step structure…",
+  revising: "Checking the prompt's format…",
   inserting: "Pasting…",
 };
 
@@ -63,25 +65,95 @@ function Overlay() {
   const [view, setView] = useState<View>({ kind: "idle" });
   const [level, setLevel] = useState(0);
   const [preview, setPreview] = useState("");
+  const [routing, setRouting] = useState<PromptRouting | null>(null);
+  const [uiError, setUiError] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
+  const streamPreview = useRef<HTMLDivElement>(null);
+  const eventVersion = useRef(0);
   const mode = useRef("prompt");
   // The transcript is shown until the first token arrives; then the draft replaces it.
   const streaming = useRef(false);
 
   const scheduleHide = (ms: number) => {
+    const version = eventVersion.current;
     window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
-      setView({ kind: "idle" });
-      void api.hideOverlay();
+      if (version !== eventVersion.current) return;
+      void api.hideOverlay().then(() => {
+        if (version === eventVersion.current) setView({ kind: "idle" });
+      }, (error) => {
+        if (version === eventVersion.current) setUiError(`Could not dismiss the overlay: ${String(error)}`);
+      });
     }, ms);
   };
 
+  const visible = view.kind !== "idle";
   useEffect(() => {
+    if (!visible) return;
+    const root = document.getElementById("root");
+    if (!root) return;
+    let frame = 0;
+    let lastHeight = 0;
+    let disposed = false;
+    const measure = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const height = Math.ceil(root.getBoundingClientRect().height);
+        if (height <= 0 || height === lastHeight) return;
+        lastHeight = height;
+        void api.resizeOverlay(height).catch((error) => {
+          if (!disposed) setUiError(`Could not fit the overlay to its content: ${String(error)}`);
+        });
+      });
+    };
+    const updateScreenLimit = () => {
+      root.style.setProperty("--overlay-max-height", `${Math.max(96, Math.min(400, window.screen.availHeight - 64))}px`);
+      measure();
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    window.addEventListener("resize", updateScreenLimit);
+    updateScreenLimit();
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", updateScreenLimit);
+    };
+  }, [visible]);
+
+  useEffect(() => {
+    if ((view.kind === "working" || view.kind === "listening") && streamPreview.current) {
+      streamPreview.current.scrollTop = streamPreview.current.scrollHeight;
+    }
+  }, [preview, view.kind]);
+
+  const copyResult = async () => {
+    const version = eventVersion.current;
+    setCopying(true);
+    setUiError(null);
+    try {
+      await api.copyLastResult();
+      if (version === eventVersion.current) scheduleHide(600);
+    } catch (error) {
+      if (version === eventVersion.current) setUiError(`Could not copy the prompt: ${String(error)}`);
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
     const unlisten = listen<OverlayEvent>("overlay-event", ({ payload }) => {
       switch (payload.type) {
         case "listening":
+          eventVersion.current += 1;
           window.clearTimeout(hideTimer.current);
           if (!payload.latched) setPreview("");
+          setUiError(null);
+          setRouting(null);
           mode.current = payload.mode;
           setView({ kind: "listening", mode: payload.mode, profile: payload.profile, target: payload.target, latched: payload.latched });
           break;
@@ -108,7 +180,11 @@ function Overlay() {
             setPreview(payload.text);
           }
           break;
+        case "routing":
+          setRouting(payload.routing);
+          break;
         case "finished": {
+          setRouting(payload.report.routing ?? null);
           const next = describe(payload.report.outcome, payload.capped);
           setView(next);
           if (next.kind === "result" && !next.canCopy) scheduleHide(next.tone === "ok" ? 1200 : next.tone === "error" ? 6000 : 3500);
@@ -124,8 +200,19 @@ function Overlay() {
           break;
       }
     });
+    void unlisten.then((stop) => {
+      if (disposed) stop();
+      else stopListening = stop;
+    }, (error) => {
+        if (!disposed) {
+          setView({ kind: "result", tone: "error", title: "The overlay could not connect to Promptify.", canCopy: false });
+          setUiError(String(error));
+        }
+      });
     return () => {
-      void unlisten.then((stop) => stop());
+      disposed = true;
+      window.clearTimeout(hideTimer.current);
+      stopListening?.();
     };
   }, []);
 
@@ -133,39 +220,39 @@ function Overlay() {
 
   return (
     <div className={`pill ${view.kind === "result" ? view.tone : ""}`}>
-      {view.kind === "listening" && (
-        <>
-          <div className="meter" aria-hidden>
-            <span style={{ transform: `scaleX(${Math.min(1, level * 8)})` }} />
-          </div>
-          <div className="text">
-            <strong>{view.mode === "prompt" ? "Listening for a prompt" : view.mode === "answer" ? "Listening for a question" : "Dictating"}</strong>
-            <span>
+      {view.kind === "listening" && <div className="meter" aria-hidden>
+        <span style={{ transform: `scaleX(${Math.min(1, level * 8)})` }} />
+      </div>}
+      <div className="text">
+        {view.kind === "listening" && <>
+            <strong role="status">{view.mode === "prompt" ? "Listening for a prompt" : view.mode === "answer" ? "Listening for a question" : "Dictating"}</strong>
+            <span className="metadata">
               {view.profile} · {view.target}
               {view.latched ? " · press the hotkey again to finish" : " · release to finish"} · Esc cancels
             </span>
-            {preview && <span className="preview">{preview}</span>}
+            {preview && <div ref={streamPreview} className="preview" role="region" aria-label="Live transcript" tabIndex={0}>{preview}</div>}
+        </>}
+        {view.kind === "working" && <>
+          <strong role="status">{view.label}</strong>
+          {routing && <span className="metadata" title={routing.warnings.join(" ")}>{routing.target_name} / {routing.task_type} / {routing.form.replaceAll("_", " ")}{!routing.auto_paste ? " / review before copying" : ""}</span>}
+          {preview && <div ref={streamPreview} className="preview" role="region" aria-label="Prompt preview" tabIndex={0}>{preview}</div>}
+        </>}
+        {view.kind === "result" && <>
+          <strong role="status">{view.title}</strong>
+          <div className="result-content" role="region" aria-label="Prompt result" tabIndex={0}>
+            {view.detail && <span className="metadata">{view.detail}</span>}
+            {routing && <span className="metadata" title={routing.warnings.join(" ")}>{routing.task_type} / {routing.surface.replaceAll("_", " ")}</span>}
+            {view.body && <div className="result-text">{view.body}</div>}
           </div>
-        </>
-      )}
-      {view.kind === "working" && (
-        <div className="text">
-          <strong>{view.label}</strong>
-          {preview && <span className="preview">{preview}</span>}
-        </div>
-      )}
-      {view.kind === "result" && (
-        <div className="text">
-          <strong>{view.title}</strong>
-          {view.body && <span className="preview">{view.body}</span>}
-          {view.canCopy && (
+        </>}
+        {uiError && <div role="alert" className="ui-error">{uiError}</div>}
+        {view.kind === "result" && view.canCopy && (
             <div className="actions">
-              <button onClick={() => void api.copyLastResult().then(() => scheduleHide(600))}>Copy</button>
+              <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>
               <button onClick={() => scheduleHide(0)}>Dismiss</button>
             </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

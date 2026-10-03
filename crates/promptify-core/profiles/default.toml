@@ -255,15 +255,15 @@ name = "Image generator"
 kind = "image_gen"
 newlines = "collapse"
 style = """
-The prompt goes to an image generation model. Write one descriptive paragraph:
-subject, setting, composition, lighting, style or medium, mood and color palette, using only details the speaker gave or clearly implied.
+Write a single-line task graph for image creation, with numbered steps, a bounded check loop and Done when criteria.
+Keep the visual description inside the creation step. Do not assume a generator-only field can execute this workflow; it needs review by a capable assistant.
 """
 [[profile.examples]]
 said = "um a fox in a forest at night kind of magical with like glowing mushrooms"
-prompt = "A red fox standing among glowing mushrooms on a mossy forest floor at night, soft blue and green bioluminescent light, low eye-level view with the fox in sharp focus, mist between the trees, magical and quiet mood, digital painting."
+prompt = "Create an image of a fox in a magical forest at night with glowing mushrooms.; Step 1: Generate the requested fox and forest scene using available image tools.; Step 2 (after 1): Review the subject, nighttime setting, glowing mushrooms and magical mood.; Loop: if a stated visual requirement is unmet, return to Step 1 (max 2 rounds).; Done when: the image meets the description or unavailable capabilities are reported."
 [[profile.examples]]
 said = "design a logo for my coffee shop then make a few color versions and pick the one that works best on our menu"
-prompt = "A simple, memorable logo for a coffee shop built around a coffee cup or bean motif, flat vector style with clean lines on a plain background, shown in three color variations side by side, then the variation that stays clearest at small sizes on a printed menu, presented larger."
+prompt = "Design a logo for my coffee shop, make a few color versions, and choose the best for our menu.; Step 1: Create the logo and requested color variations with available tools.; Step 2 (after 1): Compare their clarity and suitability for the menu, then recommend a version.; Loop: if none suits the menu, return to Step 1 (max 2 rounds).; Done when: the requested variants and a justified choice are available, or unmet requirements are reported."
 [[profile.match]]
 hosts = ["midjourney.com", "ideogram.ai", "leonardo.ai", "firefly.adobe.com", "krea.ai", "playground.com", "recraft.ai", "dreamstudio.ai", "openart.ai", "nightcafe.studio", "designer.microsoft.com"]
 
@@ -273,12 +273,12 @@ name = "Video generator"
 kind = "video_gen"
 newlines = "collapse"
 style = """
-The prompt goes to a video generation model. Write one descriptive paragraph:
-subject and action, setting, camera framing and movement, motion and pacing, lighting, style, mood and color palette, using only details the speaker gave or clearly implied.
+Write a single-line task graph for video creation, with numbered steps, a bounded check loop and Done when criteria.
+Keep the scene, action, camera movement and pacing inside the creation step. Do not assume a generator-only field can execute the graph; require review.
 """
 [[profile.examples]]
 said = "a drone shot over a lighthouse at sunset with waves crashing slow and cinematic"
-prompt = "A slow aerial drone shot circling a white lighthouse on a rocky cliff at sunset, waves crashing against the rocks below and throwing spray, warm golden light fading to orange, gentle steady camera movement, cinematic and calm."
+prompt = "Create a slow cinematic drone shot over a lighthouse at sunset with crashing waves.; Step 1: Generate the requested scene and camera movement using available video tools.; Step 2 (after 1): Review the lighthouse, sunset, waves, pacing and cinematic style.; Loop: if a stated requirement is unmet, return to Step 1 (max 2 rounds).; Done when: the video matches the request or unavailable capabilities and unmet criteria are reported."
 [[profile.match]]
 hosts = ["sora.com", "sora.chatgpt.com", "runwayml.com", "pika.art", "klingai.com", "hailuoai.video", "dream-machine.lumalabs.ai"]
 

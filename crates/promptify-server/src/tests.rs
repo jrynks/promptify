@@ -42,10 +42,12 @@ impl Generator for SlowGenerator {
         }
         let said = req.messages.last().map(|m| m.content.clone()).unwrap_or_default();
         on_token("Prompt ");
-        let text = format!(
+        let text = if req.messages.first().is_some_and(|message| message.content.starts_with("You are Promptify, a prompt rewriter")) {
+            "Write an email requesting meeting notes.\nStep 1: Draft the requested email.\nStep 2 (after 1): Check the draft against the request.\nLoop: if anything is missing, return to Step 1 (max 2 rounds).\nDone when: the email meets the request.".into()
+        } else { format!(
             "Prompt for: {}.\nStep 1: Write it.\nLoop: if it misses a requirement, return to Step 1 (max 2 rounds).\nDone when: all stated requirements are met.",
             said.lines().last().unwrap_or_default().len()
-        );
+        ) };
         Ok(Generation { text, finish: FinishReason::Stop })
     }
 }
@@ -265,10 +267,14 @@ fn audio_job_and_oversized_audio() {
 }
 
 fn http(addr: SocketAddr, auth: Option<&str>, body: &str) -> String {
+    http_request(addr, auth, "POST", "/v1/transform", body)
+}
+
+fn http_request(addr: SocketAddr, auth: Option<&str>, method: &str, path: &str, body: &str) -> String {
     use std::io::{Read, Write};
     let mut stream = std::net::TcpStream::connect(addr).unwrap();
     let auth = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
-    write!(stream, "POST /v1/transform HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    write!(stream, "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
     let mut out = String::new();
     stream.read_to_string(&mut out).unwrap();
     out
@@ -289,6 +295,50 @@ fn local_api_requires_the_token() {
     assert_eq!(response["structure"], "valid");
     assert_eq!(response["outcome"]["kind"], "ready");
     validate_graph(response["outcome"]["text"].as_str().unwrap()).unwrap();
+    assert!(response.get("routing").is_none(), "the v1 response shape remains unchanged");
+}
+
+#[test]
+fn adaptive_api_discovers_catalog_and_returns_task_contracts() {
+    let f = fixture();
+    let addr = f.server.listen_addr().unwrap();
+    assert!(http_request(addr, None, "GET", "/v2/catalog", "").starts_with("HTTP/1.1 401"));
+    let token = std::fs::read_to_string(api_token_path(&f.server.shared.config.data_dir)).unwrap();
+    let response = http_request(addr, Some(token.trim()), "GET", "/v2/catalog", "");
+    assert!(response.starts_with("HTTP/1.1 200"));
+    let catalog: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(catalog["tasks"].as_array().unwrap().len(), 264);
+    let body = r#"{"text":"Write an email asking for meeting notes","url":"https://chatgpt.com"}"#;
+    let response = http_request(addr, Some(token.trim()), "POST", "/v2/transform", body);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let value: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(value["routing"]["task_type"], "communication.email");
+    assert_eq!(value["routing"]["form"], "graph");
+    assert_eq!(value["validation"]["status"], "valid");
+    assert_eq!(value["outcome"]["kind"], "ready");
+    validate_graph(value["outcome"]["text"].as_str().unwrap()).unwrap();
+}
+
+#[test]
+fn adaptive_api_rejects_invalid_and_incompatible_overrides_without_generation() {
+    let f = fixture();
+    let addr = f.server.listen_addr().unwrap();
+    let token = std::fs::read_to_string(api_token_path(&f.server.shared.config.data_dir)).unwrap();
+    for body in [
+        r#"{"text":"hello","routing":{"rendering":"adaptive","task_type":"not.valid"}}"#,
+        r#"{"text":"hello","routing":{"rendering":"adaptive","task_type":"spatial.cad"}}"#,
+        r#"{"text":"hello","routing":{"rendering":"legacy","task_type":"code.debug"}}"#,
+        r#"{"text":"hello","mode":"dictation","routing":{"rendering":"adaptive","surface":"chat"}}"#,
+    ] {
+        let response = http_request(addr, Some(token.trim()), "POST", "/v2/transform", body);
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    }
+    let response = http_request(addr, Some(token.trim()), "POST", "/v2/transform",
+        r#"{"text":"Write an email","routing":{"rendering":"adaptive","surface":"literal"}}"#);
+    let value: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(value["outcome"]["kind"], "failed");
+    assert_eq!(value["validation"]["status"], "failed");
+    assert_eq!(f.generator.calls.load(Ordering::SeqCst), 0);
 }
 
 /// Sends a WebSocket upgrade for /v1/direct and returns the open stream and the status line.

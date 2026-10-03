@@ -9,12 +9,13 @@ use promptify_core::audio::{CaptureBuffer, TARGET_SAMPLE_RATE};
 use promptify_core::context::{ActiveContext, ContextPolicy, FocusedText, WindowIdentity};
 use promptify_core::eval::{self, Expect};
 use promptify_core::history::{HistoryContext, HistoryLimits, HistoryLog, NewHistoryEntry};
-use promptify_core::models::Manifest;
+use promptify_core::models::{Manifest, ModelKind, is_installed};
 use promptify_core::pipeline::{
     BackendError, Backends, CancelToken, ContextProvider, History, Inserter, JobEvent, Limits, Mode, Orchestrator, Outcome,
     Transcriber,
 };
 use promptify_core::profiles::{PasteChord, ProfileSet};
+use promptify_core::routing::{self, Rendering, RoutingOptions, Surface, TaskId};
 use promptify_lib::llm_client::{LlmWorker, worker_exe};
 use promptify_lib::settings::{self, SharedSettings};
 use promptify_lib::stt::WhisperEngine;
@@ -29,6 +30,10 @@ const USAGE: &str = "usage:
   promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json] [--mode prompt|dictation|answer] [--auto]
   promptify-cli screen-text   (reads the focused text box of the foreground app after 3 s, as the app would)
   promptify-cli eval <cases.toml>
+  promptify-cli eval-adaptive <cases.toml> [--model ID]   (local model output contracts)
+  promptify-cli eval-routing <cases.toml>   (classification only; no model needed)
+  promptify-cli prompt-types   (list the bundled taxonomy and activation status)
+  promptify-cli route <text> [--process NAME] [--url URL] [--surface SURFACE] [--prompt-type ID]
   promptify-cli mcp [--api http://127.0.0.1:47821]   (stdio MCP server for Claude Desktop, VS Code, Cursor...)
   promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE] [--discoverable]
   promptify-cli remote pair <pairing-link> [--name NAME] [--direct] [--identity FILE]
@@ -36,6 +41,30 @@ const USAGE: &str = "usage:
 
 serve starts a loopback MCP API by default. Phone options (--relay, --advertise,
 --offer-file, --discoverable) and remote commands require the mobile-networking build feature.";
+
+fn routing_flags(args: &[String]) -> Result<RoutingOptions, String> {
+    let args = args.get(2..).unwrap_or_default();
+    let rendering = match checked_flag(args, "--rendering")?.as_deref() {
+        None | Some("legacy") => Rendering::Legacy,
+        Some("adaptive") => Rendering::Adaptive,
+        Some(other) => return Err(format!("unknown rendering policy {other}; use legacy or adaptive")),
+    };
+    let task_type = checked_flag(args, "--prompt-type")?.map(TaskId::try_from).transpose()?;
+    let surface = checked_flag(args, "--surface")?.map(|value| {
+        serde_json::from_value::<Surface>(serde_json::Value::String(value)).map_err(|e| format!("invalid surface: {e}"))
+    }).transpose()?;
+    let options = RoutingOptions { rendering, task_type, surface };
+    options.validate()?;
+    Ok(options)
+}
+
+fn checked_flag(args: &[String], name: &str) -> Result<Option<String>, String> {
+    let positions: Vec<_> = args.iter().enumerate().filter(|(_, arg)| arg.as_str() == name).map(|(index, _)| index).collect();
+    if positions.len() > 1 { return Err(format!("{name} may only be specified once")); }
+    let Some(index) = positions.first() else { return Ok(None); };
+    args.get(index + 1).filter(|value| !value.starts_with("--")).cloned()
+        .map(Some).ok_or_else(|| format!("{name} requires a value"))
+}
 
 /// Feeds typed text through the pipeline in place of speech.
 struct TextTranscriber(String);
@@ -68,7 +97,7 @@ fn rewrite_text(
     text: &str,
     enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
 ) -> Result<promptify_core::pipeline::JobReport, String> {
-    rewrite_with(llm, ctx, text, enricher, Mode::Prompt, false)
+    rewrite_with(llm, ctx, text, enricher, Mode::Prompt, false, RoutingOptions::default())
 }
 
 fn rewrite_with(
@@ -78,7 +107,11 @@ fn rewrite_with(
     enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
     mode: Mode,
     auto_mode: bool,
+    routing: RoutingOptions,
 ) -> Result<promptify_core::pipeline::JobReport, String> {
+    if mode != Mode::Prompt && (routing.task_type.is_some() || routing.surface.is_some()) {
+        return Err("Task and surface overrides apply only to Prompt mode.".into());
+    }
     let backends = Backends {
         context: Arc::new(FixedContext(ctx)),
         transcriber: Arc::new(TextTranscriber(text.to_owned())),
@@ -90,6 +123,7 @@ fn rewrite_with(
     let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
     orchestrator.service().set_enricher(enricher);
     orchestrator.set_auto_mode(auto_mode);
+    orchestrator.queue_routing(routing)?;
     let job = orchestrator.begin(mode).map_err(|e| e.to_string())?;
     let show = std::env::var_os("PROMPTIFY_EVAL_SHOW").is_some();
     let mut revising = false;
@@ -249,6 +283,30 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "prompt-types") {
+        println!("{}", serde_json::to_string_pretty(routing::catalog().all()).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "route") {
+        let text = args.get(1).ok_or(USAGE)?;
+        let ctx = text_context(flag(&args, "--process").unwrap_or_default(), flag(&args, "--url"), flag(&args, "--title").unwrap_or_default());
+        let mut flags = args.clone();
+        if flag(&flags, "--rendering").is_none() {
+            flags.extend(["--rendering".into(), "adaptive".into()]);
+        }
+        let options = routing_flags(&flags)?;
+        let profiles = ProfileSet::bundled();
+        let policy = routing::resolve(&ctx, profiles.resolve(&ctx), text, &options)?;
+        println!("{}", serde_json::to_string_pretty(&policy).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "eval-routing") {
+        let path = args.get(1).ok_or(USAGE)?;
+        let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let score = eval::score_routing(&eval::load_adaptive_cases(&source)?);
+        println!("{}", serde_json::to_string_pretty(&score).map_err(|e| e.to_string())?);
+        return if score.passed == score.total && score.macro_f1 >= 0.90 { Ok(()) } else { Err("routing evaluation failed".into()) };
+    }
     let data_dir = settings::app_data_dir();
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let models_dir = settings::models_dir(&data_dir);
@@ -256,6 +314,13 @@ fn run() -> Result<(), String> {
     let mut app_settings = settings::load(&data_dir);
     if ensure_selection(&manifest, &models_dir, &mut app_settings) {
         settings::save(&data_dir, &app_settings).map_err(|e| e.to_string())?;
+    }
+    if matches!(args.first().map(String::as_str), Some("rewrite" | "run" | "eval" | "eval-adaptive"))
+        && let Some(id) = checked_flag(args.get(2..).unwrap_or_default(), "--model")?
+    {
+            let entry = manifest.get(&id).filter(|entry| entry.kind == ModelKind::Llm).ok_or_else(|| format!("unknown language model: {id}"))?;
+            if !is_installed(&models_dir, entry) { return Err(format!("language model {id} is not installed")); }
+            app_settings.llm_model = Some(id);
     }
 
     match args.first().map(String::as_str) {
@@ -398,6 +463,11 @@ fn run() -> Result<(), String> {
             };
             let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
             let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
+            let routing = routing_flags(&args)?;
+            if mode != Mode::Prompt && (routing.task_type.is_some() || routing.surface.is_some()) {
+                return Err("Task and surface overrides apply only to Prompt mode.".into());
+            }
+            orchestrator.queue_routing(routing)?;
             let job = orchestrator.begin(mode).map_err(|e| e.to_string())?;
             eprintln!("profile: {}", job.profile_id);
             let mut stage_started = Instant::now();
@@ -408,6 +478,7 @@ fn run() -> Result<(), String> {
                 }
                 JobEvent::Transcript(text) => eprintln!("transcript: {text}"),
                 JobEvent::Token(_) => {}
+                JobEvent::Routing(policy) => eprintln!("task={} surface={:?} form={:?}", policy.task_type.as_str(), policy.surface, policy.form),
             });
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
         }
@@ -433,8 +504,49 @@ fn run() -> Result<(), String> {
                 Some("answer") => Mode::Answer,
                 Some(other) => return Err(format!("unknown mode {other}")),
             };
-            let report = rewrite_with(&llm, ctx, &text, enricher, mode, args.iter().any(|a| a == "--auto"))?;
+            let report = rewrite_with(&llm, ctx, &text, enricher, mode, args.iter().any(|a| a == "--auto"), routing_flags(&args)?)?;
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+        }
+        Some("eval-adaptive") => {
+            let path = args.get(1).ok_or(USAGE)?;
+            let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let cases = eval::load_adaptive_cases(&source)?;
+            let score = eval::score_routing(&cases);
+            if score.passed != score.total || score.macro_f1 < 0.90 {
+                return Err(format!("routing benchmark failed: {:?}", score.failures));
+            }
+            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
+            llm.preload().map_err(|e| e.0)?;
+            let (mut passed, mut repaired) = (0, 0);
+            let mut elapsed = Vec::new();
+            for case in &cases {
+                if case.expect_error {
+                    passed += 1;
+                    println!("{} invalid or incomplete request correctly rejected before generation", case.id);
+                    continue;
+                }
+                let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
+                let report = rewrite_with(&llm, ctx, &case.said, None, Mode::Prompt, false, case.options())?;
+                if let Outcome::Failed { reason, detail } = &report.outcome {
+                    eprintln!("{} rejected ({reason:?}): {}", case.id, detail.as_deref().unwrap_or("no additional detail"));
+                }
+                let text = match &report.outcome {
+                    Outcome::Inserted { text } | Outcome::Blocked { text, reason: promptify_core::pipeline::BlockReason::SurfaceUnconfirmed | promptify_core::pipeline::BlockReason::GraphUnsupported, .. } => Some(text),
+                    _ => None,
+                };
+                let checked = text.zip(report.routing.as_ref()).map(|(text, policy)| eval::score_adaptive_output(case, policy, text));
+                let pass = matches!(checked, Some(Ok(())));
+                if let Some(Err(error)) = checked { eprintln!("{error}"); }
+                passed += usize::from(pass);
+                repaired += usize::from(report.structure == Some(promptify_core::pipeline::StructureCheck::Repaired));
+                elapsed.push(report.elapsed_ms);
+                println!("{} outcome={} valid={} structure={:?} {}ms", case.id, report.outcome.kind(), pass, report.structure, report.elapsed_ms);
+                if std::env::var_os("PROMPTIFY_EVAL_SHOW").is_some() { println!("{}\n---", outcome_text(&report.outcome).unwrap_or("")); }
+            }
+            elapsed.sort_unstable();
+            let p95 = elapsed.get((elapsed.len() * 95).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0);
+            println!("adaptive: {passed}/{}; repaired: {repaired}; routing macro-F1: {:.3}; p95: {p95}ms", cases.len(), score.macro_f1);
+            if passed != cases.len() { return Err("adaptive output evaluation failed".into()); }
         }
         Some("eval") => {
             let path = PathBuf::from(args.get(1).ok_or(USAGE)?);

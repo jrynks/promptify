@@ -12,6 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
+custom-protocol = ["tauri/custom-protocol"]
 mobile-networking = ["promptify-server/mobile-networking"]
 
 [build-dependencies]

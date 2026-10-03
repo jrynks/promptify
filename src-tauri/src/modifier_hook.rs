@@ -12,7 +12,7 @@ use crate::controller::Command;
 fn dispatch(app: &AppHandle, action: ChordAction, pressed: &mut bool) {
     let Some(state) = app.try_state::<AppState>() else { return };
     match action {
-        ChordAction::Press if !state.hotkeys.read().unwrap().paused => {
+        ChordAction::Press if !state.hotkeys.read().unwrap().paused && !crate::onboarding::required(&state) => {
             *pressed = true;
             state.controller.send(Command::Press(Mode::Prompt));
         }

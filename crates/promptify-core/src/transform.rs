@@ -13,8 +13,9 @@ use crate::pipeline::{
     CancelToken, FailReason, FinishReason, GenerationRequest, Generator, History, JobEvent, Limits, Mode, Stage,
     StructureCheck, Transcriber,
 };
-use crate::profiles::{NewlinePolicy, Profile, ProfileKind, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, build_answer_messages, build_prompt_messages, choose_mode, media_request, stable_prefix_len};
+use crate::profiles::{NewlinePolicy, Profile, ProfileSet};
+use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, adaptive_prefix_len, build_adaptive_messages, build_answer_messages, build_prompt_messages, choose_mode, stable_prefix_len};
+use crate::routing::{self, Rendering, ResolvedPromptPolicy, RoutingOptions};
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
@@ -136,6 +137,14 @@ pub struct TransformReport {
     pub structure: Option<StructureCheck>,
     /// The mode actually used; differs from the request only with automatic mode.
     pub mode: Mode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing: Option<ResolvedPromptPolicy>,
+}
+
+pub struct Schedule<'a> {
+    pub priority: Priority,
+    pub client: &'a str,
+    pub wait: Duration,
 }
 
 pub struct TransformService {
@@ -209,11 +218,31 @@ impl TransformService {
         queue_wait: Duration,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<TransformReport, AdmitError> {
+        self.run_scheduled_with_options(Schedule { priority, client, wait: queue_wait }, transform, &RoutingOptions::default(), cancel, on_event)
+    }
+
+    pub fn run_scheduled_with_options(
+        &self,
+        schedule: Schedule<'_>,
+        transform: &Transform<'_>,
+        options: &RoutingOptions,
+        cancel: &CancelToken,
+        on_event: &mut dyn FnMut(JobEvent<'_>),
+    ) -> Result<TransformReport, AdmitError> {
         if let Err(reason) = self.check_input(transform) {
-            return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, mode: transform.mode });
+            return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, mode: transform.mode, routing: None });
         }
-        let _permit = self.scheduler.acquire(priority, client, cancel, Instant::now() + queue_wait)?;
-        Ok(self.run(transform, cancel, on_event))
+        if let Err(error) = options.validate() {
+            return Ok(TransformReport { outcome: failed(FailReason::InvalidPrompt, error), transcript: None, structure: None, mode: transform.mode, routing: None });
+        }
+        if transform.mode != Mode::Prompt && (options.task_type.is_some() || options.surface.is_some()) {
+            return Ok(TransformReport {
+                outcome: failed(FailReason::InvalidPrompt, "Task and surface overrides apply only to Prompt mode.".into()),
+                transcript: None, structure: None, mode: transform.mode, routing: None,
+            });
+        }
+        let _permit = self.scheduler.acquire(schedule.priority, schedule.client, cancel, Instant::now() + schedule.wait)?;
+        Ok(self.run(transform, options, cancel, on_event))
     }
 
     /// Transcribes one finished chunk while the user is still speaking. Gives up rather than wait
@@ -236,19 +265,18 @@ impl TransformService {
     }
 
     /// Callers must hold a scheduler permit; use [`Self::run_scheduled`] unless already holding one.
-    fn run(&self, t: &Transform<'_>, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>)) -> TransformReport {
-        let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, mode: t.mode };
-        report.outcome = self.stages(t, cancel, &mut report.transcript, &mut report.structure, &mut report.mode, on_event);
+    fn run(&self, t: &Transform<'_>, options: &RoutingOptions, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>)) -> TransformReport {
+        let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, mode: t.mode, routing: None };
+        report.outcome = self.stages(t, options, cancel, &mut report, on_event);
         report
     }
 
     fn stages(
         &self,
         t: &Transform<'_>,
+        options: &RoutingOptions,
         cancel: &CancelToken,
-        saved_transcript: &mut Option<String>,
-        structure: &mut Option<StructureCheck>,
-        resolved_mode: &mut Mode,
+        report: &mut TransformReport,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> TransformOutcome {
         if cancel.is_cancelled() {
@@ -287,20 +315,33 @@ impl TransformService {
             Input::Text(_) => transcript,
             Input::Audio(_) | Input::Live { .. } => self.vocabulary.read().unwrap_or_else(|p| p.into_inner()).apply(&transcript),
         };
-        let (mode, transcript) = if t.auto_mode && t.mode == Mode::Prompt { choose_mode(profile, &transcript) } else { (t.mode, transcript.as_str()) };
-        *resolved_mode = mode;
+        let mut mode_profile = profile.clone();
+        if options.rendering == Rendering::Adaptive
+            && (options.surface.is_some() || options.task_type.is_some() || routing::is_ai_target(t.target, profile))
+        {
+            mode_profile.id = "explicit_surface".into();
+        }
+        let (mode, transcript) = if t.auto_mode && t.mode == Mode::Prompt { choose_mode(&mode_profile, &transcript) } else { (t.mode, transcript.as_str()) };
+        report.mode = mode;
         let transcript = transcript.trim();
         if transcript.is_empty() {
             return TransformOutcome::NoSpeech;
         }
-        // "Make me a picture of..." in a chat app needs a generator prompt, not questions and steps.
-        let media_profile = match (mode, profile.kind) {
-            (Mode::Prompt, ProfileKind::AiChat) => media_request(transcript).and_then(|kind| self.profiles.media_request(profile, kind)),
-            _ => None,
-        };
-        let profile = media_profile.as_ref().unwrap_or(profile);
         on_event(JobEvent::Transcript(transcript));
-        *saved_transcript = Some(transcript.to_owned());
+        report.transcript = Some(transcript.to_owned());
+        let prepared = if mode == Mode::Prompt {
+            match routing::prepare_profile(&self.profiles, profile, t.target, transcript, options) {
+                Ok((profile, policy)) => {
+                    if let Some(policy) = &policy {
+                    on_event(JobEvent::Routing(policy));
+                    }
+                    report.routing = policy;
+                    Some(profile)
+                }
+                Err(error) => return failed(FailReason::InvalidPrompt, error),
+            }
+        } else { None };
+        let profile = prepared.as_ref().unwrap_or(profile);
 
         let (raw, finish) = match mode {
             Mode::Dictation => (apply_spoken_commands(&remove_fillers(transcript)), FinishReason::Stop),
@@ -320,7 +361,14 @@ impl TransformService {
             }
             Mode::Prompt => {
                 let label = target_label(t.target);
-                let history = if t.use_history { self.history.context(&profile.id, &t.target.app_key()) } else { HistoryContext::default() };
+                let mut history = if !t.use_history {
+                    HistoryContext::default()
+                } else if let Some(policy) = &report.routing {
+                    self.history.routed_context(&profile.id, &t.target.app_key(), policy, routing::is_follow_up(transcript))
+                } else {
+                    self.history.context(&profile.id, &t.target.app_key())
+                };
+                history.examples.retain(|example| validate_graph(&example.prompt).is_ok());
                 // Tool lookups count against the same deadline as writing the prompt.
                 let deadline = Instant::now() + self.limits.generation_timeout;
                 let (tool_context, omitted) = match self.enricher() {
@@ -343,7 +391,7 @@ impl TransformService {
                 if cancel.is_cancelled() {
                     return TransformOutcome::Cancelled;
                 }
-                let messages = build_prompt_messages(&PromptRequest {
+                let prompt_request = PromptRequest {
                     transcript,
                     profile,
                     target_label: &label,
@@ -351,9 +399,18 @@ impl TransformService {
                     history: &history,
                     tool_context: &tool_context,
                     tool_context_omitted: omitted,
-                });
+                };
+                let mut references = t.surrounding.map_or_else(String::new, |surrounding| surrounding.text.clone());
+                if let Some(previous) = &history.previous {
+                    references.push_str(&format!("\n{}", previous.text));
+                }
+                for context in &tool_context { references.push_str(&format!("\n{}", context.text)); }
+                let messages = match &report.routing {
+                    Some(policy) => build_adaptive_messages(&prompt_request, policy),
+                    None => build_prompt_messages(&prompt_request),
+                };
                 on_event(JobEvent::Stage(Stage::Generating));
-                let stable_prefix = stable_prefix_len(profile);
+                let stable_prefix = report.routing.as_ref().map_or_else(|| stable_prefix_len(profile), adaptive_prefix_len);
                 let request = GenerationRequest { messages: &messages, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
                 let mut forward = |token: &str| on_event(JobEvent::Token(token));
                 let generation = match self.generator.generate(&request, cancel, &mut forward) {
@@ -366,7 +423,11 @@ impl TransformService {
                 if Instant::now() > deadline {
                     return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None };
                 }
-                let outcome = finish_output(&generation.text, generation.finish, profile.newlines, self.limits.max_output_chars);
+                let newlines = report.routing.as_ref().map_or(profile.newlines, |policy| policy.newlines);
+                let outcome = finish_output(&generation.text, generation.finish, newlines, self.limits.max_output_chars);
+                if matches!(&outcome, TransformOutcome::Truncated { text } if validate_graph(text).is_err()) {
+                    return failed(FailReason::InvalidPrompt, "The incomplete draft did not satisfy the required graph and loop contract. It was not returned as a usable prompt.".into());
+                }
                 if profile.structure != Structure::Flat
                     && matches!(&outcome, TransformOutcome::Truncated { text } if opens_with_role(text))
                 {
@@ -375,10 +436,10 @@ impl TransformService {
                 let TransformOutcome::Ready { text } = outcome else {
                     return outcome;
                 };
-                if profile.structure != Structure::Flat {
-                    return match self.check_structure(&request, profile.newlines, text, cancel, on_event) {
+                if report.routing.is_some() || profile.structure != Structure::Flat {
+                    return match self.check_structure(&request, newlines, text, report.routing.as_ref().map(|policy| (policy, transcript, references.as_str())), cancel, on_event) {
                         Ok((text, check)) => {
-                            *structure = Some(check);
+                            report.structure = Some(check);
                             TransformOutcome::Ready { text }
                         }
                         Err(outcome) => outcome,
@@ -430,11 +491,25 @@ impl TransformService {
         request: &GenerationRequest<'_>,
         newlines: NewlinePolicy,
         draft: String,
+        adaptive: Option<(&ResolvedPromptPolicy, &str, &str)>,
         cancel: &CancelToken,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<(String, StructureCheck), TransformOutcome> {
-        let mut error = match validate_graph(&draft) {
-            Ok(_) => return Ok((draft, StructureCheck::Valid)),
+        if cancel.is_cancelled() {
+            return Err(TransformOutcome::Cancelled);
+        }
+        let validate = |text: &str| -> Result<(), String> {
+            match adaptive {
+                Some((policy, original, references)) => routing::validate_rewrite_with_context(policy, original, references, text).map_err(|error| {
+                    format!("Rewrite only the finished prompt, preserving the user's final intent and supplied facts. Fix this violation: {error}\n\
+                        Graph syntax is mandatory. Step 1 has NO dependencies. Step 2 can depend only on Step 1. Step 3 can depend only on Steps 1 and 2. Never list the current step or a later step in an after clause; omit a dependency rather than inventing one. \
+                        Put a separate Loop: line with an existing return step and a limit of 1 to 8 rounds, then non-empty Done when: criteria. Keep the graph compact, retain every requested action, and include no explanation of your rewrite.")
+                }),
+                None => validate_graph(text).map(|_| ()).map_err(repair_instruction),
+            }
+        };
+        let mut error = match validate(&draft) {
+            Ok(()) => return Ok((draft, StructureCheck::Valid)),
             Err(error) => error,
         };
         let mut latest = draft.clone();
@@ -447,10 +522,17 @@ impl TransformService {
                 break;
             }
             on_event(JobEvent::Stage(Stage::Revising));
-            let mut repair = request.messages.to_vec();
+            let mut repair = if adaptive.is_some() {
+                vec![request.messages[0].clone(), request.messages.last().expect("prompt has a user message").clone()]
+            } else { request.messages.to_vec() };
             repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
-            repair.push(ChatMessage { role: Role::User, content: repair_instruction(error) });
-            let repair_request = GenerationRequest { messages: &repair, ..*request };
+            let instruction = if let Some((_, original, _)) = adaptive {
+                format!("{error}\n\nThe CURRENT request to preserve is:\n<transcript>\n{}\n</transcript>\n\
+                    Start with this request's goal and preserve all its named details and numbers. The response must be the complete corrected task graph, not a generic example.",
+                    crate::prompt::escape_delimiters(routing::final_request(original)))
+            } else { error.clone() };
+            repair.push(ChatMessage { role: Role::User, content: instruction });
+            let repair_request = GenerationRequest { messages: &repair, stable_prefix: if adaptive.is_some() { 1 } else { request.stable_prefix }, ..*request };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
             let generation = match self.generator.generate(&repair_request, cancel, &mut forward) {
                 Ok(generation) => generation,
@@ -469,8 +551,8 @@ impl TransformService {
                 log::warn!("task graph repair produced no complete usable prompt");
                 break;
             };
-            match validate_graph(&text) {
-                Ok(_) => return Ok((text, StructureCheck::Repaired)),
+            match validate(&text) {
+                Ok(()) => return Ok((text, StructureCheck::Repaired)),
                 Err(next) => {
                     error = next;
                     latest = text;
@@ -483,8 +565,8 @@ impl TransformService {
         if opens_with_role(&draft) {
             return Err(reject_persona_draft());
         }
-        log::warn!("no valid task graph after repair: {error}; keeping original prompt");
-        Ok((draft, StructureCheck::KeptOriginal))
+        log::warn!("prompt failed mandatory graph validation after repair: {error}");
+        Err(failed(FailReason::InvalidPrompt, error))
     }
 }
 
@@ -573,7 +655,7 @@ mod tests {
         fn context(&self, _: &str, _: &str) -> HistoryContext {
             self.0.fetch_add(1, Ordering::SeqCst);
             HistoryContext {
-                examples: vec![crate::profiles::Example { said: "HISTORY-SENTINEL".into(), prompt: "HISTORY-SENTINEL".into() }],
+                examples: vec![crate::profiles::Example { said: "HISTORY-SENTINEL".into(), prompt: format!("HISTORY-SENTINEL\n{FINISHED}") }],
                 previous: None,
             }
         }
@@ -652,11 +734,11 @@ mod tests {
         let calls = f.generator.calls.lock().unwrap();
         let system = |i: usize| calls[i][0].content.clone();
         let last = |i: usize| calls[i].last().unwrap().content.clone();
-        for (i, what, opener) in [(0, "an image", "Create an image:"), (1, "a video", "Create a video:")] {
+        for (i, what) in [(0, "an image"), (1, "a video")] {
             let system = system(i);
             assert!(system.contains(&format!("Target: ChatGPT (creating {what}).")), "{system}");
-            assert!(system.contains(opener) && system.contains("Describe, do not instruct") && !system.contains("Task structure:"));
-            assert!(last(i).contains("Questions: none; go ahead") && !last(i).contains("steps"));
+            assert!(system.contains("Task structure") && !system.contains("Describe, do not instruct"));
+            assert!(last(i).contains("Questions: none; go ahead") && last(i).contains("steps"));
         }
         assert!(system(2).contains("Target: ChatGPT.") && last(2).contains("Complexity: complex."), "a script is text");
         assert!(system(3).contains("Target: ChatGPT (creating an image)."));

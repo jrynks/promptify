@@ -1,8 +1,11 @@
 /target
 /node_modules
 /dist
+/playwright-report
+/test-results
 /src-tauri/target
 /src-tauri/gen/schemas
 /src-tauri/binaries
 *.part
+*.log
 .DS_Store

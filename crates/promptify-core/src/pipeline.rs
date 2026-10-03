@@ -8,8 +8,9 @@ use crate::context::{ActiveContext, AdmittedText, ContextPolicy, FocusedText, Wi
 use crate::history::{HistoryContext, HistoryLog, NewHistoryEntry};
 use crate::profiles::{PasteChord, Profile, ProfileSet};
 use crate::prompt::ChatMessage;
+use crate::routing::{Rendering, ResolvedPromptPolicy, RoutingOptions};
 use crate::scheduler::{AdmitError, Priority, SchedulerLimits};
-use crate::transform::{Input, Transform, TransformOutcome, TransformService};
+use crate::transform::{Input, Schedule, Transform, TransformOutcome, TransformService};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -50,6 +51,7 @@ pub enum JobEvent<'a> {
     Stage(Stage),
     Transcript(&'a str),
     Token(&'a str),
+    Routing(&'a ResolvedPromptPolicy),
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +130,17 @@ pub trait History: Send + Sync {
     fn context(&self, profile_id: &str, app_key: &str) -> HistoryContext;
     /// Returns false when history is turned off.
     fn record(&self, entry: NewHistoryEntry) -> Result<bool, BackendError>;
+
+    fn routed_context(&self, profile_id: &str, app_key: &str, _policy: &ResolvedPromptPolicy, follow_up: bool) -> HistoryContext {
+        HistoryContext {
+            examples: Vec::new(),
+            previous: if follow_up { self.context(profile_id, app_key).previous } else { None },
+        }
+    }
+
+    fn record_routed(&self, entry: NewHistoryEntry, _routing: Option<&ResolvedPromptPolicy>) -> Result<bool, BackendError> {
+        self.record(entry)
+    }
 }
 
 impl History for HistoryLog {
@@ -137,6 +150,17 @@ impl History for HistoryLog {
 
     fn record(&self, entry: NewHistoryEntry) -> Result<bool, BackendError> {
         HistoryLog::record(self, entry).map(|saved| saved.is_some()).map_err(|e| BackendError(format!("history write failed: {e}")))
+    }
+
+    fn routed_context(&self, profile_id: &str, app_key: &str, policy: &ResolvedPromptPolicy, follow_up: bool) -> HistoryContext {
+        HistoryLog::routed_context(self, profile_id, app_key, policy, follow_up).unwrap_or_else(|error| {
+            log::warn!("adaptive history context unavailable: {error}");
+            HistoryContext::default()
+        })
+    }
+
+    fn record_routed(&self, entry: NewHistoryEntry, routing: Option<&ResolvedPromptPolicy>) -> Result<bool, BackendError> {
+        HistoryLog::record_routed(self, entry, routing).map(|saved| saved.is_some()).map_err(|e| BackendError(format!("history write failed: {e}")))
     }
 }
 
@@ -164,6 +188,8 @@ pub enum BlockReason {
     FocusUnknown,
     OutputTruncated,
     InsertFailed,
+    SurfaceUnconfirmed,
+    GraphUnsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -212,7 +238,7 @@ pub enum StructureCheck {
     Valid,
     /// The first draft was not a well-formed task graph with a loop, and a repair passed validation.
     Repaired,
-    /// No repair passed validation; the first draft was kept.
+    /// Historical status retained for compatibility; new prompts fail closed after a failed repair.
     KeptOriginal,
 }
 
@@ -224,6 +250,8 @@ pub struct JobReport {
     pub elapsed_ms: u64,
     pub history_saved: bool,
     pub structure: Option<StructureCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing: Option<ResolvedPromptPolicy>,
 }
 
 struct BusyGuard(Arc<AtomicBool>);
@@ -240,9 +268,24 @@ pub struct Job {
     pub mode: Mode,
     pub target: ActiveContext,
     pub profile_id: String,
+    options: JobOptions,
+    routing: RoutingOptions,
     surrounding: Option<AdmittedText>,
     cancel: CancelToken,
     _busy: BusyGuard,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct JobOptions {
+    pub use_personal_context: bool,
+    pub use_tools: bool,
+    pub auto_mode: bool,
+}
+
+impl Default for JobOptions {
+    fn default() -> Self {
+        Self { use_personal_context: true, use_tools: true, auto_mode: true }
+    }
 }
 
 impl Job {
@@ -263,6 +306,8 @@ pub struct Orchestrator {
     busy: Arc<AtomicBool>,
     next_id: AtomicU64,
     auto_mode: AtomicBool,
+    rendering: std::sync::RwLock<Rendering>,
+    next_routing: std::sync::Mutex<Option<RoutingOptions>>,
 }
 
 impl Orchestrator {
@@ -280,12 +325,28 @@ impl Orchestrator {
             busy: Arc::default(),
             next_id: AtomicU64::new(1),
             auto_mode: AtomicBool::new(false),
+            rendering: Default::default(),
+            next_routing: Default::default(),
         }
     }
 
     /// With automatic mode on, the prompt hotkey writes plain dictation outside AI apps.
     pub fn set_auto_mode(&self, enabled: bool) {
         self.auto_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_rendering(&self, rendering: Rendering) {
+        *self.rendering.write().unwrap_or_else(|p| p.into_inner()) = rendering;
+    }
+
+    pub fn routing_options(&self) -> RoutingOptions {
+        RoutingOptions { rendering: *self.rendering.read().unwrap_or_else(|p| p.into_inner()), ..Default::default() }
+    }
+
+    pub fn queue_routing(&self, options: RoutingOptions) -> Result<(), String> {
+        options.validate()?;
+        *self.next_routing.lock().unwrap_or_else(|p| p.into_inner()) = Some(options);
+        Ok(())
     }
 
     /// Which apps may share their on-screen text; applies from the next hotkey press.
@@ -308,6 +369,10 @@ impl Orchestrator {
 
     /// Captures the target window (and opted-in surrounding text) at hotkey press.
     pub fn begin(&self, mode: Mode) -> Result<Job, BeginError> {
+        self.begin_with_options(mode, JobOptions::default())
+    }
+
+    pub fn begin_with_options(&self, mode: Mode, options: JobOptions) -> Result<Job, BeginError> {
         if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
             return Err(BeginError::Busy);
         }
@@ -315,7 +380,7 @@ impl Orchestrator {
         let target = self.context.identify().map_err(BeginError::Context)?;
         let profile_id = self.profiles().resolve(&target).id.clone();
         let policy = self.policy.read().unwrap_or_else(|p| p.into_inner()).clone();
-        let surrounding = if mode != Mode::Dictation && policy.allows_surrounding_text(&target) {
+        let surrounding = if options.use_personal_context && mode != Mode::Dictation && policy.allows_surrounding_text(&target) {
             // Surrounding text is optional context; a read failure must not block the job.
             match self.context.focused_text(&target.window) {
                 Ok(Some(focused)) => policy.admit(&target, focused),
@@ -324,11 +389,18 @@ impl Orchestrator {
         } else {
             None
         };
+        let routing = if mode == Mode::Prompt && options.use_personal_context {
+            self.next_routing.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_else(|| self.routing_options())
+        } else {
+            RoutingOptions::default()
+        };
         Ok(Job {
             id: self.next_id.fetch_add(1, Ordering::SeqCst),
             mode,
             target,
             profile_id,
+            options,
+            routing,
             surrounding,
             cancel: CancelToken::default(),
             _busy: busy,
@@ -354,32 +426,47 @@ impl Orchestrator {
             profile,
             target: &job.target,
             surrounding: job.surrounding.as_ref(),
-            use_history: true,
-            use_tools: true,
-            auto_mode: self.auto_mode.load(Ordering::SeqCst),
+            use_history: job.options.use_personal_context,
+            use_tools: job.options.use_tools,
+            auto_mode: job.options.auto_mode && self.auto_mode.load(Ordering::SeqCst),
         };
         // Local jobs go first, but may still wait for a remote job that already holds the engines.
         let queue_wait = self.limits().generation_timeout;
-        let report = self.service.run_scheduled(Priority::Local, LOCAL_CLIENT, &transform, &job.cancel, queue_wait, on_event);
-        let (outcome, transcript, structure, mode) = match report {
+        let report = self.service.run_scheduled_with_options(
+            Schedule { priority: Priority::Local, client: LOCAL_CLIENT, wait: queue_wait },
+            &transform, &job.routing, &job.cancel, on_event,
+        );
+        let (outcome, transcript, structure, mode, routing) = match report {
             Ok(report) => {
                 let outcome = match report.outcome {
                     // Answers are only shown; they never reach the target app.
                     TransformOutcome::Ready { text } | TransformOutcome::Truncated { text } if report.mode == Mode::Answer => Outcome::Answered { text },
+                    TransformOutcome::Ready { text } if report.routing.as_ref().is_some_and(|policy| !policy.auto_paste) => {
+                        Outcome::Blocked {
+                            text, reason: if report.routing.as_ref().is_some_and(|policy| !policy.surface.can_reply()) { BlockReason::GraphUnsupported } else { BlockReason::SurfaceUnconfirmed },
+                            detail: report.routing.as_ref().map(|policy| policy.warnings.join(" ")),
+                        }
+                    }
+                    TransformOutcome::Ready { text } if report.mode == Mode::Prompt && !profile.can_reply => {
+                        Outcome::Blocked {
+                            text, reason: BlockReason::GraphUnsupported,
+                            detail: Some("This generator cannot be assumed to execute the mandatory task graph and check loop. Review the workflow and use a conversational AI with the appropriate tools.".into()),
+                        }
+                    }
                     TransformOutcome::Ready { text } => self.insert(&job, profile, text, on_event),
                     TransformOutcome::Truncated { text } => Outcome::Blocked { text, reason: BlockReason::OutputTruncated, detail: None },
                     TransformOutcome::NoSpeech => Outcome::NoSpeech,
                     TransformOutcome::Cancelled => Outcome::Cancelled,
                     TransformOutcome::Failed { reason, detail } => Outcome::Failed { reason, detail },
                 };
-                (outcome, report.transcript, report.structure, report.mode)
+                (outcome, report.transcript, report.structure, report.mode, report.routing)
             }
-            Err(AdmitError::Cancelled) => (Outcome::Cancelled, None, None, job.mode),
-            Err(error) => (Outcome::Failed { reason: FailReason::EngineBusy, detail: Some(error.to_string()) }, None, None, job.mode),
+            Err(AdmitError::Cancelled) => (Outcome::Cancelled, None, None, job.mode, None),
+            Err(error) => (Outcome::Failed { reason: FailReason::EngineBusy, detail: Some(error.to_string()) }, None, None, job.mode, None),
         };
-        let history_saved = match (&outcome, transcript) {
-            (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, mode, transcript, text, true),
-            (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, mode, transcript, text, false),
+        let history_saved = job.options.use_personal_context && match (&outcome, transcript) {
+            (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, mode, transcript, text, true, routing.as_ref()),
+            (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, mode, transcript, text, false, routing.as_ref()),
             _ => false,
         };
         JobReport {
@@ -389,10 +476,11 @@ impl Orchestrator {
             elapsed_ms: started.elapsed().as_millis() as u64,
             history_saved,
             structure,
+            routing,
         }
     }
 
-    fn record(&self, job: &Job, mode: Mode, transcript: String, output: &str, inserted: bool) -> bool {
+    fn record(&self, job: &Job, mode: Mode, transcript: String, output: &str, inserted: bool, routing: Option<&ResolvedPromptPolicy>) -> bool {
         let entry = NewHistoryEntry {
             mode,
             profile_id: job.profile_id.clone(),
@@ -402,7 +490,10 @@ impl Orchestrator {
             inserted,
         };
         // A history failure must never change the job outcome; the report carries the receipt.
-        self.service.history().record(entry).unwrap_or(false)
+        self.service.history().record_routed(entry, routing).unwrap_or_else(|error| {
+            log::warn!("history was not fully saved: {error}");
+            false
+        })
     }
 
     fn insert(&self, job: &Job, profile: &Profile, text: String, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
@@ -411,6 +502,25 @@ impl Orchestrator {
             Ok(window) if window == job.target.window => {}
             Ok(_) => return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: None },
             Err(err) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(err.0) },
+        }
+        if job.routing.rendering == Rendering::Adaptive {
+            match self.context.identify() {
+                Ok(current) => {
+                    if current.window != job.target.window || current.normalized_process() != job.target.normalized_process() {
+                        return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: Some("The target application changed while the prompt was being written.".into()) };
+                    }
+                    if let Some(host) = job.target.url_host() {
+                        match current.url_host() {
+                            Some(current_host) if current_host == host => {}
+                            Some(_) => return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: Some("The target site changed while the prompt was being written.".into()) },
+                            None => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some("The target site could not be confirmed before insertion.".into()) },
+                        }
+                    } else if profile.directly_matches(&job.target) && !profile.directly_matches(&current) {
+                        return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: Some("The recognized AI target changed while the prompt was being written.".into()) };
+                    }
+                }
+                Err(error) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(error.0) },
+            }
         }
         // Cancellation outranks insertion; this is the last check before the paste effect.
         if job.cancel.is_cancelled() {
@@ -438,6 +548,7 @@ mod tests {
     #[derive(Default)]
     struct FakeContext {
         ctx: ActiveContext,
+        next_identity: Mutex<Option<ActiveContext>>,
         focused: Option<FocusedText>,
         foreground: Mutex<Option<WindowIdentity>>,
         focused_calls: AtomicUsize,
@@ -446,7 +557,7 @@ mod tests {
 
     impl ContextProvider for FakeContext {
         fn identify(&self) -> Result<ActiveContext, BackendError> {
-            Ok(self.ctx.clone())
+            Ok(self.next_identity.lock().unwrap().clone().unwrap_or_else(|| self.ctx.clone()))
         }
         fn focused_text(&self, _: &WindowIdentity) -> Result<Option<FocusedText>, BackendError> {
             self.focused_calls.fetch_add(1, Ordering::SeqCst);
@@ -480,6 +591,7 @@ mod tests {
         later: Mutex<Vec<String>>,
         later_delay: Duration,
         cancel_on_later: bool,
+        complete_prompt_fixture: bool,
     }
 
     impl Generator for FakeGenerator {
@@ -507,8 +619,13 @@ mod tests {
             if let Some(message) = &self.error {
                 return Err(BackendError(message.clone()));
             }
-            on_token(&self.output);
-            Ok(Generation { text: self.output.clone(), finish: self.finish.unwrap_or(FinishReason::Stop) })
+            let text = if self.complete_prompt_fixture && req.messages[0].content.contains("Task structure (required")
+                && !self.output.contains("Step 1:")
+            {
+                test_graph(&self.output)
+            } else { self.output.clone() };
+            on_token(&text);
+            Ok(Generation { text, finish: self.finish.unwrap_or(FinishReason::Stop) })
         }
     }
 
@@ -576,6 +693,23 @@ mod tests {
         Harness { context, generator, inserter, history, orchestrator }
     }
 
+    #[test]
+    fn isolated_prompt_practice_ignores_auto_dictation_and_personal_history() {
+        let context = ActiveContext { window: TARGET, process_name: "promptify".into(), ..Default::default() };
+        let h = harness(context, "write a friendly greeting", generator("Write a friendly greeting for a new colleague."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_auto_mode(true);
+        let job = h.orchestrator.begin_with_options(Mode::Prompt, JobOptions { use_personal_context: false, use_tools: false, auto_mode: false }).unwrap();
+        let result = h.orchestrator.finish(job, &[], &mut |_| {});
+        assert!(matches!(result.outcome, Outcome::Inserted { .. }));
+        assert!(!h.generator.calls.lock().unwrap().is_empty());
+        assert!(h.history.records.lock().unwrap().is_empty());
+        assert_eq!(h.context.focused_calls.load(Ordering::SeqCst), 0);
+        let normal = h.orchestrator.begin(Mode::Prompt).unwrap();
+        let calls = h.generator.calls.lock().unwrap().len();
+        h.orchestrator.finish(normal, &[], &mut |_| {});
+        assert_eq!(h.generator.calls.lock().unwrap().len(), calls, "normal automatic dictation must remain enabled");
+    }
+
     fn chat_ctx() -> ActiveContext {
         ActiveContext {
             window: TARGET,
@@ -586,7 +720,13 @@ mod tests {
     }
 
     fn generator(output: &str) -> FakeGenerator {
-        FakeGenerator { output: output.into(), ..Default::default() }
+        FakeGenerator { output: output.into(), complete_prompt_fixture: true, ..Default::default() }
+    }
+
+    fn test_graph(goal: &str) -> String {
+        let goal = goal.split_whitespace().collect::<Vec<_>>().join(" ");
+        let goal = if goal.ends_with(['.', '!', '?']) { goal } else { format!("{goal}.") };
+        format!("{goal}\nStep 1: {goal}\nStep 2 (after 1): Check the result against the request and revise any mismatch.\nLoop: if a requirement is unmet, return to Step 2 (max 2 rounds).\nDone when: the requested result meets the stated requirements.")
     }
 
     fn run(h: &Harness, mode: Mode) -> JobReport {
@@ -599,14 +739,150 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_tasks_keep_the_graph_mandate_with_matching_examples() {
+        let h = harness(chat_ctx(), "Write an email asking for meeting notes",
+            generator("Write a concise email requesting the meeting notes."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let report = run(&h, Mode::Prompt);
+        assert!(matches!(report.outcome, Outcome::Inserted { .. }));
+        assert_eq!(report.structure, Some(StructureCheck::Valid));
+        assert_eq!(report.routing.unwrap().task_type.as_str(), "communication.email");
+        let calls = h.generator.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 4);
+        assert!(calls[0][0].content.contains("Task structure (required"));
+        assert!(calls[0].last().unwrap().content.contains("Use 2 steps"));
+    }
+
+    #[test]
+    fn adaptive_repairs_are_bounded_and_fail_closed() {
+        let malformed = "Step 1: Write an email.\nDone when: finished.";
+        let h = harness(chat_ctx(), "Write an email", FakeGenerator {
+            output: malformed.into(), later: Mutex::new(vec![test_graph("Write a concise email using the supplied facts.")]), ..Default::default()
+        }, ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert_eq!(inserts(&h), 1);
+        let h = harness(chat_ctx(), "Write an email", FakeGenerator { output: malformed.into(), ..Default::default() }, ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let report = run(&h, Mode::Prompt);
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_ne!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert_eq!(h.generator.calls.lock().unwrap().len(), 2);
+        assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn adaptive_unknown_surfaces_require_review_and_literal_fields_never_generate() {
+        let ctx = ActiveContext { window: TARGET, process_name: "excel.exe".into(), ..Default::default() };
+        let h = harness(ctx, "Create a formula for profit margin",
+            generator("Create a formula for profit margin using the supplied columns."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+        assert_eq!(inserts(&h), 0);
+
+        let h = harness(chat_ctx(), "Write an email", generator("Write an email."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.queue_routing(RoutingOptions {
+            rendering: Rendering::Adaptive, surface: Some(crate::routing::Surface::Literal), ..Default::default()
+        }).unwrap();
+        assert!(matches!(run(&h, Mode::Dictation).outcome, Outcome::Inserted { .. }));
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert!(h.generator.calls.lock().unwrap().is_empty());
+        assert!(run(&h, Mode::Prompt).routing.is_none(), "the one-shot override was consumed exactly once");
+    }
+
+    #[test]
+    fn adaptive_checks_site_changes_within_the_same_window() {
+        let h = harness(chat_ctx(), "Write an email", generator("Write a concise email."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        *h.context.next_identity.lock().unwrap() = Some(ActiveContext { url: Some("https://claude.ai".into()), ..chat_ctx() });
+        let report = h.orchestrator.finish(job, &[], &mut |_| {});
+        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, .. }));
+        assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn adaptive_grok_in_zen_pastes_using_the_existing_title_fallback() {
+        let ctx = ActiveContext { window: TARGET, process_name: "zen.exe".into(), window_title: "Grok".into(), url: None };
+        let h = harness(ctx, "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.profile_id, "grok");
+        assert_eq!(report.routing.as_ref().unwrap().task_type.as_str(), "info.explain");
+        assert!(matches!(report.outcome, Outcome::Inserted { .. }));
+        assert_eq!(inserts(&h), 1);
+    }
+
+    #[test]
+    fn title_fallback_is_rechecked_before_pasting_into_a_browser() {
+        for (title, url) in [("Inbox", None), ("Grok", Some("https://example.org"))] {
+            let ctx = ActiveContext { window: TARGET, process_name: "zen.exe".into(), window_title: "Grok".into(), url: None };
+            let h = harness(ctx.clone(), "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
+            h.orchestrator.set_rendering(Rendering::Adaptive);
+            let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+            *h.context.next_identity.lock().unwrap() = Some(ActiveContext { window_title: title.into(), url: url.map(str::to_owned), ..ctx });
+            assert!(matches!(h.orchestrator.finish(job, &[], &mut |_| {}).outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, .. }));
+            assert_eq!(inserts(&h), 0);
+        }
+    }
+
+    #[test]
+    fn adaptive_options_are_captured_at_begin_and_do_not_change_answer_mode() {
+        let h = harness(chat_ctx(), "Write an email", generator("Write a concise email."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        h.orchestrator.set_rendering(Rendering::Legacy);
+        assert!(h.orchestrator.finish(job, &[], &mut |_| {}).routing.is_some());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let answer = run(&h, Mode::Answer);
+        assert!(answer.routing.is_none());
+        assert!(matches!(answer.outcome, Outcome::Answered { .. }));
+    }
+
+    #[test]
+    fn adaptive_auto_mode_recognizes_new_ai_sites_without_enabling_unsafe_paste() {
+        let ctx = ActiveContext { window: TARGET, process_name: "chrome.exe".into(), url: Some("https://v0.app".into()), ..Default::default() };
+        let h = harness(ctx, "Build a landing page", generator("Build a landing page."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_auto_mode(true);
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        let report = run(&h, Mode::Prompt);
+        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+        assert_eq!(report.routing.unwrap().task_type.as_str(), "ui.page");
+        assert_eq!(inserts(&h), 0);
+        assert_eq!(h.generator.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn adaptive_cancellation_and_terminal_newlines_are_preserved() {
+        let h = harness(chat_ctx(), "Write an email", FakeGenerator {
+            output: "Write a concise email.".into(), cancel_during: true, ..Default::default()
+        }, ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Cancelled));
+        assert_eq!(inserts(&h), 0);
+
+        let ctx = ActiveContext { window: TARGET, process_name: "WindowsTerminal.exe".into(), ..Default::default() };
+        let h = harness(ctx, "Explain this function", generator("Explain this function.\nUse simple examples."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.queue_routing(RoutingOptions {
+            rendering: Rendering::Adaptive, surface: Some(crate::routing::Surface::CodeChat), ..Default::default()
+        }).unwrap();
+        let report = run(&h, Mode::Prompt);
+        let Outcome::Inserted { text } = report.outcome else { panic!("terminal result was not inserted"); };
+        assert!(!text.contains('\n'));
+        assert_eq!(h.inserter.calls.lock().unwrap()[0].2, PasteChord::Terminal);
+    }
+
+    #[test]
     fn inserts_into_captured_window_with_profile_chord() {
         let h = harness(chat_ctx(), "compare pricing", generator("Compare pricing."), ContextPolicy::default(), Limits::default());
         let mut events = Vec::new();
         let job = h.orchestrator.begin(Mode::Prompt).unwrap();
         assert_eq!(job.profile_id, "chatgpt");
         let report = h.orchestrator.finish(job, &[0.0; 16], &mut |e| events.push(format!("{e:?}")));
-        assert_eq!(report.outcome, Outcome::Inserted { text: "Compare pricing.".into() });
-        assert_eq!(*h.inserter.calls.lock().unwrap(), vec![(TARGET, "Compare pricing.".into(), PasteChord::Standard)]);
+        assert_eq!(report.outcome, Outcome::Inserted { text: test_graph("Compare pricing.") });
+        assert_eq!(*h.inserter.calls.lock().unwrap(), vec![(TARGET, test_graph("Compare pricing."), PasteChord::Standard)]);
         assert!(events.iter().any(|e| e.contains("Token")));
     }
 
@@ -615,7 +891,7 @@ mod tests {
         let h = harness(chat_ctx(), "x", generator("Prompt."), ContextPolicy::default(), Limits::default());
         *h.context.foreground.lock().unwrap() = Some(WindowIdentity { handle: 99, process_id: 7 });
         let report = run(&h, Mode::Prompt);
-        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, ref text, .. } if text == "Prompt."));
+        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, ref text, .. } if text == &test_graph("Prompt.")));
         assert_eq!(inserts(&h), 0);
     }
 
@@ -673,12 +949,12 @@ mod tests {
     }
 
     #[test]
-    fn truncated_output_is_shown_not_inserted() {
+    fn incomplete_graphs_are_rejected_not_returned_as_usable_prompts() {
         let h = harness(chat_ctx(), "x", FakeGenerator { output: "Partial".into(), finish: Some(FinishReason::Length), ..Default::default() }, ContextPolicy::default(), Limits::default());
-        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::OutputTruncated, .. }));
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         let limits = Limits { max_output_chars: 3, ..Limits::default() };
         let h2 = harness(chat_ctx(), "x", generator("Too long"), ContextPolicy::default(), limits);
-        assert!(matches!(run(&h2, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::OutputTruncated, .. }));
+        assert!(matches!(run(&h2, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         assert_eq!(inserts(&h) + inserts(&h2), 0);
     }
 
@@ -746,7 +1022,10 @@ mod tests {
     fn terminal_prompt_is_inserted_as_one_line() {
         let ctx = ActiveContext { window: TARGET, process_name: "pwsh.exe".into(), ..Default::default() };
         let h = harness(ctx, "run tests", generator("Run the tests.\nrm -rf build\n"), ContextPolicy::default(), Limits::default());
-        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Run the tests. rm -rf build".into() });
+        let expected = test_graph("Run the tests. rm -rf build").replace('\n', " ");
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: expected.clone() });
+        assert!(!expected.contains('\n'));
+        assert!(crate::structure::validate_graph(&expected).is_ok());
     }
 
     fn records(h: &Harness) -> Vec<NewHistoryEntry> {
@@ -783,7 +1062,7 @@ mod tests {
                 profile_id: "chatgpt".into(),
                 app_key: "chatgpt.com".into(),
                 transcript: "compare pricing".into(),
-                output: "Compare pricing.".into(),
+                output: test_graph("Compare pricing."),
                 inserted: true,
             }]
         );
@@ -815,7 +1094,7 @@ mod tests {
         let history = FakeHistory { fail: true, ..Default::default() };
         let h = harness_full(context, "x", generator("Prompt."), history, ContextPolicy::default(), Limits::default());
         let report = run(&h, Mode::Prompt);
-        assert_eq!(report.outcome, Outcome::Inserted { text: "Prompt.".into() });
+        assert_eq!(report.outcome, Outcome::Inserted { text: test_graph("Prompt.") });
         assert!(!report.history_saved);
     }
 
@@ -824,7 +1103,7 @@ mod tests {
         let context = FakeContext { ctx: chat_ctx(), foreground: Mutex::new(Some(TARGET)), ..Default::default() };
         let history = FakeHistory {
             context: HistoryContext {
-                examples: vec![crate::profiles::Example { said: "PAST-SAID".into(), prompt: "PAST-PROMPT".into() }],
+                examples: vec![crate::profiles::Example { said: "PAST-SAID".into(), prompt: test_graph("PAST-PROMPT") }],
                 previous: Some(crate::history::PreviousPrompt { text: "PREVIOUS-PROMPT".into(), minutes_ago: 1 }),
             },
             ..Default::default()
@@ -832,7 +1111,7 @@ mod tests {
         let h = harness_full(context, "shorter", generator("Prompt."), history, ContextPolicy::default(), Limits::default());
         run(&h, Mode::Prompt);
         let messages = h.generator.calls.lock().unwrap()[0].clone();
-        assert!(messages.iter().any(|m| m.role == crate::prompt::Role::Assistant && m.content == "PAST-PROMPT"));
+        assert!(messages.iter().any(|m| m.role == crate::prompt::Role::Assistant && m.content == test_graph("PAST-PROMPT")));
         assert!(messages.last().unwrap().content.contains("<previous_prompt>\nPREVIOUS-PROMPT\n</previous_prompt>"));
     }
 
@@ -942,17 +1221,21 @@ mod tests {
         let hidden_good = format!("<think>{GOOD_GRAPH}</think>\nPlain prompt.");
         let hidden_bad = format!("<think>{BAD_GRAPH}</think>\n{GOOD_GRAPH}");
         for (draft, repair, expected) in [
-            (hidden_good.as_str(), GOOD_GRAPH, StructureCheck::Repaired),
-            (hidden_bad.as_str(), BAD_GRAPH, StructureCheck::Valid),
-            (BAD_GRAPH, hidden_bad.as_str(), StructureCheck::Repaired),
-            (BAD_GRAPH, hidden_good.as_str(), StructureCheck::KeptOriginal),
+            (hidden_good.as_str(), GOOD_GRAPH, Some(StructureCheck::Repaired)),
+            (hidden_bad.as_str(), BAD_GRAPH, Some(StructureCheck::Valid)),
+            (BAD_GRAPH, hidden_bad.as_str(), Some(StructureCheck::Repaired)),
+            (BAD_GRAPH, hidden_good.as_str(), None),
         ] {
             let h = harness(chat_ctx(), "x", scripted(draft, &[repair]), ContextPolicy::default(), Limits::default());
             let report = run(&h, Mode::Prompt);
-            let text = if expected == StructureCheck::KeptOriginal { BAD_GRAPH } else { GOOD_GRAPH };
-            assert_eq!(report.outcome, Outcome::Inserted { text: text.into() }, "{draft}");
-            assert_eq!(report.structure, Some(expected), "{draft}");
-            assert_eq!(calls(&h), if expected == StructureCheck::Valid { 1 } else { 2 });
+            if expected.is_some() {
+                assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() }, "{draft}");
+            } else {
+                assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+                assert_eq!(inserts(&h), 0);
+            }
+            assert_eq!(report.structure, expected, "{draft}");
+            assert_eq!(calls(&h), if expected == Some(StructureCheck::Valid) { 1 } else { 2 });
         }
     }
 
@@ -971,13 +1254,14 @@ mod tests {
     }
 
     #[test]
-    fn oversized_repairs_keep_the_complete_original_draft() {
+    fn oversized_repairs_do_not_restore_an_invalid_original() {
         let limits = Limits { max_output_chars: GOOD_GRAPH.len(), ..Limits::default() };
         let oversized = format!("{GOOD_GRAPH}\n{}", "x".repeat(50));
         let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[&oversized]), ContextPolicy::default(), limits);
         let report = run(&h, Mode::Prompt);
-        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
-        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_eq!(report.structure, None);
+        assert_eq!(inserts(&h), 0);
         assert_eq!(calls(&h), 2);
     }
 
@@ -999,26 +1283,28 @@ mod tests {
     }
 
     #[test]
-    fn failed_repair_keeps_first_draft_and_stays_bounded() {
+    fn failed_repair_rejects_the_draft_and_stays_bounded() {
         let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
         let report = run(&h, Mode::Prompt);
-        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
-        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_eq!(report.structure, None);
+        assert_eq!(inserts(&h), 0);
         assert_eq!(calls(&h), 2);
         let limits = Limits { max_structure_repairs: 0, ..Limits::default() };
         let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), limits);
-        assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::KeptOriginal));
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         assert_eq!(calls(&h), 1);
     }
 
     #[test]
-    fn late_repair_is_discarded_for_the_in_time_draft() {
+    fn late_repair_cannot_make_an_invalid_draft_usable() {
         let limits = Limits { generation_timeout: Duration::from_millis(30), ..Limits::default() };
         let generator = FakeGenerator { later_delay: Duration::from_millis(60), ..scripted(BAD_GRAPH, &[GOOD_GRAPH]) };
         let h = harness(chat_ctx(), "x", generator, ContextPolicy::default(), limits);
         let report = run(&h, Mode::Prompt);
-        assert_eq!(report.outcome, Outcome::Inserted { text: BAD_GRAPH.into() });
-        assert_eq!(report.structure, Some(StructureCheck::KeptOriginal));
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_eq!(report.structure, None);
+        assert_eq!(inserts(&h), 0);
     }
 
     #[test]
@@ -1042,17 +1328,20 @@ mod tests {
         assert_eq!(inserts(&h), 0);
         assert!(!report.history_saved);
         drop(held);
-        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Prompt.".into() });
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: test_graph("Prompt.") });
     }
 
     #[test]
-    fn media_profiles_and_dictation_skip_structure_checks() {
+    fn media_workflows_require_graphs_and_review_while_dictation_is_unchanged() {
         let ctx = ActiveContext { window: TARGET, process_name: "chrome.exe".into(), url: Some("https://www.midjourney.com/imagine".into()), ..Default::default() };
-        let h = harness(ctx, "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let inline = GOOD_GRAPH.replace('\n', "; ");
+        let h = harness(ctx, "x", scripted(BAD_GRAPH, &[&inline]), ContextPolicy::default(), Limits::default());
         let report = run(&h, Mode::Prompt);
         assert_eq!(report.profile_id, "image_gen");
-        assert_eq!(report.structure, None);
-        assert_eq!(calls(&h), 1);
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::GraphUnsupported, .. }));
+        assert_eq!(inserts(&h), 0);
+        assert_eq!(calls(&h), 2);
         let h = harness(chat_ctx(), "x", generator("unused"), ContextPolicy::default(), Limits::default());
         assert_eq!(run(&h, Mode::Dictation).structure, None);
     }
@@ -1088,12 +1377,12 @@ mod tests {
 
         let cue = harness(notepad_ctx(), "Prompt: plan the launch", generator("Plan the launch."), ContextPolicy::default(), Limits::default());
         cue.orchestrator.set_auto_mode(true);
-        assert_eq!(run(&cue, Mode::Prompt).outcome, Outcome::Inserted { text: "Plan the launch.".into() });
+        assert_eq!(run(&cue, Mode::Prompt).outcome, Outcome::Inserted { text: test_graph("Plan the launch.") });
         assert!(last_user_message(&cue).contains("<transcript>\nplan the launch\n</transcript>"), "cue word removed");
 
         let chat = harness(chat_ctx(), "compare pricing", generator("Compare pricing."), ContextPolicy::default(), Limits::default());
         chat.orchestrator.set_auto_mode(true);
-        assert_eq!(run(&chat, Mode::Prompt).outcome, Outcome::Inserted { text: "Compare pricing.".into() });
+        assert_eq!(run(&chat, Mode::Prompt).outcome, Outcome::Inserted { text: test_graph("Compare pricing.") });
         let dictate = harness(chat_ctx(), "dictate, hello there", generator("unused"), ContextPolicy::default(), Limits::default());
         dictate.orchestrator.set_auto_mode(true);
         assert_eq!(run(&dictate, Mode::Prompt).outcome, Outcome::Inserted { text: "hello there".into() });
@@ -1103,7 +1392,7 @@ mod tests {
     #[test]
     fn auto_mode_off_and_explicit_modes_are_unchanged() {
         let h = harness(notepad_ctx(), "plan the launch", generator("Plan the launch."), ContextPolicy::default(), Limits::default());
-        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: "Plan the launch.".into() });
+        assert_eq!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { text: test_graph("Plan the launch.") });
         let d = harness(chat_ctx(), "Prompt: x", generator("unused"), ContextPolicy::default(), Limits::default());
         d.orchestrator.set_auto_mode(true);
         assert_eq!(run(&d, Mode::Dictation).outcome, Outcome::Inserted { text: "Prompt: x".into() }, "dictation hotkey ignores cues");

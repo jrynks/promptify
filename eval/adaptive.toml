@@ -1,0 +1,349 @@
+# Independent regression utterances. Expected labels are never passed to the rewriter.
+# These fixtures measure this dataset, not accuracy on real user traffic.
+
+[[case]]
+id = "a01"
+said = "Explain entropy using simple examples for a beginner"
+task_type = "info.explain"
+form = "graph"
+required = ["entropy"]
+
+[[case]]
+id = "a02"
+said = "Research the latest public evidence about battery recycling and cite reliable sources"
+task_type = "research.web"
+form = "graph"
+required = ["battery","recycl"]
+
+[[case]]
+id = "a03"
+said = "Answer only from the selected sources: what are the eligibility rules?"
+task_type = "research.source_qa"
+form = "graph"
+url = "https://notebooklm.google.com"
+required = ["eligib"]
+
+[[case]]
+id = "a04"
+said = "Synthesize the supplied research, including conflicting results and limitations"
+task_type = "research.synthesize"
+form = "graph"
+required = ["conflict|disagree|contradict"]
+
+[[case]]
+id = "a05"
+said = "Summarize this article in exactly three bullets without adding new facts"
+task_type = "summary.brief"
+form = "graph"
+required = ["(?:three|3)\\s+bullet"]
+
+[[case]]
+id = "a06"
+said = "Create an executive summary of the quarterly report with the decisions we need to make"
+task_type = "summary.executive"
+form = "graph"
+required = ["quarterly"]
+
+[[case]]
+id = "a07"
+said = "Summarize the project meeting, separating decisions from open questions"
+task_type = "summary.meeting"
+form = "graph"
+required = ["meeting","decision","open"]
+
+[[case]]
+id = "a08"
+said = "Identify action items from the transcript, using unknown for missing owners or dates"
+task_type = "summary.actions"
+form = "graph"
+required = ["unknown","owner","date|deadline"]
+
+[[case]]
+id = "a09"
+said = "Extract names and amounts from these records into the schema I supplied"
+task_type = "extract.fields"
+form = "graph"
+required = ["name","amount","schema"]
+
+[[case]]
+id = "a10"
+said = "Classify the messages using only my supplied topic labels"
+task_type = "classify.topic"
+form = "graph"
+required = ["label","message"]
+
+[[case]]
+id = "a11"
+said = "Draft a blog post introducing our community library to new residents"
+task_type = "writing.draft"
+form = "graph"
+required = ["library","resident"]
+
+[[case]]
+id = "a12"
+said = "Condense this announcement to 100 words while keeping all dates and names"
+task_type = "writing.shorten"
+form = "graph"
+required = ["100","date","name"]
+
+[[case]]
+id = "a13"
+said = "Proofread the attached paragraph using Canadian English without changing its meaning"
+task_type = "writing.proofread"
+form = "graph"
+required = ["Canadian[- ]English"]
+
+[[case]]
+id = "a14"
+said = "Make this friendlier without changing the refund commitment or the dollar amounts"
+task_type = "writing.tone"
+form = "graph"
+required = ["refund","dollar|amount"]
+
+[[case]]
+id = "a15"
+said = "Draft an email to Alex asking for the meeting notes, keeping it under 80 words"
+task_type = "communication.email"
+form = "graph"
+required = ["Alex","80"]
+
+[[case]]
+id = "a16"
+said = "Draft a response to their invitation politely declining without inventing a reason"
+task_type = "communication.reply"
+form = "graph"
+required = ["declin","invent|fabricat"]
+
+[[case]]
+id = "a17"
+said = "Brainstorm original concepts for a community festival that can run indoors"
+task_type = "creative.brainstorm"
+form = "graph"
+required = ["indoor"]
+
+[[case]]
+id = "a18"
+said = "Write a short story about a migrating bird for readers aged ten"
+task_type = "creative.story"
+form = "graph"
+required = ["migrat","\\b(?:ten|10)\\b"]
+
+[[case]]
+id = "a19"
+said = "Run a practice interview for an entry-level analyst role and wait for each answer"
+task_type = "roleplay.interview"
+form = "graph"
+required = ["entry[- ]level","analyst"]
+
+[[case]]
+id = "a20"
+said = "Help me learn fractions using hints and questions rather than giving the answers immediately"
+task_type = "learning.tutor"
+form = "graph"
+required = ["fraction","hint"]
+
+[[case]]
+id = "a21"
+said = "Compare three options for a small team's project tracking and explain the tradeoffs"
+task_type = "reasoning.tradeoffs"
+form = "graph"
+required = ["project","tracking"]
+
+[[case]]
+id = "a22"
+said = "Create a launch plan with dependencies, review checkpoints, and completion criteria"
+task_type = "planning.project"
+form = "graph"
+required = ["launch","depend","complet"]
+
+[[case]]
+id = "a23"
+said = "Implement a read-only endpoint for looking up orders and preserve the existing API"
+task_type = "code.implement"
+form = "graph"
+process = "cursor.exe"
+url = ""
+required = ["read[- ]only","order","API"]
+
+[[case]]
+id = "a24"
+said = "Explain the function in this module, including its assumptions and edge cases"
+task_type = "code.explain"
+form = "graph"
+required = ["function","assump","edge"]
+
+[[case]]
+id = "a25"
+said = "Diagnose the crash on checkout when clicking twice and add a regression test"
+task_type = "code.debug"
+form = "graph"
+required = ["checkout","twice|double","regression"]
+
+[[case]]
+id = "a26"
+said = "Refactor the parser into smaller functions without changing observable behavior"
+task_type = "code.refactor"
+form = "graph"
+required = ["parser","behavio"]
+
+[[case]]
+id = "a27"
+said = "Review the patch for correctness problems and report actionable findings with locations"
+task_type = "code.review"
+form = "graph"
+required = ["patch|diff","correctness|bug|regression"]
+
+[[case]]
+id = "a28"
+said = "Write unit tests for the date parser covering invalid and empty inputs"
+task_type = "testing.unit"
+form = "graph"
+required = ["date","invalid","empty"]
+
+[[case]]
+id = "a29"
+said = "Diagnose the CI failure using its logs and verify a minimal fix"
+task_type = "operations.ci"
+form = "graph"
+required = ["\\bCI\\b|continuous integration","log"]
+
+[[case]]
+id = "a30"
+said = "Generate a SQL query using PostgreSQL and the supplied schema to list overdue orders"
+task_type = "database.query"
+form = "graph"
+surface = "sql_chat"
+required = ["PostgreSQL","overdue","order"]
+
+[[case]]
+id = "a31"
+said = "Create an Excel formula for profit margin using the Revenue and Cost columns"
+task_type = "spreadsheet.formula"
+form = "graph"
+process = "excel.exe"
+url = ""
+surface = "spreadsheet_chat"
+required = ["Revenue","Cost","profit"]
+
+[[case]]
+id = "a32"
+said = "Fix the formula in D3 that returns an error when the lookup key is missing"
+task_type = "spreadsheet.fix_formula"
+form = "graph"
+process = "excel.exe"
+url = ""
+required = ["D3","missing","lookup|key"]
+
+[[case]]
+id = "a33"
+said = "Analyze our sales data for patterns and outliers, making the limitations explicit"
+task_type = "analysis.explore"
+form = "graph"
+required = ["sales","pattern","limit"]
+
+[[case]]
+id = "a34"
+said = "Create a presentation about the supplied research for a nontechnical audience"
+task_type = "artifact.presentation"
+form = "graph"
+required = ["non[- ]?technical","presentation"]
+
+[[case]]
+id = "a35"
+said = "Build an accessible React component for selecting a date with keyboard support"
+task_type = "ui.component"
+form = "graph"
+url = "https://v0.app"
+required = ["React","keyboard"]
+
+[[case]]
+id = "a36"
+said = "Build a landing page for our library with responsive layout and an events section"
+task_type = "ui.page"
+form = "graph"
+url = "https://v0.app"
+required = ["library","responsive","event"]
+
+[[case]]
+id = "a37"
+said = "Translate the supplied note into Canadian French, preserving names and numbers"
+task_type = "language.translate"
+form = "graph"
+required = ["Canadian[- ]French|French.{0,30}Canada","name","number"]
+
+[[case]]
+id = "a38"
+said = "Generate an image of a red fox in a snowy forest, painted in watercolor"
+task_type = "visual.image_generate"
+form = "graph"
+required = ["fox","snow","watercolou?r"]
+
+[[case]]
+id = "a39"
+said = "Create a short video of waves at sunset with a slow aerial camera movement"
+task_type = "visual.video_generate"
+form = "graph"
+required = ["waves","sunset","aerial"]
+
+[[case]]
+id = "a40"
+said = "Write a video script for a library tour"
+task_type = "writing.draft"
+form = "graph"
+required = ["script","library"]
+
+[[case]]
+id = "a41"
+said = "Create an image parser with validation and tests"
+task_type = "code.implement"
+form = "graph"
+required = ["image","parser"]
+
+[[case]]
+id = "a42"
+said = "Debug the checkout crash and write unit tests"
+task_type = "code.debug"
+form = "inline_graph"
+process = "WindowsTerminal.exe"
+url = ""
+surface = "code_chat"
+required = ["checkout","unit test"]
+
+[[case]]
+id = "a43"
+said = "Write an email, no wait translate the note into Spanish"
+task_type = "language.translate"
+form = "graph"
+required = ["Spanish","translat"]
+
+[[case]]
+id = "a44"
+said = "Do not summarize the article"
+expect_error = true
+
+[[case]]
+id = "a45"
+said = "Explain the word \"debug\" to a nontechnical reader"
+task_type = "info.explain"
+form = "graph"
+required = ["debug","non[- ]?technical"]
+
+[[case]]
+id = "a46"
+said = "Write an email asking for the report"
+surface = "literal"
+expect_error = true
+
+[[case]]
+id = "a47"
+said = "Debug the checkout crash"
+surface = "image_prompt"
+expect_error = true
+
+[[case]]
+id = "a48"
+said = "Find recent reliable sources about battery recycling"
+task_type = "research.web"
+form = "inline_graph"
+surface = "search_query"
+required = ["battery","recycl"]

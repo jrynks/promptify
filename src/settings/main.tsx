@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type McpInfo, type ModelStatus, type OfferInfo, type PreviewOutput, type ProfileSummary, type RemoteInfo } from "../api";
+import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type McpInfo, type ModelStatus, type OfferInfo, type OnboardingStatus, type OnboardingStep, type PreviewOutput, type ProfileSummary, type RemoteInfo, type PromptCatalog, type RoutingOptions } from "../api";
+import { OnboardingTour } from "./OnboardingTour";
+import { PromptRoutingSettings, RoutingControls, RoutingSummary, automaticRouting } from "./PromptRouting";
 import "./settings.css";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
@@ -79,13 +81,15 @@ function ModifierHold({ enabled, onChange }: { enabled: boolean; onChange: () =>
   );
 }
 
-function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void }) {
+function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange: () => void; guidedStep?: OnboardingStep }) {
+  const [error, setError] = useState<string | null>(null);
   if (!info) return <p>Loading…</p>;
+  const guided = guidedStep !== undefined;
   return (
-    <section className="general">
+    <section className={`general${guidedStep === "input" ? " tour-target" : ""}`} hidden={guidedStep === "practice"} aria-label="General settings">
       <h2>General</h2>
       <p className="hint">Hold a hotkey anywhere, say what you want, and Promptify writes it into the app you're using. Everything runs on this computer, and Promptify keeps running in the system tray when you close this window.</p>
-      {info.hotkey_errors.map((e) => (
+      {(guided ? (info.prompt_hotkey_error ? [info.prompt_hotkey_error] : []) : info.hotkey_errors).map((e) => (
         <p key={e} className="error">{e}</p>
       ))}
       <h3>Hotkeys</h3>
@@ -94,8 +98,9 @@ function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void
         <dd>
           <HotkeyField mode="prompt" value={info.hotkeys.prompt} onSaved={onChange} />
           <div className="hint desc">Hold to talk, or tap to start and tap again to finish.</div>
-          <ModifierHold enabled={info.modifier_hold} onChange={onChange} />
+          {!guided && <ModifierHold enabled={info.modifier_hold} onChange={onChange} />}
         </dd>
+        {!guided && <>
         <dt>Dictation</dt>
         <dd>
           <HotkeyField mode="dictation" value={info.hotkeys.dictation} onSaved={onChange} />
@@ -111,52 +116,62 @@ function Status({ info, onChange }: { info: AppInfo | null; onChange: () => void
           <kbd>{info.hotkeys.cancel}</kbd>
           <div className="hint desc">While listening or working.</div>
         </dd>
+        </>}
       </dl>
+      {!guided && <>
       <h3>Behaviour</h3>
       <label className="inline">
         <input type="checkbox" checked={info.auto_mode} onChange={(e) => void api.setAutoMode(e.target.checked).then(onChange)} />
         Outside AI apps, the prompt hotkey types what you said instead of writing a prompt
       </label>
       <p className="hint indent">Start with “prompt:” or “dictate:” to choose yourself.</p>
+      </>}
       <h3>This computer</h3>
       <dl>
         <dt>Microphone</dt>
         <dd>{info.input_device ? `${info.input_device} (system default)` : <span className="warn">No default microphone found</span>}</dd>
         <dt>Models</dt>
-        <dd>{info.engines_ready ? "Ready" : <span className="warn">Download a speech model and a prompt model under Models to start.</span>}</dd>
+        <dd>{info.engines_ready ? "Loaded and ready" : <span className="warn">{info.engine_error || (info.models_installed ? "Loading the selected models..." : "Download a speech model and a prompt model under Models to start.")}</span>}</dd>
         <dt>Acceleration</dt>
         <dd>
           <label className="inline">
-            <input type="checkbox" checked={info.use_gpu} onChange={(e) => void api.setUseGpu(e.target.checked).then(() => window.setTimeout(onChange, 4000))} />
+            <input type="checkbox" checked={info.use_gpu} onChange={(e) => void api.setUseGpu(e.target.checked).then(() => { setError(null); onChange(); }, (reason) => setError(String(reason)))} />
             Use the GPU when available
           </label>
           <div className="hint desc">{info.gpu_device ? `Prompt model running on ${info.gpu_device}` : "Prompt model running on the CPU"}</div>
         </dd>
       </dl>
+      {error && <p className="error" role="alert">{error}</p>}
     </section>
   );
 }
 
-function Models({ onChange }: { onChange: () => void }) {
+function Models({ onChange, guided = false }: { onChange: () => void; guided?: boolean }) {
   const [models, setModels] = useState<ModelStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, DownloadEvent>>({});
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    void api.listModels().then(setModels);
+    void api.listModels().then(setModels, (reason) => setError(`Could not read models: ${String(reason)}`));
     onChange();
   }, [onChange]);
 
   useEffect(() => {
-    refresh();
+    let disposed = false;
+    let stop: (() => void) | undefined;
     const unlisten = listen<DownloadEvent>("model-download", ({ payload }) => {
+      if (disposed) return;
       setProgress((p) => ({ ...p, [payload.id]: payload }));
       if (payload.done) {
         if (payload.error) setError(`${payload.id}: ${payload.error}`);
         refresh();
       }
     });
-    return () => void unlisten.then((stop) => stop());
+    void unlisten.then((unlisten) => {
+      if (disposed) unlisten();
+      else { stop = unlisten; refresh(); }
+    }, (reason) => setError(`Could not listen for model downloads: ${String(reason)}`));
+    return () => { disposed = true; stop?.(); };
   }, [refresh]);
 
   const act = (fn: () => Promise<unknown>) => {
@@ -174,10 +189,10 @@ function Models({ onChange }: { onChange: () => void }) {
         <tbody>
           {models.filter((m) => m.kind === kind).map((m) => {
             const p = progress[m.id];
-            const pct = p && !p.done ? Math.floor((p.downloaded / p.total) * 100) : null;
+            const pct = p && !p.done && p.total > 0 ? Math.floor((p.downloaded / p.total) * 100) : null;
             const recommended = noneInstalled && m.tier === "balanced";
             return (
-              <tr key={m.id}>
+              <tr key={m.id} className={guided && recommended ? "tour-model" : undefined}>
                 <td>
                   <input type="radio" name={kind} checked={m.selected} disabled={!m.installed} onChange={() => act(() => api.selectModel(m.id))} aria-label={`Use ${m.display_name}`} />
                 </td>
@@ -218,12 +233,12 @@ function Models({ onChange }: { onChange: () => void }) {
   };
 
   return (
-    <section>
+    <section className={guided ? "tour-target" : undefined} aria-label="Model settings">
       <h2>Models</h2>
       <p className="hint">Downloaded from Hugging Face over HTTPS, checked against pinned SHA-256 hashes, and run entirely on this device.</p>
       {group("stt", "Speech to text")}
       {group("llm", "Prompt writer")}
-      {error && <p className="error">{error}</p>}
+      {error && <div role="alert"><p className="error">{error}</p><button onClick={refresh}>Refresh models</button></div>}
     </section>
   );
 }
@@ -275,7 +290,7 @@ function History({ info, onChange }: { info: AppInfo | null; onChange: () => voi
   );
 }
 
-function Playground({ profiles }: { profiles: ProfileSummary[] }) {
+function Playground({ profiles, routingRevision }: { profiles: ProfileSummary[]; routingRevision: number }) {
   const [transcript, setTranscript] = useState("um so help me plan customer interviews for the new onboarding flow, like goals and questions");
   const [processName, setProcessName] = useState("chrome.exe");
   const [windowTitle, setWindowTitle] = useState("");
@@ -283,6 +298,16 @@ function Playground({ profiles }: { profiles: ProfileSummary[] }) {
   const [surrounding, setSurrounding] = useState("");
   const [preview, setPreview] = useState<PreviewOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<PromptCatalog | null>(null);
+  const [routing, setRouting] = useState<RoutingOptions>(automaticRouting("legacy"));
+
+  useEffect(() => {
+    let disposed = false;
+    void Promise.all([api.promptCatalog(), api.routingState()]).then(([types, settings]) => {
+      if (!disposed) { setCatalog(types); setRouting(automaticRouting(settings.rendering)); }
+    }, (reason) => { if (!disposed) setError(`Could not load routing controls: ${String(reason)}`); });
+    return () => { disposed = true; };
+  }, [routingRevision]);
 
   const run = async () => {
     setError(null);
@@ -294,6 +319,7 @@ function Playground({ profiles }: { profiles: ProfileSummary[] }) {
           windowTitle,
           url: url || null,
           surroundingText: surrounding || null,
+          routing,
         }),
       );
     } catch (e) {
@@ -314,11 +340,13 @@ function Playground({ profiles }: { profiles: ProfileSummary[] }) {
       </div>
       <label>Spoken text<textarea rows={3} value={transcript} onChange={(e) => setTranscript(e.target.value)} /></label>
       <label>Surrounding text (optional)<textarea rows={2} value={surrounding} onChange={(e) => setSurrounding(e.target.value)} /></label>
+      {catalog && <RoutingControls catalog={catalog} value={routing} onChange={setRouting} />}
       <button onClick={() => void run()}>Preview</button>
       {error && <p className="error">{error}</p>}
       {preview && (
         <div className="preview">
           <p>Profile: <strong>{preview.profileName}</strong> ({preview.profileId})</p>
+          {preview.routing && <RoutingSummary routing={preview.routing} />}
           {preview.messages.map((m, i) => (
             <details key={i} open={i === preview.messages.length - 1}>
               <summary>{m.role}</summary>
@@ -712,11 +740,12 @@ function Remote() {
   );
 }
 
-type Pane = "general" | "models" | "words" | "history" | "phones" | "tools" | "advanced";
+type Pane = "general" | "models" | "prompts" | "words" | "history" | "phones" | "tools" | "advanced";
 
 const PANES: { id: Pane; label: string }[] = [
   { id: "general", label: "General" },
   { id: "models", label: "Models" },
+  { id: "prompts", label: "Prompt types" },
   { id: "words", label: "Your words" },
   { id: "history", label: "History" },
   { id: "phones", label: "Desktop API" },
@@ -728,21 +757,48 @@ const PANE_KEY = "promptify.settings.pane";
 
 function Settings() {
   const [info, setInfo] = useState<AppInfo | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [routingRevision, setRoutingRevision] = useState(0);
   const [pane, setPane] = useState<Pane>(() => (localStorage.getItem(PANE_KEY) as Pane | null) ?? "general");
-  const refreshInfo = useCallback(() => void api.appInfo().then(setInfo), []);
+  const refreshId = useRef(0);
+  const refreshInfo = useCallback(() => {
+    const id = ++refreshId.current;
+    void Promise.all([api.appInfo(), api.onboardingStatus()]).then(([nextInfo, nextOnboarding]) => {
+      if (id !== refreshId.current) return;
+      setInfo(nextInfo);
+      setOnboarding(nextOnboarding);
+      setLoadError(null);
+    }, (reason) => {
+      if (id === refreshId.current) setLoadError(`Could not load setup state: ${String(reason)}`);
+    });
+  }, []);
   const firstInfo = useRef(true);
 
   useEffect(() => {
-    refreshInfo();
-    void api.listProfiles().then(setProfiles);
-  }, [refreshInfo]);
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void listen("onboarding-changed", refreshInfo).then((unlisten) => {
+      if (disposed) { unlisten(); return; }
+      stop = unlisten;
+      refreshInfo();
+      void api.listProfiles().then(setProfiles, (reason) => setLoadError(`Could not load profiles: ${String(reason)}`));
+    }, (reason) => setLoadError(`Could not connect to setup events: ${String(reason)}`));
+    window.addEventListener("focus", refreshInfo);
+    return () => {
+      disposed = true;
+      stop?.();
+      window.removeEventListener("focus", refreshInfo);
+    };
+  }, [refreshInfo, connectionAttempt]);
 
   // Until models are installed nothing works, so the first view goes straight there.
   useEffect(() => {
     if (info && firstInfo.current) {
       firstInfo.current = false;
-      if (!info.engines_ready) setPane("models");
+      if (!info.models_installed) setPane("models");
     }
   }, [info]);
 
@@ -753,20 +809,32 @@ function Settings() {
   };
 
   const badge = (id: Pane) => {
-    if (id === "models" && info && !info.engines_ready) return <span className="badge">Set up</span>;
+    if (id === "models" && info && !info.models_installed) return <span className="badge">Set up</span>;
     if (id === "general" && info && info.hotkey_errors.length > 0) return <span className="badge">!</span>;
     return null;
   };
 
+  if (loadError || !info || !onboarding) {
+    return <main className="startup">
+      <h1>Promptify setup</h1>
+      {loadError ? <><p role="alert" className="error">{loadError}</p><button onClick={() => setConnectionAttempt((n) => n + 1)}>Retry connection</button></> : <p role="status">Loading your setup...</p>}
+    </main>;
+  }
+
+  const guided = onboarding.required;
+  const visiblePane = guided ? (onboarding.step === "models" ? "models" : "general") : pane;
+  const visiblePanes = guided ? PANES.filter((p) => p.id === "general" || p.id === "models") : PANES;
+
   // Panes stay mounted so unsaved edits (for example in mcp.json) survive switching.
   const panes: Record<Pane, React.ReactNode> = {
-    general: <Status info={info} onChange={refreshInfo} />,
-    models: <Models onChange={refreshInfo} />,
+    general: <Status info={info} onChange={refreshInfo} guidedStep={guided ? onboarding.step : undefined} />,
+    models: <Models onChange={refreshInfo} guided={guided} />,
     words: <Words info={info} onChange={refreshInfo} />,
     history: <History info={info} onChange={refreshInfo} />,
     phones: <Remote />,
     tools: <Tools />,
-    advanced: <Playground profiles={profiles} />,
+    prompts: <PromptRoutingSettings onSaved={() => setRoutingRevision((value) => value + 1)} />,
+    advanced: <Playground profiles={profiles} routingRevision={routingRevision} />,
   };
 
   return (
@@ -774,7 +842,7 @@ function Settings() {
       <nav className="sidebar" aria-label="Settings sections">
         <div className="brand">Promptify</div>
         {PANES.map((p) => (
-          <button key={p.id} className={pane === p.id ? "active" : ""} aria-current={pane === p.id ? "page" : undefined} onClick={() => open(p.id)}>
+          <button key={p.id} className={visiblePane === p.id ? "active" : ""} aria-current={visiblePane === p.id ? "page" : undefined} disabled={guided && visiblePane !== p.id} onClick={() => { if (!guided) open(p.id); }}>
             {p.label}
             {badge(p.id)}
           </button>
@@ -782,8 +850,9 @@ function Settings() {
         <p className="sidebar-foot hint">Keeps running in the system tray.</p>
       </nav>
       <main>
-        {PANES.map((p) => (
-          <div key={p.id} hidden={pane !== p.id}>
+        {guided && <OnboardingTour status={onboarding} info={info} onChange={refreshInfo} />}
+        {!onboarding.startup_error && visiblePanes.map((p) => (
+          <div key={p.id} hidden={visiblePane !== p.id}>
             {panes[p.id]}
           </div>
         ))}

@@ -6,8 +6,11 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 - **Prompt mode** (`Ctrl+Alt+Space`): turns what you said into a prompt that fits the target app (ChatGPT, Claude,
   Gemini, Grok, Copilot, Perplexity, Cursor, VS Code, Claude Code, Codex CLI, terminals, image generators...).
   AI requests become a **task graph**, sized to their complexity: numbered steps, explicit dependencies (`after 1, 2`),
-  bounded check-and-revise loops (`max N rounds`) and `Done when:` completion checks. Image and video creation prompts
-  stay descriptive. The finished output is validated and, if needed, repaired once.
+  bounded check-and-revise loops (`max N rounds`) and `Done when:` completion checks. **Every final prompt retains this
+  structure**, including media, writing, tutoring, and role-play requests. The finished output is validated and,
+  if needed, repaired once; an invalid draft is never returned as a usable prompt.
+- **Task-aware adaptation** (experimental, off by default): Settings -> **Prompt types** adapts the content to the
+  identified tool/site, confirmed input surface, and requested task without removing the graph/loop mandate.
 - **Dictation mode** (`Ctrl+Alt+Shift+Space`): pastes what you said with filler words removed. Say "new line",
   "new paragraph" or "scratch that" as their own sentence to edit as you speak.
 - **Answer mode** (optional hotkey, set it in Settings): ask a question; the local model's answer is shown with a Copy
@@ -27,9 +30,9 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 
 ## Download and install
 
-Promptify 1.0 supports Windows 10 and 11 on x64 computers. Download
-[`Promptify_1.0.0_x64-setup.exe`](https://github.com/jrynks/promptify/releases/download/v1.0.0/Promptify_1.0.0_x64-setup.exe)
-from the [v1.0.0 release](https://github.com/jrynks/promptify/releases/tag/v1.0.0) and run it. The installer is currently
+Promptify 1.1 supports Windows 10 and 11 on x64 computers. Download
+[`Promptify_1.1.0_x64-setup.exe`](https://github.com/jrynks/promptify/releases/download/v1.1.0/Promptify_1.1.0_x64-setup.exe)
+from the [v1.1.0 release](https://github.com/jrynks/promptify/releases/tag/v1.1.0) and run it. The installer is currently
 unsigned, so Windows SmartScreen may show a warning: choose **More info**, verify that the app is **Promptify**, and then
 choose **Run anyway**.
 
@@ -40,9 +43,27 @@ The installer:
 - installs the required Visual C++ and OpenMP runtime files alongside the app; and
 - downloads Microsoft WebView2 if it is not already installed.
 
-On first launch, Promptify opens Settings so you can download a speech model and a language model. Model downloads can
-take several minutes. A current graphics driver with Vulkan support is recommended; model inference falls back to the
-CPU when necessary.
+On first launch, Promptify opens a required guided tour in Settings:
+
+1. **Models:** download and select a speech model and a prompt-writing model. The recommended balanced pair is
+   Whisper small English and Qwen3.5 4B (about 3.50 GB combined, at least 8 GB RAM). Smaller and multilingual
+   alternatives remain available. Downloads can be cancelled and resumed; both selected models must load before
+   you continue. Loading failures offer a retry and, when appropriate, a CPU option.
+2. **General:** check the system-default microphone and Prompt shortcut. Refresh after connecting a microphone,
+   allow microphone access in your operating system, and change the shortcut if another app has claimed it.
+3. **Practice:** prepare the practice field, use the Prompt shortcut, speak a request, and use the shortcut again
+   to finish. Keep the field focused until the generated prompt is pasted into it. Press Esc to cancel. Typing,
+   a preview, or an unsuccessful paste does not complete this check.
+4. **Finish setup:** unlock normal use after the real voice-to-prompt exercise succeeds and setup is saved.
+
+No account or API key is needed. Internet access is needed to download models; speech and prompt generation run
+locally afterward. The practice exercise does not call connected tools or save its text to history. A current
+graphics driver with Vulkan support is recommended; CPU loading is also supported.
+
+Closing Settings or quitting does not skip setup: the tour resumes when you return. Interrupted downloads can be
+resumed from Models. Existing configured users keep their usual tray-first startup and are not forced through the
+tour. Optional features such as Answer mode, Desktop API/MCP, autostart, and vocabulary customization stay outside
+required setup.
 
 GitHub also provides ZIP and tar.gz source archives on the release page. Those archives are for building Promptify
 yourself and are not portable application packages.
@@ -71,7 +92,7 @@ at the same time.
 
 | Platform | Status |
 | --- | --- |
-| Windows 10/11 x64 | Supported by the v1.0.0 installer |
+| Windows 10/11 x64 | Supported by the v1.1.0 installer |
 | Fedora / Bazzite | Runs from source; packaged installer not yet published |
 | macOS | Source support is experimental; packaged installer and some hotkeys are not yet available |
 
@@ -84,10 +105,16 @@ Requirements: Rust 1.85+ (tested 1.97), Node 22+, the Vulkan SDK (`VULKAN_SDK` s
 
 ```powershell
 npm ci
-npm run app            # builds the workers and launches the desktop app (tray icon)
+npm run desktop        # builds and runs the embedded desktop UI (no Vite or source watcher)
+npm run app            # development mode: Vite and automatic restarts when source changes
 ```
 
 `PROMPTIFY_DATA_DIR` and `PROMPTIFY_MODELS_DIR` override the normal data locations for isolated test runs.
+For normal testing, prefer `npm run desktop`: it uses the built frontend instead of depending on a live Vite
+server. Leave its launcher terminal running and quit from the tray when finished. Stopping the development
+command also stops its app; source edits can restart it. Startup, requested exits, and Rust panic locations
+are recorded in `%LOCALAPPDATA%\dev.promptify.app\logs` so an application failure can be distinguished from
+a stopped launcher. A forced process termination may not produce an exit record.
 
 ### Fedora / Bazzite
 
@@ -126,7 +153,7 @@ and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that develo
 ### Build the Windows installer
 
 ```powershell
-npm run installer      # C:\ptb\release\bundle\nsis\Promptify_1.0.0_x64-setup.exe
+npm run installer      # C:\ptb\release\bundle\nsis\Promptify_1.1.0_x64-setup.exe
 ```
 
 This additionally needs Visual Studio Build Tools with the Visual C++ toolchain. The build copies the permitted Visual
@@ -144,12 +171,21 @@ C++ and OpenMP redistributable DLLs into the application and creates an unsigned
 | `rewrite "<text>" [--process claude.exe] [--url URL] [--mcp mcp.json] [--mode prompt\|dictation\|answer] [--auto]` | typed text through the pipeline |
 | `screen-text` | after 3 s, reads the focused text box of the foreground app, as the app would |
 | `eval eval\cases.toml` | structure evaluation (25 opaque cases; `PROMPTIFY_EVAL_SHOW=1` prints prompts and rejected repairs; nonzero exit on failure) |
+| `prompt-types` | print the 264-entry taxonomy with activation status, priorities, and input requirements; no model needed |
+| `route "<text>" [--process NAME] [--url URL] [--surface SURFACE] [--prompt-type ID]` | inspect adaptive task/surface selection without generation or user-history access |
+| `eval-routing eval\adaptive.toml` | deterministic task/form regression benchmark, with per-case failures and macro-F1 |
+| `eval-adaptive eval\adaptive.toml [--model ID]` | generate with the selected installed model; validate graphs, numeric preservation, and required user details |
 | `serve [--listen 127.0.0.1:47822]` | headless local MCP API; prints its loopback URL |
 | `remote pair <link> [--direct]`, `remote send "<text>" [--app claude] [--dictation] [--direct]` | paired-phone test client; requires a `mobile-networking` build |
 | `mcp [--api http://127.0.0.1:47821]` | stdio MCP server (see below) |
 
 Set `PROMPTIFY_LOG=1` for diagnostics on stderr. `PROMPTIFY_LLM_NO_PREFIX_CACHE=1` turns off the language model's
 prompt-prefix cache for comparison.
+
+`rewrite` and `run` accept `--rendering legacy|adaptive`, `--prompt-type ID`, and `--surface SURFACE`.
+Overrides require adaptive rendering and Prompt mode; unknown or proposed task IDs are rejected explicitly.
+`--model ID` selects an already installed language model for the current CLI run without saving that preference.
+`route` defaults to adaptive rendering; `rewrite`, `run`, and the v1 API retain the existing-profile default.
 
 ### Task graphs and check loops
 
@@ -163,11 +199,117 @@ prompt-prefix cache for comparison.
   Such openers trigger a repair and fail evaluation. If no valid goal-first repair is produced, the draft is rejected
   with an explicit error rather than pasted or returned to MCP; relevant perspectives inside steps remain allowed.
 - Validation checks the finished, sanitized text, including terminal newline handling. A repair shares the original
-  generation deadline and is checked the same way. If no repair passes, the original sanitized draft is retained,
-  marked `kept_original` in the report, and a warning is logged; it is not marked as a valid graph. Persona-prefixed
-  drafts are the exception: they are never kept as a fallback or returned as copyable truncated prompts.
-- Dictation and answer mode do not add graphs. Image/video generator sites and requests to create images or videos
-  in chat apps use descriptive prompts instead.
+  generation deadline and is checked the same way. If no repair passes, the draft is rejected with an explicit
+  error rather than pasted or returned as a usable prompt. The historical `kept_original` status remains in types
+  for compatibility but is no longer emitted for new prompts.
+- Dictation and Answer are separate non-prompt modes and do not add graphs.
+- Image/video and other generator requests keep their descriptions **inside the graph's creation step**.
+  Generator-only fields cannot be assumed to execute a graph or check loop, so these workflows are review-only.
+  Use a conversational AI with the appropriate tools, or use Dictation to enter literal content yourself.
+
+### Prompt types and adaptive routing
+
+Enable **Use task-aware prompt adaptation** in Settings -> **Prompt types**. This is local, opt-in rewriting:
+Promptify does not run the recipient's tools, upload assets, produce final SQL/formulas/lyrics, or call a cloud LLM.
+
+The bundled [catalog](crates/promptify-core/profiles/prompt-types.toml) contains **264 candidate types in 27 families**.
+It is a product taxonomy, not an exhaustive industry standard:
+
+- **37 P1 task recipes plus 2 existing visual-generation recipes are enabled**: explanation, research/source QA,
+  synthesis, summaries/actions, extraction/classification, writing/editing, email/replies, brainstorming/stories,
+  interview practice, tutoring, decisions/planning, coding/debugging/review/refactoring/tests/CI, SQL, formulas,
+  analysis, presentations, UI building, translation, and image/video workflows.
+- **225 P2/P3 recipes remain proposed** and searchable. Their metadata is not a claim of validated automatic
+  handling or destination capability. An explicit override cannot activate them.
+- Domains, tone, language, output formats, and prompting techniques are facets, not duplicate app-profile kinds.
+
+Routing is **target -> input surface -> task**, with conservative deterministic rules. The destination name
+does not prove which model, subscription, feature, or field is active. Existing profile matching is reused;
+new mixed-purpose sites and IDE/terminal inputs require review or a one-request surface confirmation.
+Known conversational AI targets keep the existing browser-and-title fallback when the browser does not
+expose its URL (for example Grok in Zen). A known conflicting URL is not overridden by the title, and the
+recognized target is checked again immediately before insertion.
+Ordinary spreadsheet cells, SQL editors, lyrics fields, and speech scripts are literal content: use Dictation.
+No screenshots, browser scraping, new background monitoring, or broader screen-text capture is introduced.
+
+The recording overlay and Advanced Playground show the selected task, form, surface, and warnings. The Playground
+uses the same profile preparation and message builder as actual requests. A correction can be queued for the
+next Prompt hotkey use only; Dictation, Answer, and isolated onboarding practice do not consume it.
+The overlay fits its native window to the content. Long transcripts and results scroll within a bounded panel,
+while Copy and Dismiss remain visible. Clipboard and window-control failures appear in the overlay rather
+than becoming unhandled errors.
+
+#### Test a prompt type
+
+1. In **Settings -> Prompt types**, turn on **Use task-aware prompt adaptation**.
+2. Open **Advanced -> Context playground**. Set the destination process/site, choose task-aware adaptation,
+   and enter a request such as `Explain a heat pump to a beginner` or `Debug the checkout crash and add unit tests`.
+3. Click **Preview**. Inspect the detected task, destination, surface, graph form, and model messages.
+   This is a classification/message preview; it does not run the model or paste anything.
+4. To test the full flow, click the actual input in a recognized AI app, press `Ctrl+Alt+Space`, speak the request,
+   and stop recording. Keep that app/input focused until insertion finishes. For Grok in Zen, a missing browser
+   URL alone does not require a manual override.
+5. Confirm the inserted prompt contains numbered steps, a bounded `Loop:`, and `Done when:` criteria.
+   If focus or the identified destination changed, or the field is a generator-only/unknown surface, inspect
+   the visible reason and use Copy where appropriate rather than bypassing the safety check.
+
+All active forms are `graph` or `inline_graph`. Short tasks use small graphs; interactive tasks use bounded
+checks for the current turn without inventing a total number of conversation turns. Unknown tasks retain a
+general graph and an explicit uncertainty warning. Mixed requests retain recognized secondary tasks.
+If only a prohibition is supplied and no task can be recognized, Promptify asks for the intended task explicitly
+rather than inventing a goal or copying a generic example.
+
+Validation checks sanitized output, including graph dependencies, loop bounds, completion criteria, surface
+length limits, internal-template leakage, invented numeric constraints, omitted stated numbers, and obvious
+final-artifact substitution. It is not a proof of semantic correctness: review the result, especially for
+high-stakes uses or when source context is incomplete. Recognition rules currently have English examples;
+unrecognized languages fall back to a general graph rather than pretending a confident classification.
+
+Adaptive preferences use versioned `routing-settings.json`, separate from legacy settings. Optional routing
+history metadata uses `history.routing.jsonl`, keyed by existing history IDs without duplicating transcript or
+output. History disabling, deletion, clearing, and retention apply to both. Only compatible graph examples
+are reused; explicit same-app follow-ups can still refer to the previous prompt. No usage telemetry is uploaded.
+Unreadable or newer routing settings are reported instead of overwritten; existing-profile behavior remains
+available. The graph/loop requirement applies in both policies and cannot be disabled by a task override.
+
+The taxonomy was informed by primary task/capability documentation and cross-product evidence, not Promptify
+usage statistics: [NBER/OpenAI usage research](https://www.nber.org/papers/w34255),
+[Anthropic usage by product](https://www.anthropic.com/research/economic-index-june-2026-report),
+[GitHub Copilot tasks](https://docs.github.com/en/copilot/tutorials/copilot-cookbook),
+[Excel AI tasks](https://support.microsoft.com/en-us/excel/copilot/data-insights-with-copilot-in-excel),
+[Suno's separate input fields](https://help.suno.com/en/articles/3726721), and
+[ElevenLabs sound-effect prompts](https://elevenlabs.io/docs/eleven-creative/playground/sound-effects).
+Provider input contracts can change; activate additional recipes only after verifying the particular surface.
+
+### Local adaptive API
+
+Existing `/v1/transform` and `/v1/profiles` shapes remain unchanged. They now enforce the mandatory graph contract
+for all Prompt-mode results, including media; invalid-draft fallback is intentionally removed.
+Phone protocol v1 retains existing schemas and disabled-by-default networking.
+
+The same loopback token protects:
+
+- `GET /v2/catalog`: catalog version, task definitions/status, surface IDs, rendering policies, and required structure.
+- `POST /v2/transform`: existing `text`, `mode`, `app`, `url`, `title` fields plus optional `routing`.
+  The v2 default is adaptive; `mode` is `prompt` or `dictation`.
+
+```json
+{
+  "text": "Debug the checkout crash and add unit tests",
+  "app": "cursor",
+  "routing": {
+    "rendering": "adaptive",
+    "task_type": "code.debug",
+    "surface": "code_chat"
+  }
+}
+```
+
+The response includes `version`, the original `profile`, `outcome`, `structure`, `routing`, and `validation`.
+Routing reports the target, primary/secondary tasks, `graph`/`inline_graph`, resolution reason, warnings,
+and whether automatic insertion is permitted. Callers must inspect `outcome` and the insertion policy; an HTTP
+200 can contain an explicit generation/validation failure. Request-schema errors return HTTP 400. The API
+never enables desktop-only history, screen context, or enrichment hooks.
 
 ## Phone networking (paused by default)
 
@@ -239,6 +381,11 @@ Tools: `transform_prompt(text, app?, url?)` and `clean_dictation(text)`. The API
 No phone-networking feature is needed. For a headless API, run `promptify-cli serve` and give the MCP command
 `--api http://127.0.0.1:47822` instead.
 
+When the backend advertises v2 support, `transform_prompt` additionally exposes optional `rendering`, `task_type`,
+and `surface` parameters. Adaptive results carry structured routing/validation metadata alongside the prompt.
+The MCP server does not advertise these fields for an older backend, never silently ignores an explicit adaptive
+request, and rejects incomplete or non-graph Prompt-mode output. `clean_dictation` remains unchanged.
+
 ### MCP tools as context for your prompts
 
 Create `%APPDATA%\dev.promptify.app\mcp.json`, then use Settings → *Tools (MCP)* → *Reload* (or restart).
@@ -281,11 +428,49 @@ cargo test --workspace --exclude promptify-llm
 cargo test -p promptify-server --features mobile-networking   # opt-in phone tests, including mDNS
 cargo clippy --workspace --all-targets
 npm run build
+npm run test:onboarding
+promptify-cli eval-routing eval\adaptive.toml
+promptify-cli eval-adaptive eval\adaptive.toml --model qwen3.5-2b-q4km
 ```
+
+The onboarding browser tests build and serve the production UI with test-only Tauri IPC fixtures. On first use,
+install the browser with `npx playwright install chromium --only-shell`. These tests cover guided navigation,
+required checks, recovery, paste receipts, persistence, and minimum-window layout; they do not substitute for
+native microphone, global-shortcut, or OS clipboard testing. On Windows network shares, run frontend commands
+from a mapped drive rather than a UNC working directory.
+
+The same browser suite covers prompt-routing opt-in/rollback, catalog filtering, one-request overrides,
+Playground diagnostics, and 560-pixel overlay windows at 150% scale, including long results and clipboard errors.
+Core tests include four positive and two confusable negative utterances for every
+enabled recipe, a separate 48-case task/form regression dataset, final graph/loop validation, incompatible
+surfaces, same-window site changes, and history-sidecar isolation. The measured macro-F1 applies only to the
+fixture dataset, not to all real requests. Real-model evaluation checks additional source details and must be
+run separately for each installed model tier; it does not replace human review of generated instructions.
 
 `promptify-llm` builds llama.cpp and is covered by the CLI end-to-end runs (`rewrite`, `eval`, and the local MCP API).
 Phone pairing and transport tests run only with `mobile-networking`; default tests verify that phone access is
 unavailable while the local API still works.
+
+### Isolated first-launch check
+
+Quit other Promptify instances first; the app is single-instance and shortcuts are global. Never delete your normal
+application data to simulate a new installation. In a separate terminal:
+
+```powershell
+$env:PROMPTIFY_DATA_DIR = Join-Path $env:TEMP ("promptify-onboarding-" + [guid]::NewGuid().ToString("N"))
+Remove-Item Env:PROMPTIFY_MODELS_DIR -ErrorAction SilentlyContinue
+npm run app
+```
+
+Confirm that Settings appears automatically, complete the tour including a real spoken request and paste, then
+quit and relaunch with the same data directory. The tour must not reappear after successful completion. Also test
+closing/reopening before completion, interrupted downloads, unavailable microphones, shortcut conflicts, cancelled
+practice, focus changes, and failed writes. A failed step must remain incomplete and explain how to recover.
+
+For subsequent practice-only checks, set `PROMPTIFY_MODELS_DIR` to an existing genuine model directory before
+launching with another fresh data directory. Cached models must not suppress first-launch guidance. This avoids
+repeated downloads but does not replace the empty-model installation check. Record hands-on, download/loading,
+and total elapsed timings separately; there is no fixed onboarding completion-time limit.
 
 ## Morning check
 

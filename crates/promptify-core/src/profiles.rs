@@ -129,6 +129,19 @@ pub struct Profile {
     rules: Vec<Rule>,
 }
 
+impl Profile {
+    /// Preserve the browser/title fallback when a browser cannot expose its URL, but never
+    /// let that fallback override a known, conflicting host.
+    pub fn directly_matches(&self, context: &ActiveContext) -> bool {
+        let host = context.url_host();
+        let process = context.normalized_process();
+        self.rules.iter().any(|rule| {
+            (!rule.hosts.is_empty() || (!rule.processes.is_empty() && (rule.title.is_none() || host.is_none())))
+                && rule.matches(host.as_deref(), &process, &context.window_title).is_some()
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
     #[error("invalid profile TOML: {0}")]
@@ -164,9 +177,8 @@ impl ProfileSet {
             if p.style.trim().is_empty() {
                 return Err(invalid("style must not be empty"));
             }
-            let structure = p.structure.unwrap_or(match (p.kind, p.newlines) {
-                (ProfileKind::ImageGen | ProfileKind::VideoGen, _) => Structure::Flat,
-                (_, NewlinePolicy::Collapse) => Structure::Inline,
+            let structure = p.structure.unwrap_or(match p.newlines {
+                NewlinePolicy::Collapse => Structure::Inline,
                 _ => Structure::Graph,
             });
             if structure == Structure::Graph && p.newlines == NewlinePolicy::Collapse {

@@ -1,6 +1,5 @@
 //! Settings page support for MCP context hooks: show the configured servers, test one, reload.
 
-use promptify_core::pipeline::Orchestrator;
 use promptify_mcp::client::{McpConfig, McpEnricher, STARTUP_TIMEOUT, probe_server};
 use serde::Serialize;
 use tauri::State;
@@ -31,7 +30,9 @@ fn config_path(state: &AppState) -> std::path::PathBuf {
 }
 
 /// Reads `mcp.json` and installs (or removes) the enricher. Returns the config that is now active.
-pub fn reload(data_dir: &std::path::Path, orchestrator: &Orchestrator) -> Result<McpConfig, String> {
+pub fn reload(state: &AppState) -> Result<McpConfig, String> {
+    crate::onboarding::require_complete(state)?;
+    let (data_dir, orchestrator) = (&state.data_dir, &state.orchestrator);
     let config = McpConfig::load(&data_dir.join("mcp.json"));
     let enricher = config.clone().and_then(McpEnricher::from_config);
     match enricher {
@@ -79,12 +80,13 @@ pub fn mcp_info(state: State<'_, AppState>) -> McpInfo {
 
 #[tauri::command]
 pub fn mcp_reload(state: State<'_, AppState>) -> McpInfo {
-    info(&state, reload(&state.data_dir, &state.orchestrator))
+    info(&state, reload(&state))
 }
 
 /// Starts the named server, lists its tools and stops it again.
 #[tauri::command]
 pub async fn mcp_test(state: State<'_, AppState>, name: String) -> Result<Vec<String>, String> {
+    crate::onboarding::require_complete(&state)?;
     let config = McpConfig::load(&config_path(&state))?;
     let server = config.servers.get(&name).cloned().ok_or("no server with that name in mcp.json")?;
     tauri::async_runtime::spawn_blocking(move || probe_server(&server, STARTUP_TIMEOUT)).await.map_err(|e| e.to_string())?
@@ -131,5 +133,5 @@ pub fn mcp_validate(text: String) -> Result<usize, String> {
 #[tauri::command]
 pub fn mcp_save(state: State<'_, AppState>, text: String, original: String) -> Result<McpInfo, String> {
     McpConfig::save(&config_path(&state), &text, &original)?;
-    Ok(info(&state, reload(&state.data_dir, &state.orchestrator)))
+    Ok(info(&state, reload(&state)))
 }
