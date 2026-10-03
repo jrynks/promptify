@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { findInstallers, verifyInstallers, verifyPayload } from "./verify-installers.mjs";
+import { findInstallers, smokeCli, verifyInstallers, verifyPayload as verify } from "./verify-installers.mjs";
+
+const windowsTriple = "x86_64-pc-windows-msvc";
+const linuxTriple = "x86_64-unknown-linux-gnu";
+const verifyPayload = (payload, staging, windows, options = {}) =>
+  verify(payload, staging, windows, { triple: windows ? windowsTriple : linuxTriple, ...options });
 
 function fixture(t) {
   const root = mkdtempSync(join(process.cwd(), ".verify-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const payload = join(root, "payload");
-  const release = join(root, "release");
+  const release = join(root, "staging");
   mkdirSync(payload);
   mkdirSync(release);
   const pe = Buffer.alloc(128);
@@ -16,12 +21,14 @@ function fixture(t) {
   pe.writeUInt32LE(64, 0x3c);
   pe.write("PE\0\0", 64);
   pe.writeUInt16LE(0x8664, 68);
-  for (const name of ["promptify.exe", "promptify-llm.exe", "promptify-cli.exe"]) {
-    writeFileSync(join(payload, name), pe);
-    writeFileSync(join(release, name), pe);
+  writeFileSync(join(payload, "promptify.exe"), pe);
+  for (const name of ["promptify-llm", "promptify-cli"]) {
+    writeFileSync(join(payload, `${name}.exe`), pe);
+    writeFileSync(join(release, `${name}-${windowsTriple}.exe`), pe);
   }
   for (const name of ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"]) {
-    writeFileSync(join(payload, name), "runtime");
+    writeFileSync(join(payload, name), `runtime ${name}`);
+    writeFileSync(join(release, name), `runtime ${name}`);
   }
   return { root, payload, release };
 }
@@ -54,9 +61,11 @@ test("rejects architecture, changed binaries and absent runtime DLLs", (t) => {
   writeFileSync(join(payload, "promptify.exe"), wrong);
   wrong[100] = 1;
   writeFileSync(join(payload, "promptify-cli.exe"), wrong);
-  assert.throws(() => verifyPayload(payload, release, true), /differs from the release build/);
-  assert.equal(verifyPayload(payload, release, true, { exactBytes: false }).matchesReleaseBuild, false);
-  writeFileSync(join(release, "promptify-cli.exe"), wrong);
+  assert.throws(() => verifyPayload(payload, release, true), /differs from staged sidecar/);
+  assert.equal(verifyPayload(payload, release, true, { exactBytes: false }).matchesStagedSidecars, false);
+  writeFileSync(join(release, `promptify-cli-${windowsTriple}.exe`), wrong);
+  writeFileSync(join(payload, "vcomp140.dll"), "changed runtime");
+  assert.throws(() => verifyPayload(payload, release, true), /differs from staged sidecar/);
   rmSync(join(payload, "vcomp140.dll"));
   assert.throws(() => verifyPayload(payload, release, true), /Missing app-local runtime/);
 });
@@ -79,9 +88,10 @@ test("requires every requested package format, not merely some uploadable file",
 
 test("Linux payload verifies ELF architecture, glibc versions and executable permissions", { skip: process.platform !== "linux" }, (t) => {
   const { payload, release } = fixture(t);
-  for (const name of ["promptify", "promptify-llm", "promptify-cli"]) {
+  copyFileSync("/usr/bin/true", join(payload, "promptify"));
+  for (const name of ["promptify-llm", "promptify-cli"]) {
     copyFileSync("/usr/bin/true", join(payload, name));
-    copyFileSync("/usr/bin/true", join(release, name));
+    copyFileSync("/usr/bin/true", join(release, `${name}-${linuxTriple}`));
   }
   verifyPayload(payload, release, false);
   chmodSync(join(payload, "promptify-llm"), 0o644);
@@ -106,4 +116,16 @@ test("failed inspection persists its report and removes extracted payloads", (t)
   assert.equal(report.sourceCommit, process.env.SOURCE_COMMIT);
   assert.match(report.error, /Missing .* installer directory/);
   assert.equal(readdirSync(bundle).filter((name) => name.startsWith(".verify-")).length, 0);
+});
+
+test("packaged CLI smoke uses isolated data and requires every bundled model", { skip: process.platform !== "linux" }, (t) => {
+  const { root } = fixture(t);
+  const manifest = JSON.parse(readFileSync("crates/promptify-core/models/manifest.json", "utf8"));
+  const lines = manifest.models.map((model) => `${model.id} Llm/Small installed=false selected=false  test`).join("\\n");
+  const cli = join(root, "fake-cli");
+  writeFileSync(cli, `#!/bin/sh\ntest "$1" = models || exit 2\ntest "$PROMPTIFY_DATA_DIR" = "${join(root, "smoke", "cli-data")}" || exit 3\nprintf '${lines}\\nmodels folder: %s\\n' "$PROMPTIFY_MODELS_DIR"\n`);
+  chmodSync(cli, 0o755);
+  assert.equal(smokeCli(cli, join(root, "smoke")).models, manifest.models.length);
+  writeFileSync(cli, "#!/bin/sh\necho 'models folder: elsewhere'\n");
+  assert.throws(() => smokeCli(cli, join(root, "smoke")), /did not list model/);
 });

@@ -46,7 +46,7 @@ Verify your download against the release's **SHA256SUMS.txt**.
 
 ### Windows
 
-Promptify supports Windows 10 and 11 on x64 computers. Run **Promptify_1.1.1_x64-setup.exe**. The installer is currently
+Promptify supports Windows 10 and 11 on x64 computers with AVX2. Run **Promptify_1.1.1_x64-setup.exe**. The installer is currently
 unsigned, so Windows SmartScreen may show a warning: choose **More info**, verify that the app is **Promptify**, and then
 choose **Run anyway**.
 

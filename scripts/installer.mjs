@@ -21,7 +21,7 @@ if (!bundles) {
 env.GGML_NATIVE = "OFF";
 if (process.platform === "linux") env.NO_STRIP = "1";
 
-run("cargo", ["build", "--locked", "--release", "-p", "promptify-llm", "-p", "promptify", "--bin", "promptify-cli", "--bin", "promptify-llm"], { retries: 2 });
+run("cargo", ["build", "--locked", "--release", "-p", "promptify-llm", "-p", "promptify", "--bin", "promptify-cli", "--bin", "promptify-llm", "--features", "promptify/custom-protocol"], { retries: 2 });
 
 // Tauri installs sidecars next to the app without the target suffix, where `worker_exe()` looks.
 // Tauri resolves the path from src-tauri and drops drive letters, so it is staged there.

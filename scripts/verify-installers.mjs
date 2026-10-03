@@ -1,4 +1,4 @@
-// Inspect real installer payloads, not just the staged sidecar files.
+// Inspect real installer payloads against the exact sidecars staged for Tauri.
 // Requires 7z on Windows; dpkg-deb, rpm, rpm2cpio, cpio and readelf on Linux.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const runtimeDlls = ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"];
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", maxBuffer: 512 * 1024 * 1024, ...options });
@@ -27,10 +28,37 @@ function filesUnder(directory) {
 
 function sameBytes(actual, expected) {
   const hash = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
-  assert.equal(hash(actual), hash(expected), `Packaged binary differs from the release build: ${actual}`);
+  assert.ok(existsSync(expected), `Missing staged reference: ${expected}`);
+  assert.equal(hash(actual), hash(expected), `Packaged file differs from staged sidecar: ${actual}`);
 }
 
-export function verifyPayload(directory, release, windows = process.platform === "win32", { exactBytes = true } = {}) {
+export function hostTriple() {
+  const triple = run("rustc", ["-vV"]).match(/^host: (\S+)$/m)?.[1];
+  assert.ok(triple, "Could not read the Rust host target from `rustc -vV`");
+  return triple;
+}
+
+// Bounded, GUI-free check that the packaged CLI starts and reads its bundled manifest.
+export function smokeCli(cli, scratch) {
+  const data = join(scratch, "cli-data");
+  const models = join(scratch, "cli-models");
+  mkdirSync(models, { recursive: true });
+  const env = { ...process.env, PROMPTIFY_DATA_DIR: data, PROMPTIFY_MODELS_DIR: models };
+  delete env.PROMPTIFY_LOG;
+  const result = spawnSync(cli, ["models"], { encoding: "utf8", timeout: 60_000, env });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, `Packaged CLI smoke test failed:\n${result.stderr}\n${result.stdout}`);
+  const manifest = JSON.parse(readFileSync(join(root, "crates", "promptify-core", "models", "manifest.json"), "utf8"));
+  const ids = manifest.models.map((model) => model.id);
+  assert.ok(ids.length > 0, "Bundled model manifest is empty");
+  for (const id of ids) {
+    assert.match(result.stdout, new RegExp(`^${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s.*installed=false`, "m"), `Packaged CLI did not list model ${id}`);
+  }
+  assert.ok(result.stdout.includes(`models folder: ${models}`), "Packaged CLI ignored the isolated models folder");
+  return { command: "models", models: ids.length };
+}
+
+export function verifyPayload(directory, staging, windows = process.platform === "win32", { exactBytes = true, triple = hostTriple(), smokeScratch } = {}) {
   const extension = windows ? ".exe" : "";
   const appName = `promptify${extension}`;
   const files = filesUnder(directory);
@@ -60,15 +88,21 @@ export function verifyPayload(directory, release, windows = process.platform ===
   }
   // The app locates the worker using current_exe().parent(), with no target suffix.
   // linuxdeploy may rewrite AppImage ELF RPATHs; its layout and ELF checks still apply.
-  if (exactBytes) for (const binary of siblings.slice(1)) sameBytes(binary, join(release, binary.split(/[\\/]/).at(-1)));
-  if (windows) {
-    for (const dll of ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"]) {
-      const path = join(dirname(app), dll);
-      assert.ok(existsSync(path) && statSync(path).size > 0, `Missing app-local runtime: ${path}`);
+  if (exactBytes) {
+    for (const name of ["promptify-llm", "promptify-cli"]) {
+      sameBytes(join(dirname(app), `${name}${extension}`), join(staging, `${name}-${triple}${extension}`));
     }
   }
+  if (windows) {
+    for (const dll of runtimeDlls) {
+      const path = join(dirname(app), dll);
+      assert.ok(existsSync(path) && statSync(path).size > 0, `Missing app-local runtime: ${path}`);
+      if (exactBytes) sameBytes(path, join(staging, dll));
+    }
+  }
+  const smoke = smokeScratch ? smokeCli(siblings[2], smokeScratch) : undefined;
   console.log(`Verified app, adjacent worker and CLI: ${dirname(app)}`);
-  return { app: app.slice(directory.length + 1), adjacentWorker: true, adjacentCli: true, matchesReleaseBuild: exactBytes, architecture: "x64", ...(windows ? { appLocalRuntimes: true } : { maximumGlibc: "2.35" }) };
+  return { app: app.slice(directory.length + 1), adjacentWorker: true, adjacentCli: true, matchesStagedSidecars: exactBytes, architecture: "x64", ...(smoke && { cliSmoke: smoke }), ...(windows ? { appLocalRuntimes: true } : { maximumGlibc: "2.35" }) };
 }
 
 export function findInstallers(bundle, windows = process.platform === "win32") {
@@ -86,6 +120,8 @@ export function verifyInstallers() {
   assert.ok(["linux", "win32"].includes(process.platform), "Only Windows and Linux installers are supported");
   const release = resolve(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "release");
   const bundle = join(release, "bundle");
+  const staging = join(root, "src-tauri", "binaries");
+  const triple = hostTriple();
   // Scratch payloads stay inside the project/build tree and are always removed.
   mkdirSync(bundle, { recursive: true });
   const scratch = mkdtempSync(join(bundle, ".verify-"));
@@ -94,6 +130,7 @@ export function verifyInstallers() {
     timestamp: new Date().toISOString(),
     sourceCommit: process.env.SOURCE_COMMIT ?? run("git", ["rev-parse", "HEAD"], { cwd: root }).trim(),
     platform: process.platform,
+    hostTriple: triple,
     node: process.version,
     rust: run("rustc", ["--version"]).trim(),
     installers: [],
@@ -126,7 +163,7 @@ export function verifyInstallers() {
         payload = join(destination, "squashfs-root");
         assert.ok(existsSync(join(payload, "AppRun")), "AppImage is missing AppRun");
       }
-      const checks = verifyPayload(payload, release, undefined, { exactBytes: kind !== "appimage" });
+      const checks = verifyPayload(payload, staging, undefined, { exactBytes: kind !== "appimage", triple, smokeScratch: join(destination, "smoke") });
       report.installers.push({
         file: path.slice(bundle.length + 1).replaceAll("\\", "/"),
         kind,
