@@ -87,6 +87,39 @@ loader and desktop audio services must be available. CPU inference is supported,
 still needs the Vulkan loader. Native `.deb`/`.rpm` installers declare their runtime dependencies.
 AppImage portability does not imply that every distribution or compositor has been tested.
 
+#### Linux dependency enforcement
+
+There is **no single all-dependencies installation gate across all Linux formats**.
+The current behavior depends on the package and installation command:
+
+| Path | Missing-dependency behavior | Can installation be partial? |
+| --- | --- | --- |
+| `.deb` through `apt install ./...deb` | APT resolves the package's declared runtime dependencies. An unsatisfied required dependency prevents a successful configured installation; already installed dependencies count as satisfied. | A failed transaction can leave downloaded or unpacked files/packages. Success does not mean models, desktop services, permissions, or every optional feature are ready. |
+| `.deb` through `dpkg -i` | `dpkg` does not download dependencies. Missing declared dependencies normally prevent configuration and return failure. | Yes: the application can be unpacked but remain unconfigured. |
+| `.rpm` through `dnf install ./...rpm` | DNF resolves declared requirements and normally refuses an unsatisfiable dependency transaction. | No successful dependency-satisfied installation in that case; dependencies already present need not be reinstalled. |
+| `.rpm` through `rpm -i` | RPM checks declared requirements but does not fetch them. Missing requirements normally fail the dependency check. | Dependency enforcement can be bypassed explicitly with options such as `--nodeps`; this is not the documented installation path. |
+| AppImage | No package-manager dependency installation or exhaustive host preflight is implemented. Copying or extracting the file can succeed without all host requirements. | Yes: the file can be present while launch or features fail because host libraries, drivers, services, or desktop permissions are unavailable. |
+
+Runtime requirements are declared in [the packaging script](./scripts/installer.mjs),
+not installed by a custom Linux setup wizard. The `.deb` list includes glibc 2.35,
+WebKitGTK 4.1, GTK 3, AppIndicator, ALSA, Vulkan, OpenMP, libxdo, Xtst, Xi, and
+xkbcommon; the `.rpm` list names the corresponding runtime packages. These lists
+are not proof that every runtime or compositor capability has been enumerated.
+Models are downloaded separately during onboarding, and desktop permissions are
+requested separately: neither is a package-manager dependency.
+
+The [installer CI workflow](./.github/workflows/installers.yml) is stricter about
+**building** artifacts: prerequisite installation, tool/version checks, frontend
+dependency installation, tests, packaging, and payload inspection must succeed
+before uploading verified installers. Its Linux prerequisite command requests
+all listed packages in one APT transaction and a failed step stops that job.
+The [payload verifier](./scripts/verify-installers.mjs) requires all three Linux
+package formats, checks binaries and their layout, and runs a GUI-free CLI smoke
+test on the build host. It records package dependency metadata but does not
+assert an exhaustive dependency list or test clean-machine installation with
+each runtime dependency removed. Artifact verification success therefore is
+not an all-dependencies end-user installation guarantee.
+
 The published v1.1.1 packages support X11 or KDE Plasma 6 Wayland with its RemoteDesktop
 portal backend; GNOME Wayland additionally needs the `x-win` window-tracking extension.
 The in-development integration below removes manual extension dependence when accessibility
