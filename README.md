@@ -2,6 +2,12 @@
 
 Speak a rough request and get a clear, well-structured prompt pasted into the AI app you are using. Everything runs on your
 own computer: Whisper for speech, a local Qwen model for writing. No cloud AI services are used.
+No account or API key is needed.
+
+**Latest release: [v1.2.1](https://github.com/jrynks/promptify/releases/tag/v1.2.1)**.
+Download a Windows x64 installer or Linux `.deb`, `.rpm`, or AppImage, with SHA-256 checksums.
+Models download separately during guided setup. See [Download and install](#download-and-install)
+for hardware requirements and platform limitations.
 
 - **Prompt mode** (`Ctrl+Alt+Space`): turns what you said into a prompt that fits the target app (ChatGPT, Claude,
   Gemini, Grok, Copilot, Perplexity, Cursor, VS Code, Claude Code, Codex CLI, terminals, image generators...).
@@ -16,8 +22,9 @@ own computer: Whisper for speech, a local Qwen model for writing. No cloud AI se
 - **Copy results**: the final prompt dialog expands to show the full text. It scrolls only
   when the content exceeds the current monitor's available height; Copy and Dismiss stay visible.
 - Hold the hotkey while speaking, or tap it once to start and again to stop. `Esc` cancels. All are rebindable.
-  Optionally, holding **Ctrl+Shift on their own** also starts a prompt on Windows, macOS, and Linux
-  (requires input-monitoring permission on macOS and physical-keyboard access on Linux Wayland).
+  Optionally, holding **Ctrl+Shift on their own** also starts a prompt on Windows, macOS, and Linux X11
+  (requires Input Monitoring permission on macOS). This modifier-only gesture is unavailable on
+  Wayland; use the configured Prompt shortcut through desktop integration instead.
   Shortcuts like Ctrl+Shift+T and quick layout-switch taps are ignored.
 - **Live transcription**: speech is transcribed at natural pauses while you talk, so the result is ready moments after
   you stop. The overlay shows what was heard so far.
@@ -38,6 +45,27 @@ Unvisited sections do not initialize their model/history/catalog work; visited s
 Answer mode, the Advanced playground, MCP, desktop HTTP APIs, phone pairing, LAN discovery, and relay support have
 been removed. Promptify has no external inference listener or connected-tool execution. Model downloads and update
 checks still use HTTPS; speech and prompt generation run locally through a child-process worker.
+
+## What's new in v1.2.1
+
+- **Clearer settings and recovery:** consistent spacing across all six tabs, shared shortcut errors
+  shown once, and nearby actions to retry model loading, check microphones, reconnect desktop
+  integration, repair routing settings, or recover a generated result.
+- **Remembered Wayland authorization:** after a successful explicit Enable, Promptify saves your
+  choice and reconnects desktop integration on later launches. Disabling it stays disabled.
+  Your desktop may still ask again if approval expires or is revoked; older profiles need one
+  explicit Enable to record combined consent.
+- **Safer Linux destination detection:** KDE focus inspection uses the native focused process and
+  bounded accessibility metadata, without application-name allowlists. Insertion still requires
+  sufficient destination evidence; unsupported fields offer review/copy or an explicit
+  per-request input-surface selection, not a universal paste bypass.
+- **More reliable recording and history:** microphone capture starts alongside destination
+  inspection to buffer early speech, and history IDs remain unique across clears and restarts.
+- **Fresh Windows and Linux installers:** verified payloads include the local worker and developer
+  CLI. Windows remains unsigned; macOS has no published installer.
+
+If automatic insertion is blocked, the result stays available to copy and dismiss.
+Promptify does not retry ambiguous paste delivery or silently reset your configuration.
 
 ## Download and install
 
@@ -122,10 +150,13 @@ assert an exhaustive dependency list or test clean-machine installation with
 each runtime dependency removed. Artifact verification success therefore is
 not an all-dependencies end-user installation guarantee.
 
-The published v1.1.1 packages support X11 or KDE Plasma 6 Wayland with its RemoteDesktop
-portal backend; GNOME Wayland additionally needs the `x-win` window-tracking extension.
-The in-development integration below removes manual extension dependence when accessibility
-metadata is available, but has not been certified on Linux or Steam Deck.
+The v1.2.1 packages support X11 and permissioned Wayland integration on desktops providing
+the RemoteDesktop and GlobalShortcuts portals, including KDE Plasma 6. KDE uses native KWin
+focus evidence; other Wayland desktops use accessibility metadata when available.
+An application must expose enough metadata for confirmed-field adaptive insertion.
+X11 adaptive field confirmation remains conservative: use review/copy or explicitly select the
+input surface for the next request when it cannot be confirmed.
+GNOME, other compositors, and Steam Deck Gaming Mode have not been comprehensively certified.
 GNOME users may need an AppIndicator extension to see the tray. The packages do not grant
 keyboard-device access, install input permission rules, or run the app as root.
 See [Wayland integration and keyboard permissions](#fedora--bazzite) below.
