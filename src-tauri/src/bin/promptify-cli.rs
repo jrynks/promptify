@@ -27,7 +27,7 @@ const USAGE: &str = "usage:
   promptify-cli transcribe <file.wav>
   promptify-cli live-sim <file.wav>   (replays the file as if spoken; compares live chunks with one full pass)
   promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
-  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json] [--mode prompt|dictation|answer] [--auto]
+  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mode prompt|dictation] [--auto]
   promptify-cli screen-text   (reads the focused text box of the foreground app after 3 s, as the app would)
   promptify-cli paste-smoke-test <unique-window-title> <text>   (pastes into the matching focused test window after 3 s)
   promptify-cli generated-paste-smoke-test <unique-window-title> <request>   (generates an adaptive prompt and pastes into the matching test input)
@@ -36,13 +36,7 @@ const USAGE: &str = "usage:
   promptify-cli eval-routing <cases.toml>   (classification only; no model needed)
   promptify-cli prompt-types   (list the bundled taxonomy and activation status)
   promptify-cli route <text> [--process NAME] [--url URL] [--surface SURFACE] [--prompt-type ID]
-  promptify-cli mcp [--api http://127.0.0.1:47821]   (stdio MCP server for Claude Desktop, VS Code, Cursor...)
-  promptify-cli serve [--relay URL] [--listen ADDR] [--advertise HOST:PORT] [--offer-file FILE] [--discoverable]
-  promptify-cli remote pair <pairing-link> [--name NAME] [--direct] [--identity FILE]
-  promptify-cli remote send <text> [--app APP] [--url URL] [--dictation] [--direct] [--identity FILE]
-
-serve starts a loopback MCP API by default. Phone options (--relay, --advertise,
---offer-file, --discoverable) and remote commands require the mobile-networking build feature.";
+";
 
 fn routing_flags(args: &[String]) -> Result<RoutingOptions, String> {
     let args = args.get(2..).unwrap_or_default();
@@ -97,16 +91,14 @@ fn rewrite_text(
     llm: &Arc<LlmWorker>,
     ctx: ActiveContext,
     text: &str,
-    enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
 ) -> Result<promptify_core::pipeline::JobReport, String> {
-    rewrite_with(llm, ctx, text, enricher, Mode::Prompt, false, RoutingOptions::default())
+    rewrite_with(llm, ctx, text, Mode::Prompt, false, RoutingOptions::default())
 }
 
 fn rewrite_with(
     llm: &Arc<LlmWorker>,
     ctx: ActiveContext,
     text: &str,
-    enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>>,
     mode: Mode,
     auto_mode: bool,
     routing: RoutingOptions,
@@ -123,7 +115,6 @@ fn rewrite_with(
     };
     let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
     let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
-    orchestrator.service().set_enricher(enricher);
     orchestrator.set_auto_mode(auto_mode);
     orchestrator.queue_routing(routing)?;
     let job = orchestrator.begin(mode).map_err(|e| e.to_string())?;
@@ -199,7 +190,7 @@ struct StderrLogger;
 
 impl log::Log for StderrLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info && !(metadata.target().starts_with("rmcp") && metadata.level() > log::Level::Warn)
+        metadata.level() <= log::Level::Info
     }
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
@@ -207,70 +198,6 @@ impl log::Log for StderrLogger {
         }
     }
     fn flush(&self) {}
-}
-
-fn serve_config(args: &[String], data_dir: &Path) -> Result<promptify_server::ServerConfig, String> {
-    if args.iter().any(|a| ["--relay", "--advertise", "--offer-file", "--discoverable"].contains(&a.as_str())) {
-        promptify_server::require_mobile_networking()?;
-    }
-    let listen: std::net::SocketAddr = flag(args, "--listen").unwrap_or_else(|| "127.0.0.1:47822".into()).parse().map_err(|e| format!("bad --listen: {e}"))?;
-    let config = promptify_server::ServerConfig {
-        data_dir: data_dir.to_path_buf(),
-        relay_url: flag(args, "--relay"),
-        listen: Some(listen),
-        advertise_direct: if promptify_server::MOBILE_NETWORKING_AVAILABLE { Some(flag(args, "--advertise").unwrap_or_else(|| listen.to_string())) } else { None },
-        discoverable: args.iter().any(|a| a == "--discoverable"),
-    };
-    config.validate()?;
-    Ok(config)
-}
-
-/// Acts as a paired phone, for testing remote access end to end.
-fn remote(args: &[String], data_dir: &Path) -> Result<(), String> {
-    use promptify_protocol::messages::{ServerMessage, WireContext, WireMode};
-    use promptify_server::client;
-
-    promptify_server::require_mobile_networking()?;
-    let identity_path = flag(args, "--identity").map(PathBuf::from).unwrap_or_else(|| data_dir.join("remote-test-client.json"));
-    let direct = args.iter().any(|a| a == "--direct");
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-    match args.get(1).map(String::as_str) {
-        Some("pair") => {
-            let link = args.get(2).ok_or(USAGE)?;
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            let offer = promptify_protocol::pairing::PairingOffer::parse(link, now).map_err(|e| e.to_string())?;
-            let name = flag(args, "--name").unwrap_or_else(|| "Promptify CLI".into());
-            let (identity, _) = runtime.block_on(client::pair(&offer, &name, direct))?;
-            identity.save(&identity_path)?;
-            println!("paired as {} (identity saved to {})", identity.device_id, identity_path.display());
-        }
-        Some("send") => {
-            let text = args.get(2).ok_or(USAGE)?;
-            let identity = client::ClientIdentity::load(&identity_path)?;
-            let mode = if args.iter().any(|a| a == "--dictation") { WireMode::Dictation } else { WireMode::Prompt };
-            let context = WireContext { app: flag(args, "--app").unwrap_or_default(), url: flag(args, "--url"), title: String::new() };
-            let started = Instant::now();
-            let result = runtime.block_on(async {
-                let mut connection = client::open(&identity, direct).await?;
-                connection
-                    .transform_text(1, mode, context, text, &mut |event| {
-                        if let ServerMessage::Stage { stage, .. } = event {
-                            eprintln!("[{:.1?}] {stage}", started.elapsed());
-                        }
-                    })
-                    .await
-            })?;
-            match result {
-                ServerMessage::Done { text, profile, structure, truncated, .. } => {
-                    eprintln!("profile={profile} structure={structure:?} truncated={truncated} in {:.1?}", started.elapsed());
-                    println!("{text}");
-                }
-                other => return Err(format!("{other:?}")),
-            }
-        }
-        _ => return Err(USAGE.into()),
-    }
-    Ok(())
 }
 
 fn main() {
@@ -309,8 +236,26 @@ fn finish_native_paste_test() -> Result<(), String> {
     promptify_lib::insert::restore_previous().map_err(|error| error.0)
 }
 
+fn validate_retired_options(args: &[String]) -> Result<(), String> {
+    if args.first().is_some_and(|command| ["mcp", "serve", "remote"].contains(&command.as_str())) {
+        return Err("MCP and external networking have been removed. Use the local rewrite or run commands.".into());
+    }
+    for option in ["--mcp", "--api", "--relay", "--listen", "--advertise", "--offer-file", "--discoverable", "--identity", "--direct"] {
+        if args.iter().skip(2).any(|arg| arg == option || arg.starts_with(&format!("{option}="))) {
+            return Err(format!("{option} is no longer supported; MCP and external networking have been removed."));
+        }
+    }
+    if checked_flag(args.get(2..).unwrap_or_default(), "--mode")?.as_deref() == Some("answer")
+        || args.iter().skip(2).any(|arg| arg == "--mode=answer")
+    {
+        return Err("Answer mode has been removed. Use prompt or dictation.".into());
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    validate_retired_options(&args)?;
     if args.first().is_some_and(|arg| arg == "generated-paste-smoke-test") {
         if args.len() != 3 || !args[1].starts_with("Promptify paste test ") || args[2].trim().is_empty() {
             return Err("Use generated-paste-smoke-test with a unique test-window title and a nonempty request.".into());
@@ -436,14 +381,13 @@ fn run() -> Result<(), String> {
         }
         Some("live-sim") => {
             use promptify_core::live::{ChunkPolicy, LiveTranscript, next_cut};
-            use promptify_core::scheduler::{Priority, SchedulerLimits};
             use promptify_core::transform::{Input, Transform, TransformService};
             let audio = read_wav(Path::new(args.get(1).ok_or(USAGE)?))?;
             let shared: SharedSettings = Arc::new(RwLock::new(app_settings));
             let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
             stt.preload().map_err(|e| e.0)?;
             let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
-            let service = TransformService::new(stt.clone(), llm, Arc::new(NoHistory), ProfileSet::bundled(), Limits::default(), SchedulerLimits::default());
+            let service = TransformService::new(stt.clone(), llm, Arc::new(NoHistory), ProfileSet::bundled(), Limits::default());
             let cancel = CancelToken::default();
             let policy = ChunkPolicy::default();
             let mut live = LiveTranscript::default();
@@ -463,10 +407,10 @@ fn run() -> Result<(), String> {
             let tail = &audio[live.committed_samples()..];
             let target = text_context("notepad.exe".into(), None, String::new());
             let profile = service.profiles().resolve(&target);
-            let transform = Transform { input: Input::Live { committed: &committed, tail }, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
+            let transform = Transform { input: Input::Live { committed: &committed, tail }, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, auto_mode: false };
             let started = Instant::now();
             let mut live_text = String::new();
-            service.run_scheduled(Priority::Local, "local", &transform, &cancel, Duration::from_secs(5), &mut |e| {
+            service.run_scheduled(&transform, &cancel, Duration::from_secs(5), &mut |e| {
                 if let JobEvent::Transcript(t) = e {
                     live_text = t.to_owned();
                 }
@@ -573,21 +517,15 @@ fn run() -> Result<(), String> {
                 flag(&args, "--title").unwrap_or_default(),
             );
             let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
-            let enricher: Option<Arc<dyn promptify_core::transform::ContextEnricher>> = match flag(&args, "--mcp") {
-                Some(path) => {
-                    let config = promptify_mcp::client::McpConfig::load(Path::new(&path))?;
-                    promptify_mcp::client::McpEnricher::from_config(config)?.map(|e| Arc::new(e) as _)
-                }
-                None => None,
-            };
-            llm.preload().map_err(|e| e.0)?;
             let mode = match flag(&args, "--mode").as_deref() {
                 None | Some("prompt") => Mode::Prompt,
                 Some("dictation") => Mode::Dictation,
-                Some("answer") => Mode::Answer,
                 Some(other) => return Err(format!("unknown mode {other}")),
             };
-            let report = rewrite_with(&llm, ctx, &text, enricher, mode, args.iter().any(|a| a == "--auto"), routing_flags(&args)?)?;
+            if mode == Mode::Prompt {
+                llm.preload().map_err(|e| e.0)?;
+            }
+            let report = rewrite_with(&llm, ctx, &text, mode, args.iter().any(|a| a == "--auto"), routing_flags(&args)?)?;
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
         }
         Some("eval-adaptive") => {
@@ -609,7 +547,7 @@ fn run() -> Result<(), String> {
                     continue;
                 }
                 let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
-                let report = rewrite_with(&llm, ctx, &case.said, None, Mode::Prompt, false, case.options())?;
+                let report = rewrite_with(&llm, ctx, &case.said, Mode::Prompt, false, case.options())?;
                 if let Outcome::Failed { reason, detail } = &report.outcome {
                     eprintln!("{} rejected ({reason:?}): {}", case.id, detail.as_deref().unwrap_or("no additional detail"));
                 }
@@ -640,11 +578,12 @@ fn run() -> Result<(), String> {
             let (mut graph_pass, mut graph_total, mut flat_pass, mut flat_total, mut repaired, mut roles) = (0, 0, 0, 0, 0, 0);
             for case in &cases {
                 let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
-                let report = rewrite_text(&llm, ctx, &case.said, None)?;
+                let report = rewrite_text(&llm, ctx, &case.said)?;
                 let score = eval::score(case.expect, outcome_text(&report.outcome));
                 if report.structure == Some(promptify_core::pipeline::StructureCheck::Repaired) {
                     repaired += 1;
                 }
+
                 roles += usize::from(outcome_text(&report.outcome).is_some_and(eval::opens_with_role));
                 match case.expect {
                     Expect::Graph => (graph_total, graph_pass) = (graph_total + 1, graph_pass + usize::from(score.pass)),
@@ -664,44 +603,6 @@ fn run() -> Result<(), String> {
                 return Err(format!("prompt structure evaluation failed: {failed} of {} cases did not pass", cases.len()));
             }
         }
-        Some("remote") => remote(&args, &data_dir)?,
-        Some("mcp") => {
-            // stdout carries the MCP protocol; diagnostics go to stderr only.
-            let base = flag(&args, "--api").unwrap_or_else(|| "http://127.0.0.1:47821".into());
-            let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| e.to_string())?;
-            runtime.block_on(promptify_mcp::server::serve_stdio(base, promptify_server::api_token_path(&data_dir)))?;
-        }
-        Some("serve") => {
-            use promptify_core::scheduler::SchedulerLimits;
-            use promptify_core::transform::TransformService;
-            let config = serve_config(&args, &data_dir)?;
-            let shared: SharedSettings = Arc::new(RwLock::new(app_settings));
-            let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
-            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
-            stt.preload().map_err(|e| e.0)?;
-            llm.preload().map_err(|e| e.0)?;
-            let limits = Limits { generation_timeout: Duration::from_secs(120), ..Limits::default() };
-            let service = Arc::new(TransformService::new(stt, llm, Arc::new(NoHistory), ProfileSet::bundled(), limits, SchedulerLimits::default()));
-            let server = promptify_server::RemoteServer::start(config, service)?;
-            if promptify_server::MOBILE_NETWORKING_AVAILABLE {
-                let offer = server.pairing_offer(600)?;
-                if let Some(path) = flag(&args, "--offer-file") {
-                    std::fs::write(&path, &offer.uri).map_err(|e| e.to_string())?;
-                }
-                println!("{}", offer.uri);
-                eprintln!("serving on {:?}; pairing link valid for 10 minutes; Ctrl+C to stop", server.listen_addr());
-            } else {
-                let addr = server.listen_addr().ok_or("local MCP API listener is unavailable")?;
-                println!("http://{addr}");
-                eprintln!("local MCP API only; token in {}; phone networking disabled; Ctrl+C to stop", promptify_server::api_token_path(&data_dir).display());
-            }
-            loop {
-                std::thread::sleep(Duration::from_secs(10));
-                if promptify_server::MOBILE_NETWORKING_AVAILABLE {
-                    eprintln!("status: {}", serde_json::to_string(&server.status()).unwrap_or_default());
-                }
-            }
-        }
         _ => return Err(USAGE.into()),
     }
     Ok(())
@@ -712,25 +613,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_serve_config_keeps_the_desktop_api() {
-        let config = serve_config(&["serve".into()], Path::new("unused")).unwrap();
-        assert!(config.listen.unwrap().ip().is_loopback());
-        assert!(config.relay_url.is_none() && !config.discoverable);
-        assert_eq!(config.advertise_direct.is_some(), promptify_server::MOBILE_NETWORKING_AVAILABLE);
-    }
-
-    #[cfg(not(feature = "mobile-networking"))]
-    #[test]
-    fn phone_serve_options_fail_before_loading_models() {
-        for options in [
-            vec!["--relay", "wss://relay.example.test"],
-            vec!["--advertise", "192.168.1.20:47822"],
-            vec!["--offer-file", "unused"],
-            vec!["--discoverable"],
-            vec!["--listen", "0.0.0.0:47822"],
+    fn retired_features_fail_before_model_loading() {
+        for args in [
+            vec!["mcp"], vec!["serve"], vec!["remote", "pair", "unused"],
+            vec!["rewrite", "hello", "--mcp", "unused"],
+            vec!["rewrite", "hello", "--mcp=unused"],
+            vec!["rewrite", "hello", "--mode", "answer"],
+            vec!["rewrite", "hello", "--mode=answer"],
         ] {
-            let args: Vec<String> = std::iter::once("serve").chain(options).map(String::from).collect();
-            assert_eq!(serve_config(&args, Path::new("unused")).unwrap_err(), promptify_server::MOBILE_NETWORKING_DISABLED);
+            assert!(validate_retired_options(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
         }
+        assert!(validate_retired_options(&["rewrite".into(), "Explain MCP".into(), "--mode".into(), "prompt".into()]).is_ok());
     }
 }

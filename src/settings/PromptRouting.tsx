@@ -51,7 +51,7 @@ export function RoutingSummary({ routing }: { routing: PromptRouting }) {
   </div>;
 }
 
-export function PromptRoutingSettings({ onSaved }: { onSaved: () => void }) {
+export function PromptRoutingSettings() {
   const [state, setState] = useState<RoutingState | null>(null);
   const [catalog, setCatalog] = useState<PromptCatalog | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +76,6 @@ export function PromptRoutingSettings({ onSaved }: { onSaved: () => void }) {
     setBusy(true); setError(null); setNotice("");
     try {
       setState(await api.setRendering(rendering));
-      onSaved();
       setNotice(rendering === "adaptive" ? "Task-aware adaptation is enabled. Graphs and check loops remain mandatory." : "Existing target profiles are restored. Graphs and check loops remain mandatory.");
     } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
@@ -86,7 +85,7 @@ export function PromptRoutingSettings({ onSaved }: { onSaved: () => void }) {
     setBusy(true); setError(null); setNotice("");
     try {
       await api.queuePromptRouting(next);
-      setNotice("Selection saved for your next Prompt hotkey use only. Switch to the destination input before recording. Dictation and Answer are unchanged.");
+      setNotice("Selection saved for your next Prompt hotkey use only. Switch to the destination input before recording. Dictation is unchanged.");
     } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
   };

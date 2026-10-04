@@ -183,8 +183,8 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
       <h1 id="setup-title" ref={heading} tabIndex={-1}>{STEPS[index].label}</h1>
       {status.step === "models" && (
         <>
-          <p>Everything runs on this computer. No account or API key is needed. Download the two <strong>Recommended</strong> models below, then let them load.</p>
-          <p className="hint">The balanced pair uses about 3.50 GB of downloads and needs at least 8 GB of RAM. Smaller and multilingual choices remain available. Internet is needed for downloads, not for dictation or prompt writing.</p>
+          <p>Everything runs on this computer. No account or API key is needed. Choose a speech model and a prompt model below, then let them load. <strong>Recommended</strong> marks the highest quality tier supported by your RAM.</p>
+          <p className="hint">Quality models may be slower and need more memory. Smaller and multilingual choices remain available. Internet is needed for downloads, not for dictation or prompt writing.</p>
           <ul className="tour-checks" aria-live="polite">
             <li>Speech: {engineLabel(status.speech)}</li>
             <li>Prompt writer: {engineLabel(status.language)}</li>

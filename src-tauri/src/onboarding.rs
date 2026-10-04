@@ -570,10 +570,6 @@ pub fn complete_onboarding(app: AppHandle, state: State<'_, AppState>) -> Result
     live.attempt = None;
     live.practice_error = None;
     drop(live);
-    if let Err(error) = crate::mcp::reload(&state) {
-        log::warn!("optional tools could not start after setup: {error}");
-    }
-    crate::remote::apply(&state);
     crate::tray::refresh(&app);
     notify(&app);
     Ok(snapshot(&state))

@@ -1,12 +1,12 @@
-//! Speech or text in, finished prompt out. Shared by the desktop hotkey, the local API and remote devices;
+//! Speech or text in, finished prompt out. Shared by the desktop hotkey and developer CLI;
 //! knows nothing about windows, focus or pasting.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::context::{ActiveContext, AdmittedText, WindowIdentity};
+use crate::context::{ActiveContext, AdmittedText};
 use crate::dictation::{Vocabulary, apply_spoken_commands, remove_fillers};
 use crate::history::HistoryContext;
 use crate::pipeline::{
@@ -14,61 +14,13 @@ use crate::pipeline::{
     StructureCheck, Transcriber,
 };
 use crate::profiles::{NewlinePolicy, Profile, ProfileSet};
-use crate::prompt::{ChatMessage, PromptRequest, Role, ToolContext, adaptive_prefix_len, build_adaptive_messages, build_answer_messages, build_prompt_messages, choose_mode, stable_prefix_len};
+use crate::prompt::{ChatMessage, PromptRequest, Role, adaptive_prefix_len, build_adaptive_messages, build_prompt_messages, choose_mode, stable_prefix_len};
 use crate::routing::{self, Rendering, ResolvedPromptPolicy, RoutingOptions};
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
-use crate::scheduler::{AdmitError, EngineScheduler, Priority, SchedulerLimits};
+use crate::scheduler::{AdmitError, EngineScheduler};
 use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, opens_with_role, validate_graph};
-use crate::tool_loop::{MAX_PLANNER_TOKENS, MAX_TOOL_ROUNDS, ToolRequest, ToolSpec, parse_tool_request, planner_messages};
-
 pub const MAX_TEXT_INPUT_CHARS: usize = 8000;
-pub const MAX_TOOL_CONTEXTS: usize = 4;
-pub const MAX_TOOL_CONTEXT_CHARS: usize = 2000;
-pub const MAX_TOOL_CONTEXT_TOTAL_CHARS: usize = 6000;
-pub const TOOL_CONTEXT_TIMEOUT: Duration = Duration::from_secs(4);
-
-/// Fetches reference text from connected tools before generation. Implementations must return by
-/// `deadline`; anything they fail to fetch is simply left out.
-pub trait ContextEnricher: Send + Sync {
-    fn enrich(&self, profile_id: &str, transcript: &str, target: &ActiveContext, deadline: Instant, cancel: &CancelToken) -> Vec<ToolContext>;
-
-    /// Tools the model may call in the optional tool loop for this profile. Empty turns the loop off.
-    fn loop_tools(&self, _profile_id: &str) -> Vec<ToolSpec> {
-        Vec::new()
-    }
-
-    /// Runs one tool the model asked for. Only called with names returned by [`Self::loop_tools`].
-    fn call_tool(&self, _request: &ToolRequest, _deadline: Instant, _cancel: &CancelToken) -> Option<ToolContext> {
-        None
-    }
-}
-
-/// Applies the size caps here, at the core, whatever the enricher returned. Also returns how many
-/// results were dropped, so the model can be told something was left out.
-pub fn cap_tool_context(contexts: Vec<ToolContext>) -> (Vec<ToolContext>, usize) {
-    let mut total = 0;
-    let mut out = Vec::new();
-    let mut omitted = 0;
-    for (index, mut context) in contexts.into_iter().enumerate() {
-        if context.text.trim().is_empty() {
-            continue;
-        }
-        let budget = MAX_TOOL_CONTEXT_CHARS.min(MAX_TOOL_CONTEXT_TOTAL_CHARS - total);
-        if index >= MAX_TOOL_CONTEXTS || budget == 0 {
-            omitted += 1;
-            continue;
-        }
-        if context.text.chars().count() > budget {
-            context.text = context.text.chars().take(budget).collect();
-            context.truncated = true;
-        }
-        context.source = context.source.chars().take(80).collect();
-        total += context.text.chars().count();
-        out.push(context);
-    }
-    (out, omitted)
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Input<'a> {
@@ -79,40 +31,14 @@ pub enum Input<'a> {
     Live { committed: &'a str, tail: &'a [f32] },
 }
 
-/// Where a remote client's text will go, declared by the client itself.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClientContext {
-    /// Process name, Android package or iOS bundle ID, e.g. "com.openai.chatgpt".
-    #[serde(default)]
-    pub app: String,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub title: String,
-}
-
-impl ClientContext {
-    pub fn to_active(&self) -> ActiveContext {
-        ActiveContext {
-            window: WindowIdentity::default(),
-            process_name: self.app.chars().take(200).collect(),
-            window_title: self.title.chars().take(300).collect(),
-            url: self.url.as_ref().map(|u| u.chars().take(2000).collect()),
-        }
-    }
-}
-
 pub struct Transform<'a> {
     pub input: Input<'a>,
     pub mode: Mode,
     pub profile: &'a Profile,
     pub target: &'a ActiveContext,
     pub surrounding: Option<&'a AdmittedText>,
-    /// Use the user's past prompts as examples. Off for remote clients unless the owner allows it.
+    /// Use the user's past prompts as examples.
     pub use_history: bool,
-    /// Fetch reference text from the user's connected tools (MCP servers) before writing the prompt.
-    pub use_tools: bool,
     /// For a prompt job: write plain dictation instead when the target is not an AI app, unless the
     /// user says "prompt:" first.
     pub auto_mode: bool,
@@ -141,12 +67,6 @@ pub struct TransformReport {
     pub routing: Option<ResolvedPromptPolicy>,
 }
 
-pub struct Schedule<'a> {
-    pub priority: Priority,
-    pub client: &'a str,
-    pub wait: Duration,
-}
-
 pub struct TransformService {
     transcriber: Arc<dyn Transcriber>,
     generator: Arc<dyn Generator>,
@@ -154,7 +74,6 @@ pub struct TransformService {
     profiles: ProfileSet,
     limits: Limits,
     scheduler: EngineScheduler,
-    enricher: std::sync::RwLock<Option<Arc<dyn ContextEnricher>>>,
     vocabulary: std::sync::RwLock<Vocabulary>,
 }
 
@@ -165,7 +84,6 @@ impl TransformService {
         history: Arc<dyn History>,
         profiles: ProfileSet,
         limits: Limits,
-        scheduler: SchedulerLimits,
     ) -> Self {
         Self {
             transcriber,
@@ -173,8 +91,7 @@ impl TransformService {
             history,
             profiles,
             limits,
-            scheduler: EngineScheduler::new(scheduler),
-            enricher: Default::default(),
+            scheduler: EngineScheduler::new(),
             vocabulary: Default::default(),
         }
     }
@@ -182,14 +99,6 @@ impl TransformService {
     /// Replacements the user set for speech recognition mistakes; applied to every spoken transcript.
     pub fn set_vocabulary(&self, vocabulary: Vocabulary) {
         *self.vocabulary.write().unwrap_or_else(|p| p.into_inner()) = vocabulary.sanitized();
-    }
-
-    pub fn set_enricher(&self, enricher: Option<Arc<dyn ContextEnricher>>) {
-        *self.enricher.write().unwrap_or_else(|p| p.into_inner()) = enricher;
-    }
-
-    fn enricher(&self) -> Option<Arc<dyn ContextEnricher>> {
-        self.enricher.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     pub fn profiles(&self) -> &ProfileSet {
@@ -208,22 +117,20 @@ impl TransformService {
         &self.history
     }
 
-    /// Waits for the engines in priority order, then runs the transform while holding them.
+    /// Waits for the engines in arrival order, then runs the transform while holding them.
     pub fn run_scheduled(
         &self,
-        priority: Priority,
-        client: &str,
         transform: &Transform<'_>,
         cancel: &CancelToken,
         queue_wait: Duration,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<TransformReport, AdmitError> {
-        self.run_scheduled_with_options(Schedule { priority, client, wait: queue_wait }, transform, &RoutingOptions::default(), cancel, on_event)
+        self.run_scheduled_with_options(queue_wait, transform, &RoutingOptions::default(), cancel, on_event)
     }
 
     pub fn run_scheduled_with_options(
         &self,
-        schedule: Schedule<'_>,
+        queue_wait: Duration,
         transform: &Transform<'_>,
         options: &RoutingOptions,
         cancel: &CancelToken,
@@ -241,7 +148,7 @@ impl TransformService {
                 transcript: None, structure: None, mode: transform.mode, routing: None,
             });
         }
-        let _permit = self.scheduler.acquire(schedule.priority, schedule.client, cancel, Instant::now() + schedule.wait)?;
+        let _permit = self.scheduler.acquire(cancel, Instant::now() + queue_wait)?;
         Ok(self.run(transform, options, cancel, on_event))
     }
 
@@ -251,7 +158,7 @@ impl TransformService {
         if audio.len() > self.limits.max_audio_samples {
             return None;
         }
-        let _permit = self.scheduler.acquire(Priority::Local, "local", cancel, Instant::now() + wait).ok()?;
+        let _permit = self.scheduler.acquire(cancel, Instant::now() + wait).ok()?;
         self.transcriber.transcribe(audio, cancel).ok().filter(|_| !cancel.is_cancelled())
     }
 
@@ -345,20 +252,6 @@ impl TransformService {
 
         let (raw, finish) = match mode {
             Mode::Dictation => (apply_spoken_commands(&remove_fillers(transcript)), FinishReason::Stop),
-            Mode::Answer => {
-                let messages = build_answer_messages(transcript, t.surrounding);
-                on_event(JobEvent::Stage(Stage::Generating));
-                let deadline = Instant::now() + self.limits.generation_timeout;
-                let request = GenerationRequest { messages: &messages, stable_prefix: 1, max_new_tokens: self.limits.max_new_tokens, deadline };
-                let mut forward = |token: &str| on_event(JobEvent::Token(token));
-                match self.generator.generate(&request, cancel, &mut forward) {
-                    Ok(_) if Instant::now() > deadline => return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None },
-                    Ok(generation) => (generation.text, generation.finish),
-                    Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
-                    Err(_) if Instant::now() > deadline => return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None },
-                    Err(err) => return failed(FailReason::GenerationFailed, err.0),
-                }
-            }
             Mode::Prompt => {
                 let label = target_label(t.target);
                 let mut history = if !t.use_history {
@@ -369,42 +262,18 @@ impl TransformService {
                     self.history.context(&profile.id, &t.target.app_key())
                 };
                 history.examples.retain(|example| validate_graph(&example.prompt).is_ok());
-                // Tool lookups count against the same deadline as writing the prompt.
                 let deadline = Instant::now() + self.limits.generation_timeout;
-                let (tool_context, omitted) = match self.enricher() {
-                    Some(enricher) if t.use_tools => {
-                        let mut fetched = enricher.enrich(&profile.id, transcript, t.target, Instant::now() + TOOL_CONTEXT_TIMEOUT, cancel);
-                        let tools = enricher.loop_tools(&profile.id);
-                        if !tools.is_empty() && !cancel.is_cancelled() {
-                            on_event(JobEvent::Stage(Stage::Researching));
-                            self.tool_loop(enricher.as_ref(), &tools, transcript, &mut fetched, deadline, cancel);
-                        }
-                        let (contexts, omitted) = cap_tool_context(fetched);
-                        if !contexts.is_empty() || omitted > 0 {
-                            let chars: usize = contexts.iter().map(|c| c.text.chars().count()).sum();
-                            log::info!("tool context: {} items, {chars} chars, {omitted} omitted", contexts.len());
-                        }
-                        (contexts, omitted)
-                    }
-                    _ => (Vec::new(), 0),
-                };
-                if cancel.is_cancelled() {
-                    return TransformOutcome::Cancelled;
-                }
                 let prompt_request = PromptRequest {
                     transcript,
                     profile,
                     target_label: &label,
                     surrounding: t.surrounding,
                     history: &history,
-                    tool_context: &tool_context,
-                    tool_context_omitted: omitted,
                 };
                 let mut references = t.surrounding.map_or_else(String::new, |surrounding| surrounding.text.clone());
                 if let Some(previous) = &history.previous {
                     references.push_str(&format!("\n{}", previous.text));
                 }
-                for context in &tool_context { references.push_str(&format!("\n{}", context.text)); }
                 let messages = match &report.routing {
                     Some(policy) => build_adaptive_messages(&prompt_request, policy),
                     None => build_prompt_messages(&prompt_request),
@@ -449,43 +318,12 @@ impl TransformService {
             }
         };
 
-        // Answers are shown in the overlay, never pasted into a shell, so their line breaks stay.
-        let newlines = if mode == Mode::Answer { NewlinePolicy::Keep } else { profile.newlines };
-        finish_output(&raw, finish, newlines, self.limits.max_output_chars)
-    }
-
-    /// Lets the model request up to [`MAX_TOOL_ROUNDS`] lookups from the allowlist. Ends at the first
-    /// answer that is not exactly one new allowed call, at the deadline, or on cancellation.
-    fn tool_loop(&self, enricher: &dyn ContextEnricher, tools: &[ToolSpec], transcript: &str, fetched: &mut Vec<ToolContext>, deadline: Instant, cancel: &CancelToken) {
-        let mut calls: Vec<ToolRequest> = Vec::new();
-        for _ in 0..MAX_TOOL_ROUNDS {
-            if cancel.is_cancelled() || Instant::now() >= deadline {
-                break;
-            }
-            let messages = planner_messages(tools, transcript, fetched);
-            let request = GenerationRequest { messages: &messages, stable_prefix: 0, max_new_tokens: MAX_PLANNER_TOKENS, deadline };
-            let Ok(answer) = self.generator.generate(&request, cancel, &mut |_| {}) else { break };
-            if answer.finish != FinishReason::Stop || Instant::now() >= deadline || cancel.is_cancelled() {
-                break;
-            }
-            let Some(call) = parse_tool_request(&answer.text, tools) else { break };
-            if calls.contains(&call) {
-                break;
-            }
-            let call_deadline = deadline.min(Instant::now() + TOOL_CONTEXT_TIMEOUT);
-            let result = enricher.call_tool(&call, call_deadline, cancel);
-            calls.push(call);
-            match result {
-                Some(context) if !cancel.is_cancelled() => fetched.push(context),
-                _ => break,
-            }
-        }
-        log::info!("tool loop: {} calls", calls.len());
+        finish_output(&raw, finish, profile.newlines, self.limits.max_output_chars)
     }
 
     /// Validates the sanitized draft and runs at most `max_structure_repairs`
-    /// rewrites inside the original deadline. Any repair that fails, truncates or arrives late leaves
-    /// the first draft in place, unless it has a forbidden persona opener.
+    /// rewrites inside the original deadline. Failed, truncated, or late repairs never authorize
+    /// insertion of an invalid draft.
     fn check_structure(
         &self,
         request: &GenerationRequest<'_>,
@@ -503,6 +341,7 @@ impl TransformService {
                 Some((policy, original, references)) => routing::validate_rewrite_with_context(policy, original, references, text).map_err(|error| {
                     format!("Rewrite only the finished prompt, preserving the user's final intent and supplied facts. Fix this violation: {error}\n\
                         Graph syntax is mandatory. Step 1 has NO dependencies. Step 2 can depend only on Step 1. Step 3 can depend only on Steps 1 and 2. Never list the current step or a later step in an after clause; omit a dependency rather than inventing one. \
+                        Dependency clauses must contain only comma-separated earlier step numbers, for example (after 1, 2). Never put conditions or words such as 'or loop exit' inside a dependency clause; retry conditions belong on the separate Loop: line. \
                         Put a separate Loop: line with an existing return step and a limit of 1 to 8 rounds, then non-empty Done when: criteria. Keep the graph compact, retain every requested action, and include no explanation of your rewrite.")
                 }),
                 None => validate_graph(text).map(|_| ()).map_err(repair_instruction),
@@ -523,16 +362,16 @@ impl TransformService {
             }
             on_event(JobEvent::Stage(Stage::Revising));
             let mut repair = if adaptive.is_some() {
-                vec![request.messages[0].clone(), request.messages.last().expect("prompt has a user message").clone()]
+                let mut system = request.messages[0].clone();
+                system.content.push_str(&format!("\n\nRequired correction for this request:\n{error}\n\
+                    Regenerate the complete prompt from the current request. Preserve its actual goal, named details, numbers and constraints; do not reuse a rejected draft or copy an example's goal."));
+                vec![system, request.messages.last().expect("prompt has a user message").clone()]
             } else { request.messages.to_vec() };
-            repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
-            let instruction = if let Some((_, original, _)) = adaptive {
-                format!("{error}\n\nThe CURRENT request to preserve is:\n<transcript>\n{}\n</transcript>\n\
-                    Start with this request's goal and preserve all its named details and numbers. The response must be the complete corrected task graph, not a generic example.",
-                    crate::prompt::escape_delimiters(routing::final_request(original)))
-            } else { error.clone() };
-            repair.push(ChatMessage { role: Role::User, content: instruction });
-            let repair_request = GenerationRequest { messages: &repair, stable_prefix: if adaptive.is_some() { 1 } else { request.stable_prefix }, ..*request };
+            if adaptive.is_none() {
+                repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
+                repair.push(ChatMessage { role: Role::User, content: error.clone() });
+            }
+            let repair_request = GenerationRequest { messages: &repair, stable_prefix: if adaptive.is_some() { 0 } else { request.stable_prefix }, ..*request };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
             let generation = match self.generator.generate(&repair_request, cancel, &mut forward) {
                 Ok(generation) => generation,
@@ -681,37 +520,35 @@ mod tests {
             history.clone(),
             ProfileSet::bundled(),
             Limits::default(),
-            SchedulerLimits::default(),
         );
         Fixture { transcriber, generator, history, service }
     }
 
-    fn run_text(f: &Fixture, client: &ClientContext, text: &str, use_history: bool) -> TransformReport {
-        let target = client.to_active();
-        let profile = f.service.profiles().resolve(&target);
-        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history, use_tools: false, auto_mode: false };
-        f.service.run_scheduled(Priority::Device, "phone", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
+    fn run_text(f: &Fixture, target: &ActiveContext, text: &str, use_history: bool) -> TransformReport {
+        let profile = f.service.profiles().resolve(target);
+        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target, surrounding: None, use_history, auto_mode: false };
+        f.service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
     }
 
     #[test]
     fn text_input_skips_speech_and_history_unless_allowed() {
         let f = fixture(Duration::ZERO);
-        let client = ClientContext { app: "com.openai.chatgpt".into(), ..Default::default() };
-        let report = run_text(&f, &client, "compare three crm tools", false);
+        let target = ActiveContext { process_name: "com.openai.chatgpt".into(), ..Default::default() };
+        let report = run_text(&f, &target, "compare three crm tools", false);
         assert_eq!(report.outcome, TransformOutcome::Ready { text: FINISHED.into() });
         assert_eq!(f.transcriber.0.load(Ordering::SeqCst), 0);
         assert_eq!(f.history.0.load(Ordering::SeqCst), 0);
         assert!(!format!("{:?}", f.generator.calls.lock().unwrap()[0]).contains("HISTORY-SENTINEL"));
-        run_text(&f, &client, "compare three crm tools", true);
+        run_text(&f, &target, "compare three crm tools", true);
         assert!(format!("{:?}", f.generator.calls.lock().unwrap()[1]).contains("HISTORY-SENTINEL"));
     }
 
     #[test]
-    fn client_declared_apps_resolve_profiles() {
+    fn explicit_context_resolves_profiles() {
         let services = ProfileSet::bundled();
         let id = |app: &str, url: Option<&str>| {
-            let ctx = ClientContext { app: app.into(), url: url.map(Into::into), title: String::new() };
-            services.resolve(&ctx.to_active()).id.clone()
+            let ctx = ActiveContext { process_name: app.into(), url: url.map(Into::into), ..Default::default() };
+            services.resolve(&ctx).id.clone()
         };
         assert_eq!(id("com.openai.chatgpt", None), "chatgpt");
         assert_eq!(id("com.anthropic.claude", None), "claude");
@@ -720,13 +557,13 @@ mod tests {
         assert_eq!(id("ai.x.grok", None), "grok");
         assert_eq!(id("", Some("https://claude.ai/new")), "claude");
         assert_eq!(id("com.example.notes", None), "generic");
-        assert_eq!(target_label(&ClientContext { url: Some("claude.ai".into()), ..Default::default() }.to_active()), "claude.ai");
+        assert_eq!(target_label(&ActiveContext { url: Some("claude.ai".into()), ..Default::default() }), "claude.ai");
     }
 
     #[test]
     fn chat_requests_for_images_or_videos_get_generator_prompts() {
         let f = fixture(Duration::ZERO);
-        let chatgpt = ClientContext { app: "com.openai.chatgpt".into(), ..Default::default() };
+        let chatgpt = ActiveContext { process_name: "com.openai.chatgpt".into(), ..Default::default() };
         run_text(&f, &chatgpt, "make me a picture of a fox in a snowy forest", false);
         run_text(&f, &chatgpt, "create a short cinematic video of waves at sunset", false);
         run_text(&f, &chatgpt, "write a video script for our product launch then review it", false);
@@ -748,142 +585,14 @@ mod tests {
     #[test]
     fn oversized_input_is_rejected_before_queueing() {
         let f = fixture(Duration::ZERO);
-        let held = f.service.scheduler().acquire(Priority::Device, "other", &CancelToken::default(), Instant::now() + Duration::from_secs(5)).unwrap();
+        let held = f.service.scheduler().acquire(&CancelToken::default(), Instant::now() + Duration::from_secs(5)).unwrap();
         let big = "x".repeat(MAX_TEXT_INPUT_CHARS + 1);
         let started = Instant::now();
-        let report = run_text(&f, &ClientContext::default(), &big, false);
+        let report = run_text(&f, &ActiveContext::default(), &big, false);
         assert_eq!(report.outcome, TransformOutcome::Failed { reason: FailReason::RecordingTooLong, detail: None });
         assert!(started.elapsed() < Duration::from_secs(1), "waited for the engine");
         assert!(f.generator.calls.lock().unwrap().is_empty());
         drop(held);
-    }
-
-    #[test]
-    fn enricher_output_is_capped_gated_and_delimited() {
-        struct Flood(AtomicUsize);
-        impl ContextEnricher for Flood {
-            fn enrich(&self, _: &str, _: &str, _: &ActiveContext, _: Instant, _: &CancelToken) -> Vec<ToolContext> {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                (0..10).map(|i| ToolContext { source: format!("tool{i}"), text: "TOOL-SENTINEL ".repeat(500), truncated: false }).collect()
-            }
-        }
-        let f = fixture(Duration::ZERO);
-        let flood = Arc::new(Flood(AtomicUsize::new(0)));
-        f.service.set_enricher(Some(flood.clone()));
-        let target = ActiveContext::default();
-        let profile = f.service.profiles().resolve(&target);
-        let run = |use_tools: bool, mode: Mode| {
-            let transform = Transform { input: Input::Text("plan the launch"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools, auto_mode: false };
-            f.service.run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
-        };
-        run(false, Mode::Prompt);
-        run(true, Mode::Dictation);
-        assert_eq!(flood.0.load(Ordering::SeqCst), 0, "tools called without permission or for dictation");
-        run(true, Mode::Prompt);
-        assert_eq!(flood.0.load(Ordering::SeqCst), 1);
-        let calls = f.generator.calls.lock().unwrap();
-        let last = &calls.last().unwrap().last().unwrap().content;
-        assert_eq!(last.matches("<tool_context>").count(), MAX_TOOL_CONTEXT_TOTAL_CHARS / MAX_TOOL_CONTEXT_CHARS);
-        let tool_chars: usize = last.split("<tool_context>\n").skip(1).map(|s| s.split("\n</tool_context>").next().unwrap().chars().count()).sum();
-        assert!(tool_chars <= MAX_TOOL_CONTEXT_TOTAL_CHARS, "{tool_chars}");
-        assert!(last.contains("truncated"));
-        assert!(last.contains("(7 more tool results were left out to fit the size limit.)"), "10 results, 3 fit");
-    }
-
-    /// Answers planner requests from a script, and prompt requests with a fixed prompt.
-    struct ScriptedGenerator {
-        planner: Mutex<Vec<&'static str>>,
-        planner_calls: AtomicUsize,
-        cancel_after_planner: Option<CancelToken>,
-    }
-
-    impl Generator for ScriptedGenerator {
-        fn generate(&self, req: &GenerationRequest<'_>, _: &CancelToken, _: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
-            if req.max_new_tokens == crate::tool_loop::MAX_PLANNER_TOKENS {
-                self.planner_calls.fetch_add(1, Ordering::SeqCst);
-                if let Some(cancel) = &self.cancel_after_planner {
-                    cancel.cancel();
-                }
-                let mut script = self.planner.lock().unwrap();
-                let text = if script.is_empty() { "NONE" } else { script.remove(0) };
-                return Ok(Generation { text: text.into(), finish: FinishReason::Stop });
-            }
-            Ok(Generation { text: FINISHED.into(), finish: FinishReason::Stop })
-        }
-    }
-
-    #[derive(Default)]
-    struct LoopTools(Mutex<Vec<String>>);
-
-    impl ContextEnricher for LoopTools {
-        fn enrich(&self, _: &str, _: &str, _: &ActiveContext, _: Instant, _: &CancelToken) -> Vec<ToolContext> {
-            Vec::new()
-        }
-        fn loop_tools(&self, _: &str) -> Vec<ToolSpec> {
-            vec![ToolSpec { name: "docs.search".into(), description: "Search the docs".into(), parameters: vec!["query".into()] }]
-        }
-        fn call_tool(&self, request: &ToolRequest, _: Instant, _: &CancelToken) -> Option<ToolContext> {
-            let query = request.arguments["query"].as_str().unwrap_or_default().to_owned();
-            self.0.lock().unwrap().push(format!("{}:{query}", request.tool));
-            Some(ToolContext { source: request.tool.clone(), text: format!("facts about {query}"), truncated: false })
-        }
-    }
-
-    fn run_loop(script: Vec<&'static str>, mode: Mode, cancel_after_planner: bool) -> (Arc<LoopTools>, Arc<ScriptedGenerator>, TransformOutcome) {
-        let cancel = CancelToken::default();
-        let generator = Arc::new(ScriptedGenerator {
-            planner: Mutex::new(script),
-            planner_calls: AtomicUsize::new(0),
-            cancel_after_planner: cancel_after_planner.then(|| cancel.clone()),
-        });
-        let tools = Arc::new(LoopTools::default());
-        let service = TransformService::new(
-            Arc::new(CountingTranscriber::default()),
-            generator.clone(),
-            Arc::new(SentinelHistory::default()),
-            ProfileSet::bundled(),
-            Limits::default(),
-            SchedulerLimits::default(),
-        );
-        service.set_enricher(Some(tools.clone()));
-        let target = ActiveContext::default();
-        let profile = service.profiles().resolve(&target);
-        let transform = Transform { input: Input::Text("check the rate limits"), mode, profile, target: &target, surrounding: None, use_history: false, use_tools: true, auto_mode: false };
-        let report = service.run_scheduled(Priority::Local, "local", &transform, &cancel, Duration::from_secs(5), &mut |_| {}).unwrap();
-        (tools, generator, report.outcome)
-    }
-
-    const CALL_A: &str = r#"{"tool": "docs.search", "arguments": {"query": "limits"}}"#;
-    const CALL_B: &str = r#"{"tool": "docs.search", "arguments": {"query": "quotas"}}"#;
-
-    #[test]
-    fn tool_loop_is_bounded_to_two_rounds_of_allowed_calls() {
-        let (tools, generator, outcome) = run_loop(vec![CALL_A, CALL_B, CALL_A, CALL_B], Mode::Prompt, false);
-        assert_eq!(*tools.0.lock().unwrap(), vec!["docs.search:limits", "docs.search:quotas"]);
-        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), MAX_TOOL_ROUNDS);
-        assert_eq!(outcome, TransformOutcome::Ready { text: FINISHED.into() });
-    }
-
-    #[test]
-    fn tool_loop_stops_on_none_unknown_tools_and_repeats() {
-        let (tools, generator, _) = run_loop(vec!["NONE", CALL_A], Mode::Prompt, false);
-        assert!(tools.0.lock().unwrap().is_empty());
-        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), 1);
-        let (tools, _, _) = run_loop(vec![r#"{"tool": "shell.run", "arguments": {"query": "x"}}"#], Mode::Prompt, false);
-        assert!(tools.0.lock().unwrap().is_empty());
-        let (tools, generator, _) = run_loop(vec![CALL_A, CALL_A], Mode::Prompt, false);
-        assert_eq!(tools.0.lock().unwrap().len(), 1, "the same call is never repeated");
-        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn tool_loop_never_runs_for_dictation_or_after_cancel() {
-        let (tools, generator, _) = run_loop(vec![CALL_A], Mode::Dictation, false);
-        assert!(tools.0.lock().unwrap().is_empty());
-        assert_eq!(generator.planner_calls.load(Ordering::SeqCst), 0);
-        let (tools, _, outcome) = run_loop(vec![CALL_A, CALL_B], Mode::Prompt, true);
-        assert!(tools.0.lock().unwrap().is_empty(), "a cancel during planning stops the call");
-        assert_eq!(outcome, TransformOutcome::Cancelled);
     }
 
     #[test]
@@ -894,9 +603,9 @@ mod tests {
         let profile = f.service.profiles().resolve(&target);
         let mut seen = Vec::new();
         for input in [Input::Text("typed spoken words"), Input::Audio(&[0.0; 16])] {
-            let transform = Transform { input, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
+            let transform = Transform { input, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, auto_mode: false };
             f.service
-                .run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
+                .run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
                     if let JobEvent::Transcript(t) = e {
                         seen.push(t.to_owned());
                     }
@@ -923,7 +632,6 @@ mod tests {
             Arc::new(SentinelHistory::default()),
             ProfileSet::bundled(),
             Limits::default(),
-            SchedulerLimits::default(),
         );
         let target = ActiveContext::default();
         let profile = service.profiles().resolve(&target);
@@ -935,12 +643,11 @@ mod tests {
             target: &target,
             surrounding: None,
             use_history: false,
-            use_tools: false,
             auto_mode: false,
         };
         let mut transcript = String::new();
         service
-            .run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
+            .run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
                 if let JobEvent::Transcript(t) = e {
                     transcript = t.to_owned();
                 }
@@ -952,7 +659,7 @@ mod tests {
         let silent = vec![0.0; 16_000];
         let transform = Transform { input: Input::Live { committed: "only this", tail: &silent }, ..transform };
         service
-            .run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
+            .run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
                 if let JobEvent::Transcript(t) = e {
                     transcript = t.to_owned();
                 }
@@ -963,7 +670,7 @@ mod tests {
 
         let too_long = vec![0.5; Limits::default().max_audio_samples + 1];
         let transform = Transform { input: Input::Live { committed: "x", tail: &too_long }, ..transform };
-        let report = service.run_scheduled(Priority::Local, "local", &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap();
+        let report = service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap();
         assert_eq!(report.outcome, TransformOutcome::Failed { reason: FailReason::RecordingTooLong, detail: None });
         assert_eq!(lengths.0.lock().unwrap().len(), 1, "an oversized tail never reaches the engine");
     }
@@ -972,7 +679,7 @@ mod tests {
     fn live_chunks_never_wait_long_for_busy_engines_or_run_when_cancelled() {
         let f = fixture(Duration::ZERO);
         let audio = vec![0.0; 16_000];
-        let held = f.service.scheduler().acquire(Priority::Device, "phone", &CancelToken::default(), Instant::now() + Duration::from_secs(1)).unwrap();
+        let held = f.service.scheduler().acquire(&CancelToken::default(), Instant::now() + Duration::from_secs(1)).unwrap();
         let started = Instant::now();
         assert_eq!(f.service.transcribe_chunk(&audio, &CancelToken::default(), Duration::from_millis(60)), None);
         assert!(started.elapsed() < Duration::from_secs(1));
@@ -988,17 +695,16 @@ mod tests {
     }
 
     #[test]
-    fn engine_is_never_shared_between_concurrent_clients() {
+    fn engine_is_never_shared_between_concurrent_jobs() {
         let f = Arc::new(fixture(Duration::from_millis(30)));
         let handles: Vec<_> = (0..4)
-            .map(|i| {
+            .map(|_| {
                 let f = f.clone();
                 std::thread::spawn(move || {
                     let target = ActiveContext::default();
                     let profile = f.service.profiles().resolve(&target);
-                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, use_tools: false, auto_mode: false };
-                    let client = format!("c{i}");
-                    f.service.run_scheduled(Priority::Device, &client, &transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
+                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, auto_mode: false };
+                    f.service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
                 })
             })
             .collect();

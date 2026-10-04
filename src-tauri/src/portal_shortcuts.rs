@@ -19,7 +19,7 @@ use crate::controller::Command;
 use crate::hotkeys::{HotkeyConfig, Hotkeys};
 
 const HELP: &str = "Wayland shortcuts need permission. Open Settings and enable desktop integration again.";
-const IDS: [&str; 4] = ["prompt", "dictation", "answer", "cancel"];
+const IDS: [&str; 3] = ["prompt", "dictation", "cancel"];
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Binding {
@@ -161,7 +161,6 @@ fn publish(app: &AppHandle, generation: u64, error: Option<&str>) -> bool {
         }
         hotkeys.prompt_error = backend.error.clone();
         hotkeys.dictation_error = backend.error.clone();
-        hotkeys.answer_error = hotkeys.config.answer.as_ref().and(backend.error.clone());
     }
     if let Some(message) = error {
         log::warn!("{message}");
@@ -200,7 +199,7 @@ async fn run_session(
         _ = closed.next() => return Err(format!("Shortcut permission was closed while binding. {HELP}")),
         _ = owner.next() => return Err(format!("The desktop portal disconnected while binding. {HELP}")),
     };
-    check_bound(config, bound.shortcuts())?;
+    check_bound(bound.shortcuts())?;
     remember_bindings(generation, bound.shortcuts());
     {
         let state = app.state::<AppState>();
@@ -229,7 +228,7 @@ async fn run_session(
             event = changed.next() => {
                 let event = event.ok_or_else(|| portal_error("shortcut change signal stream ended"))?;
                 if event.session_handle().as_str() == path {
-                    check_bound(config, event.shortcuts())?;
+                    check_bound(event.shortcuts())?;
                     if remember_bindings(generation, event.shortcuts())
                         && let Err(error) = app.emit_to("settings", "desktop-integration-changed", bindings())
                     {
@@ -251,8 +250,8 @@ fn remember_bindings(generation: u64, shortcuts: &[ashpd::desktop::global_shortc
     true
 }
 
-fn check_bound(config: &HotkeyConfig, bound: &[ashpd::desktop::global_shortcuts::Shortcut]) -> Result<(), String> {
-    let expected = IDS.into_iter().filter(|id| *id != "answer" || config.answer.is_some());
+fn check_bound(bound: &[ashpd::desktop::global_shortcuts::Shortcut]) -> Result<(), String> {
+    let expected = IDS.into_iter();
     let missing: Vec<_> = expected.filter(|id| !bound.iter().any(|shortcut| shortcut.id() == *id
         && !shortcut.trigger_description().trim().is_empty())).collect();
     if missing.is_empty() { Ok(()) } else {
@@ -285,7 +284,6 @@ fn event_command(event: PortalEvent<'_>, session: &str, paused: bool, ready: boo
     let mode = match id {
         "prompt" => Mode::Prompt,
         "dictation" => Mode::Dictation,
-        "answer" => Mode::Answer,
         _ => return None,
     };
     if pressed { ready.then_some(Command::Press(mode)) } else { Some(Command::Release(mode)) }
@@ -293,9 +291,9 @@ fn event_command(event: PortalEvent<'_>, session: &str, paused: bool, ready: boo
 
 fn deliver(app: &AppHandle, generation: u64, path: &str, event: PortalEvent<'_>, pressed: &mut Vec<String>) {
     let Some(state) = app.try_state::<AppState>() else { return };
-    let (paused, answer_enabled) = {
+    let paused = {
         let hotkeys = state.hotkeys.read().unwrap();
-        (hotkeys.paused, hotkeys.config.answer.is_some())
+        hotkeys.paused
     };
     let (valid, cancel) = {
         let backend = BACKEND.lock().unwrap();
@@ -306,8 +304,7 @@ fn deliver(app: &AppHandle, generation: u64, path: &str, event: PortalEvent<'_>,
     let ready = state.onboarding.ready(&settings);
     let (event_path, id, down) = event.details();
     let id = id.to_owned();
-    if id == "answer" && !answer_enabled { return; }
-    if event_path == path && !paused && down && !ready && !cancel && IDS[..3].contains(&id.as_str()) {
+    if event_path == path && !paused && down && !ready && !cancel && IDS[..2].contains(&id.as_str()) {
         crate::onboarding::record_error(app, "The speech and language engines are not ready. Finish setup before using shortcuts.");
         crate::tray::show_settings(app);
         return;
@@ -330,7 +327,6 @@ pub(crate) fn validate_config(config: &HotkeyConfig) -> Result<Vec<NewShortcut>,
     let entries = [
         ("prompt", "Promptify: create a prompt", Some(hotkeys.prompt)),
         ("dictation", "Promptify: dictate text", Some(hotkeys.dictation)),
-        ("answer", "Promptify: answer a question", hotkeys.answer),
         ("cancel", "Promptify: cancel the active job", Some(hotkeys.cancel)),
     ];
     let mut ids = Vec::new();
@@ -410,7 +406,7 @@ mod tests {
 
     #[test]
     fn typed_portal_signals_map_all_modes_and_cancel() {
-        for (id, expected) in [("prompt", Mode::Prompt), ("dictation", Mode::Dictation), ("answer", Mode::Answer)] {
+        for (id, expected) in [("prompt", Mode::Prompt), ("dictation", Mode::Dictation)] {
             assert!(matches!(event_command(PortalEvent::Activated(&activated(id)), SESSION, false, true, false), Some(Command::Press(mode)) if mode == expected));
             assert!(matches!(event_command(PortalEvent::Deactivated(&deactivated(id)), SESSION, false, false, false), Some(Command::Release(mode)) if mode == expected));
         }
@@ -441,7 +437,7 @@ mod tests {
         }
         assert_eq!(validate_config(&HotkeyConfig::defaults()).unwrap().len(), 3);
         let mut config = HotkeyConfig::defaults();
-        config.answer = Some(config.prompt.clone());
+        config.dictation = config.prompt.clone();
         assert!(validate_config(&config).is_err());
     }
 
@@ -457,18 +453,13 @@ mod tests {
             let bytes = to_bytes(Context::new_dbus(Endian::Little, 0), &(id, info)).unwrap();
             bytes.deserialize::<Shortcut>().unwrap().0
         };
-        let config = HotkeyConfig::defaults();
         let mut bound = vec![shortcut("prompt", "Ctrl+Alt+Space"), shortcut("dictation", "Ctrl+Alt+Shift+Space")];
-        assert!(check_bound(&config, &bound).unwrap_err().contains("cancel"));
+        assert!(check_bound(&bound).unwrap_err().contains("cancel"));
         bound.push(shortcut("cancel", "Escape"));
-        assert!(check_bound(&config, &bound).is_ok());
+        assert!(check_bound(&bound).is_ok());
         bound[0] = shortcut("prompt", "");
-        assert!(check_bound(&config, &bound).unwrap_err().contains("prompt"));
+        assert!(check_bound(&bound).unwrap_err().contains("prompt"));
         bound[0] = shortcut("prompt", "Ctrl+Alt+Space");
-        let mut config = config;
-        config.answer = Some("Ctrl+Alt+A".into());
-        assert!(check_bound(&config, &bound).unwrap_err().contains("answer"));
-        bound.push(shortcut("answer", "Ctrl+Alt+A"));
-        assert!(check_bound(&config, &bound).is_ok());
+        assert!(check_bound(&bound).is_ok());
     }
 }

@@ -1,20 +1,15 @@
-use promptify_core::context::{ActiveContext, AdmittedText};
 use promptify_core::dictation::remove_fillers;
 use promptify_core::history::HistoryEntry;
 use promptify_core::models::{ModelKind, ModelTier, final_path, is_installed, part_path};
 use promptify_core::pipeline::Mode;
-use promptify_core::profiles::ProfileKind;
-use promptify_core::prompt::{ChatMessage, PromptRequest, build_adaptive_messages, build_prompt_messages};
-use promptify_core::routing::{self, Rendering, ResolvedPromptPolicy, RoutingOptions, Surface};
-use serde::{Deserialize, Serialize};
+use promptify_core::routing::{self, Rendering, RoutingOptions, Surface};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::hotkeys::HotkeyConfig;
 use crate::{AppState, ensure_selection, onboarding, preload_engines, settings};
 
 const MAX_TRANSCRIPT_CHARS: usize = 20_000;
-const MAX_SURROUNDING_CHARS: usize = 4_000;
-const MAX_FIELD_CHARS: usize = 2_048;
 const MAX_HISTORY_LISTED: usize = 200;
 static DESKTOP_INTEGRATION_CHANGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -459,7 +454,6 @@ pub fn set_hotkey(app: AppHandle, state: State<'_, AppState>, mode: Mode, accele
         match mode {
             Mode::Prompt => settings.prompt_hotkey = Some(accelerator),
             Mode::Dictation => settings.dictation_hotkey = Some(accelerator),
-            Mode::Answer => settings.answer_hotkey = Some(accelerator),
         }
     });
     if let Err(error) = saved {
@@ -474,24 +468,6 @@ pub fn set_hotkey(app: AppHandle, state: State<'_, AppState>, mode: Mode, accele
     onboarding::notify(&app);
     crate::tray::refresh(&app);
     Ok(())
-}
-
-#[derive(Serialize)]
-pub struct ProfileSummary {
-    id: String,
-    name: String,
-    kind: ProfileKind,
-}
-
-#[tauri::command]
-pub fn list_profiles(state: State<'_, AppState>) -> Vec<ProfileSummary> {
-    state
-        .orchestrator
-        .profiles()
-        .all()
-        .iter()
-        .map(|p| ProfileSummary { id: p.id.clone(), name: p.name.clone(), kind: p.kind })
-        .collect()
 }
 
 #[tauri::command]
@@ -519,73 +495,6 @@ pub fn prompt_catalog() -> serde_json::Value {
         "version": routing::CATALOG_VERSION, "tasks": routing::catalog().all(), "surfaces": Surface::all(),
         "required_structure": { "numbered_steps": true, "bounded_loop": true, "done_when": true }
     })
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PreviewInput {
-    transcript: String,
-    process_name: String,
-    window_title: String,
-    url: Option<String>,
-    surrounding_text: Option<String>,
-    #[serde(default)]
-    routing: Option<RoutingOptions>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewOutput {
-    profile_id: String,
-    profile_name: String,
-    messages: Vec<ChatMessage>,
-    routing: Option<ResolvedPromptPolicy>,
-}
-
-/// Shows which profile a context resolves to and the exact messages the model would receive.
-#[tauri::command]
-pub fn preview_prompt(state: State<'_, AppState>, input: PreviewInput) -> Result<PreviewOutput, String> {
-    check_len("transcript", &input.transcript, MAX_TRANSCRIPT_CHARS)?;
-    check_len("process name", &input.process_name, MAX_FIELD_CHARS)?;
-    check_len("window title", &input.window_title, MAX_FIELD_CHARS)?;
-    check_len("url", input.url.as_deref().unwrap_or(""), MAX_FIELD_CHARS)?;
-    check_len("surrounding text", input.surrounding_text.as_deref().unwrap_or(""), MAX_SURROUNDING_CHARS)?;
-    if input.transcript.trim().is_empty() {
-        return Err("transcript is empty".into());
-    }
-    let ctx = ActiveContext {
-        process_name: input.process_name,
-        window_title: input.window_title,
-        url: input.url.filter(|u| !u.trim().is_empty()),
-        ..Default::default()
-    };
-    let profile = state.orchestrator.profiles().resolve(&ctx);
-    let options = input.routing.unwrap_or_else(|| state.orchestrator.routing_options());
-    let (profile, routing) = routing::prepare_profile(state.orchestrator.profiles(), profile, &ctx, &input.transcript, &options)?;
-    let surrounding = input
-        .surrounding_text
-        .filter(|s| !s.trim().is_empty())
-        .map(|text| AdmittedText { text, truncated: false });
-    let label = ctx.url_host().unwrap_or_else(|| ctx.normalized_process());
-    let history = match &routing {
-        Some(policy) => state.history.routed_context(&profile.id, &ctx.app_key(), policy, routing::is_follow_up(&input.transcript))
-            .map_err(|error| format!("could not load compatible prompt history: {error}"))?,
-        None => state.history.context(&profile.id, &ctx.app_key()),
-    };
-    let request = PromptRequest {
-        transcript: &input.transcript,
-        profile: &profile,
-        target_label: &label,
-        surrounding: surrounding.as_ref(),
-        history: &history,
-        tool_context: &[],
-        tool_context_omitted: 0,
-    };
-    let messages = match &routing {
-        Some(policy) => build_adaptive_messages(&request, policy),
-        None => build_prompt_messages(&request),
-    };
-    Ok(PreviewOutput { profile_id: profile.id.clone(), profile_name: profile.name.clone(), messages, routing })
 }
 
 #[tauri::command]

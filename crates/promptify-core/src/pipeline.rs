@@ -9,8 +9,8 @@ use crate::history::{HistoryContext, HistoryLog, NewHistoryEntry};
 use crate::profiles::{PasteChord, Profile, ProfileSet};
 use crate::prompt::ChatMessage;
 use crate::routing::{Rendering, ResolvedPromptPolicy, RoutingOptions};
-use crate::scheduler::{AdmitError, Priority, SchedulerLimits};
-use crate::transform::{Input, Schedule, Transform, TransformOutcome, TransformService};
+use crate::scheduler::AdmitError;
+use crate::transform::{Input, Transform, TransformOutcome, TransformService};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -30,16 +30,12 @@ impl CancelToken {
 pub enum Mode {
     Prompt,
     Dictation,
-    /// Answer the spoken question with the local model and show it; nothing is pasted.
-    Answer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Transcribing,
-    /// Fetching reference text with the user's MCP tools.
-    Researching,
     Generating,
     /// Rewriting a draft whose task graph was malformed.
     Revising,
@@ -71,7 +67,7 @@ impl Default for Limits {
             max_new_tokens: 768,
             generation_timeout: Duration::from_secs(60),
             max_output_chars: 6000,
-            max_structure_repairs: 1,
+            max_structure_repairs: 2,
         }
     }
 }
@@ -227,8 +223,6 @@ pub enum FailReason {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Outcome {
     Inserted { text: String },
-    /// An answer to show the user; answer jobs never paste.
-    Answered { text: String },
     Blocked { text: String, reason: BlockReason, detail: Option<String> },
     NoSpeech,
     Cancelled,
@@ -240,7 +234,6 @@ impl Outcome {
     pub fn kind(&self) -> &'static str {
         match self {
             Outcome::Inserted { .. } => "inserted",
-            Outcome::Answered { .. } => "answered",
             Outcome::Blocked { .. } => "blocked",
             Outcome::NoSpeech => "no_speech",
             Outcome::Cancelled => "cancelled",
@@ -306,13 +299,12 @@ pub struct Job {
 #[derive(Debug, Clone, Copy)]
 pub struct JobOptions {
     pub use_personal_context: bool,
-    pub use_tools: bool,
     pub auto_mode: bool,
 }
 
 impl Default for JobOptions {
     fn default() -> Self {
-        Self { use_personal_context: true, use_tools: true, auto_mode: true }
+        Self { use_personal_context: true, auto_mode: true }
     }
 }
 
@@ -342,11 +334,7 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     pub fn new(backends: Backends, profiles: ProfileSet, policy: ContextPolicy, limits: Limits) -> Self {
-        Self::with_scheduler(backends, profiles, policy, limits, SchedulerLimits::default())
-    }
-
-    pub fn with_scheduler(backends: Backends, profiles: ProfileSet, policy: ContextPolicy, limits: Limits, scheduler: SchedulerLimits) -> Self {
-        let service = TransformService::new(backends.transcriber, backends.generator, backends.history, profiles, limits, scheduler);
+        let service = TransformService::new(backends.transcriber, backends.generator, backends.history, profiles, limits);
         Self {
             context: backends.context,
             inserter: backends.inserter,
@@ -391,7 +379,7 @@ impl Orchestrator {
         *self.policy.write().unwrap_or_else(|p| p.into_inner()) = policy;
     }
 
-    /// The engine-side service, shared with the local API and remote devices.
+    /// The engine-side service used by recording and live transcription.
     pub fn service(&self) -> &Arc<TransformService> {
         &self.service
     }
@@ -468,13 +456,12 @@ impl Orchestrator {
             target: &job.target,
             surrounding: job.surrounding.as_ref(),
             use_history: job.options.use_personal_context,
-            use_tools: job.options.use_tools,
             auto_mode: job.options.auto_mode && self.auto_mode.load(Ordering::SeqCst),
         };
-        // Local jobs go first, but may still wait for a remote job that already holds the engines.
+        // Serialize desktop and CLI access to the model engines.
         let queue_wait = self.limits().generation_timeout;
         let report = self.service.run_scheduled_with_options(
-            Schedule { priority: Priority::Local, client: LOCAL_CLIENT, wait: queue_wait },
+            queue_wait,
             &transform, &job.routing, &job.cancel, on_event,
         );
         let (outcome, transcript, structure, mode, routing) = match report {
@@ -483,8 +470,6 @@ impl Orchestrator {
                     policy.confirm_destination();
                 }
                 let outcome = match report.outcome {
-                    // Answers are only shown; they never reach the target app.
-                    TransformOutcome::Ready { text } | TransformOutcome::Truncated { text } if report.mode == Mode::Answer => Outcome::Answered { text },
                     TransformOutcome::Ready { text } if report.routing.as_ref().is_some_and(|policy| !policy.auto_paste && (!job.destination.confirmed() || !policy.surface.can_reply())) => {
                         Outcome::Blocked {
                             text, reason: if report.routing.as_ref().is_some_and(|policy| !policy.surface.can_reply()) { BlockReason::GraphUnsupported } else { BlockReason::SurfaceUnconfirmed },
@@ -602,8 +587,6 @@ impl Orchestrator {
         }
     }
 }
-
-pub const LOCAL_CLIENT: &str = "local";
 
 #[cfg(test)]
 mod tests {
@@ -772,7 +755,7 @@ mod tests {
         let context = ActiveContext { window: TARGET, process_name: "promptify".into(), ..Default::default() };
         let h = harness(context, "write a friendly greeting", generator("Write a friendly greeting for a new colleague."), ContextPolicy::default(), Limits::default());
         h.orchestrator.set_auto_mode(true);
-        let job = h.orchestrator.begin_with_options(Mode::Prompt, JobOptions { use_personal_context: false, use_tools: false, auto_mode: false }).unwrap();
+        let job = h.orchestrator.begin_with_options(Mode::Prompt, JobOptions { use_personal_context: false, auto_mode: false }).unwrap();
         let result = h.orchestrator.finish(job, &[], &mut |_| {});
         assert!(matches!(result.outcome, Outcome::Inserted { .. }));
         assert!(!h.generator.calls.lock().unwrap().is_empty());
@@ -910,12 +893,22 @@ mod tests {
         let report = run(&h, Mode::Prompt);
         assert_eq!(report.structure, Some(StructureCheck::Repaired));
         assert_eq!(inserts(&h), 1);
+        let calls = h.generator.calls.lock().unwrap();
+        let repair = &calls[1];
+        assert_eq!(repair.len(), 2);
+        assert_eq!(repair[0].role, crate::prompt::Role::System);
+        assert_eq!(repair[1].role, crate::prompt::Role::User);
+        assert!(repair[0].content.contains("comma-separated earlier step numbers"));
+        assert!(repair[0].content.contains("retry conditions belong on the separate Loop: line"));
+        assert!(repair[1].content.contains("Write an email"));
+        assert!(!repair[1].content.contains(malformed));
+        drop(calls);
         let h = harness(chat_ctx(), "Write an email", FakeGenerator { output: malformed.into(), ..Default::default() }, ContextPolicy::default(), Limits::default());
         h.orchestrator.set_rendering(Rendering::Adaptive);
         let report = run(&h, Mode::Prompt);
         assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         assert_ne!(report.structure, Some(StructureCheck::KeptOriginal));
-        assert_eq!(h.generator.calls.lock().unwrap().len(), 2);
+        assert_eq!(h.generator.calls.lock().unwrap().len(), 3);
         assert_eq!(inserts(&h), 0);
     }
 
@@ -1014,16 +1007,16 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_options_are_captured_at_begin_and_do_not_change_answer_mode() {
+    fn adaptive_options_are_captured_at_begin_and_do_not_change_dictation() {
         let h = harness(chat_ctx(), "Write an email", generator("Write a concise email."), ContextPolicy::default(), Limits::default());
         h.orchestrator.set_rendering(Rendering::Adaptive);
         let job = h.orchestrator.begin(Mode::Prompt).unwrap();
         h.orchestrator.set_rendering(Rendering::Legacy);
         assert!(h.orchestrator.finish(job, &[], &mut |_| {}).routing.is_some());
         h.orchestrator.set_rendering(Rendering::Adaptive);
-        let answer = run(&h, Mode::Answer);
-        assert!(answer.routing.is_none());
-        assert!(matches!(answer.outcome, Outcome::Answered { .. }));
+        let dictation = run(&h, Mode::Dictation);
+        assert!(dictation.routing.is_none());
+        assert!(matches!(dictation.outcome, Outcome::Inserted { .. }));
     }
 
     #[test]
@@ -1343,7 +1336,7 @@ mod tests {
     fn unrepairable_persona_drafts_are_never_pasted_or_saved() {
         let oversized = format!("{GOOD_GRAPH}{}", "x".repeat(Limits::default().max_output_chars));
         for repair in [PERSONA_GRAPH, BAD_GRAPH, oversized.as_str()] {
-            let h = harness(chat_ctx(), "commit the changes", scripted(PERSONA_GRAPH, &[repair]), ContextPolicy::default(), Limits::default());
+            let h = harness(chat_ctx(), "commit the changes", scripted(PERSONA_GRAPH, &[repair]), ContextPolicy::default(), Limits { max_structure_repairs: 1, ..Limits::default() });
             let report = run(&h, Mode::Prompt);
             assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, ref detail } if detail.as_deref().is_some_and(|d| d.contains("role/persona"))));
             assert_eq!(calls(&h), 2);
@@ -1367,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn persona_text_in_reasoning_dictation_and_answers_is_not_rewritten() {
+    fn persona_text_in_reasoning_and_dictation_is_not_rewritten() {
         let h = harness(chat_ctx(), "commit the changes", generator(&format!("<think>{PERSONA_GRAPH}</think>\n{GOOD_GRAPH}")), ContextPolicy::default(), Limits::default());
         assert_eq!(run(&h, Mode::Prompt).structure, Some(StructureCheck::Valid));
         assert_eq!(calls(&h), 1, "only the sanitized final prompt is checked");
@@ -1375,9 +1368,6 @@ mod tests {
         let h = harness(chat_ctx(), literal, generator("unused"), ContextPolicy::default(), Limits::default());
         assert_eq!(run(&h, Mode::Dictation).outcome, Outcome::Inserted { text: literal.into() });
         assert_eq!(calls(&h), 0);
-        let h = harness(chat_ctx(), "explain this phrase", generator(literal), ContextPolicy::default(), Limits::default());
-        assert_eq!(run(&h, Mode::Answer).outcome, Outcome::Answered { text: literal.into() });
-        assert_eq!(calls(&h), 1);
     }
 
     #[test]
@@ -1411,7 +1401,7 @@ mod tests {
             (BAD_GRAPH, hidden_bad.as_str(), Some(StructureCheck::Repaired)),
             (BAD_GRAPH, hidden_good.as_str(), None),
         ] {
-            let h = harness(chat_ctx(), "x", scripted(draft, &[repair]), ContextPolicy::default(), Limits::default());
+            let h = harness(chat_ctx(), "x", scripted(draft, &[repair]), ContextPolicy::default(), Limits { max_structure_repairs: 1, ..Limits::default() });
             let report = run(&h, Mode::Prompt);
             if expected.is_some() {
                 assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() }, "{draft}");
@@ -1469,7 +1459,7 @@ mod tests {
 
     #[test]
     fn failed_repair_rejects_the_draft_and_stays_bounded() {
-        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits { max_structure_repairs: 1, ..Limits::default() });
         let report = run(&h, Mode::Prompt);
         assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         assert_eq!(report.structure, None);
@@ -1479,6 +1469,22 @@ mod tests {
         let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[GOOD_GRAPH]), ContextPolicy::default(), limits);
         assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
         assert_eq!(calls(&h), 1);
+    }
+
+    #[test]
+    fn quality_defaults_allow_a_second_repair_and_still_fail_closed() {
+        assert_eq!(Limits::default().max_structure_repairs, 2);
+        let h = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let report = run(&h, Mode::Prompt);
+        assert_eq!(report.outcome, Outcome::Inserted { text: GOOD_GRAPH.into() });
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert_eq!(calls(&h), 3);
+        let exhausted = harness(chat_ctx(), "x", scripted(BAD_GRAPH, &[BAD_GRAPH, BAD_GRAPH, GOOD_GRAPH]), ContextPolicy::default(), Limits::default());
+        let report = run(&exhausted, Mode::Prompt);
+        assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::InvalidPrompt, .. }));
+        assert_eq!(calls(&exhausted), 3);
+        assert_eq!(inserts(&exhausted), 0);
+        assert!(!report.history_saved);
     }
 
     #[test]
@@ -1502,11 +1508,11 @@ mod tests {
     }
 
     #[test]
-    fn local_job_waits_for_remote_holder_and_fails_closed_when_busy() {
+    fn local_job_waits_for_engine_holder_and_fails_closed_when_busy() {
         let limits = Limits { generation_timeout: Duration::from_millis(40), ..Limits::default() };
         let h = harness(chat_ctx(), "x", generator("Prompt."), ContextPolicy::default(), limits);
         let scheduler = h.orchestrator.service().scheduler();
-        let held = scheduler.acquire(Priority::Device, "phone", &CancelToken::default(), Instant::now() + Duration::from_secs(5)).unwrap();
+        let held = scheduler.acquire(&CancelToken::default(), Instant::now() + Duration::from_secs(5)).unwrap();
         let report = run(&h, Mode::Prompt);
         assert!(matches!(report.outcome, Outcome::Failed { reason: FailReason::EngineBusy, .. }));
         assert!(h.generator.calls.lock().unwrap().is_empty());
@@ -1533,22 +1539,6 @@ mod tests {
 
     fn notepad_ctx() -> ActiveContext {
         ActiveContext { window: TARGET, process_name: "notepad.exe".into(), window_title: "notes".into(), url: None }
-    }
-
-    #[test]
-    fn answers_are_shown_never_pasted_or_recorded() {
-        let h = harness(chat_ctx(), "what is a mutex", generator("A lock that allows one owner at a time."), ContextPolicy::default(), Limits::default());
-        let report = run(&h, Mode::Answer);
-        assert_eq!(report.outcome, Outcome::Answered { text: "A lock that allows one owner at a time.".into() });
-        assert_eq!(inserts(&h), 0);
-        assert!(!report.history_saved && records(&h).is_empty());
-        assert!(last_user_message(&h).contains("<transcript>\nwhat is a mutex\n</transcript>"));
-        let truncated = harness(chat_ctx(), "x", FakeGenerator { output: "Partial".into(), finish: Some(FinishReason::Length), ..Default::default() }, ContextPolicy::default(), Limits::default());
-        assert!(matches!(run(&truncated, Mode::Answer).outcome, Outcome::Answered { .. }));
-        assert_eq!(inserts(&truncated), 0);
-        let terminal = ActiveContext { window: TARGET, process_name: "WindowsTerminal.exe".into(), window_title: "pwsh".into(), url: None };
-        let h = harness(terminal, "list the steps", generator("1. Build\n2. Test"), ContextPolicy::default(), Limits::default());
-        assert_eq!(run(&h, Mode::Answer).outcome, Outcome::Answered { text: "1. Build\n2. Test".into() }, "answers keep line breaks in single-line apps");
     }
 
     #[test]

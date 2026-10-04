@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type Mode = "prompt" | "dictation" | "answer";
-export type Stage = "transcribing" | "researching" | "generating" | "revising" | "inserting";
+export type Mode = "prompt" | "dictation";
+export type Stage = "transcribing" | "generating" | "revising" | "inserting";
 export type Rendering = "legacy" | "adaptive";
 export type PromptForm = "graph" | "inline_graph";
 export type PromptSurface =
@@ -59,7 +59,6 @@ export interface PromptRouting {
 
 export type Outcome =
   | { kind: "inserted"; text: string }
-  | { kind: "answered"; text: string }
   | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed" | "surface_unconfirmed" | "graph_unsupported"; detail: string | null }
   | { kind: "no_speech" }
   | { kind: "cancelled" }
@@ -97,7 +96,7 @@ export interface AppInfo {
   desktop_integration_enabled?: boolean;
   activation_bindings?: { id: string; trigger_description: string }[];
   input_device: string | null;
-  hotkeys: { prompt: string; dictation: string; answer: string | null; cancel: string };
+  hotkeys: { prompt: string; dictation: string; cancel: string };
   hotkey_errors: string[];
   prompt_hotkey_error: string | null;
   hotkeys_paused: boolean;
@@ -200,88 +199,6 @@ export interface HistoryEntry {
   inserted: boolean;
 }
 
-export interface ProfileSummary {
-  id: string;
-  name: string;
-  kind: string;
-}
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-export interface PreviewOutput {
-  profileId: string;
-  profileName: string;
-  messages: ChatMessage[];
-  routing?: PromptRouting | null;
-}
-
-export interface PreviewInput {
-  transcript: string;
-  processName: string;
-  windowTitle: string;
-  url: string | null;
-  surroundingText: string | null;
-  routing?: RoutingOptions;
-}
-
-export interface Device {
-  id: string;
-  name: string;
-  public_key: string;
-  paired_unix: number;
-  last_seen_unix: number | null;
-}
-
-export type RelayStatus =
-  | { state: "disabled" }
-  | { state: "connecting" }
-  | { state: "connected" }
-  | { state: "error"; message: string };
-
-export interface RemoteInfo {
-  mobile_available: boolean;
-  enabled: boolean;
-  relay_url: string | null;
-  lan_direct: boolean;
-  lan_discovery: boolean;
-  status: { relay: RelayStatus; listen: string | null; sessions: number; devices: number; pairing_expires_unix: number | null } | null;
-  error: string | null;
-  devices: Device[];
-  api_token_path: string;
-}
-
-export interface OfferInfo {
-  uri: string;
-  svg: string;
-  expires_unix: number;
-}
-
-export interface McpServerInfo {
-  name: string;
-  remote: boolean;
-  enabled: boolean;
-  profiles: string[];
-  hooks: number;
-  loop_tools: string[];
-  transcript_allowed: boolean;
-}
-
-export interface McpInfo {
-  path: string;
-  error: string | null;
-  active: boolean;
-  servers: McpServerInfo[];
-}
-
-export interface McpFile {
-  text: string;
-  exists: boolean;
-  template: string;
-}
-
 export const api = {
   updateInfo: () => invoke<UpdateInfo>("update_info"),
   checkForUpdates: () => invoke<UpdateInfo>("check_for_updates"),
@@ -301,12 +218,10 @@ export const api = {
     invoke<OnboardingStatus>("confirm_onboarding_paste", { attemptId, jobId, text }),
   completeOnboarding: () => invoke<OnboardingStatus>("complete_onboarding"),
   resumeOnboardingHotkeys: () => invoke<OnboardingStatus>("resume_onboarding_hotkeys"),
-  listProfiles: () => invoke<ProfileSummary[]>("list_profiles"),
   routingState: () => invoke<RoutingState>("routing_state"),
   setRendering: (rendering: Rendering) => invoke<RoutingState>("set_rendering", { rendering }),
   promptCatalog: () => invoke<PromptCatalog>("prompt_catalog"),
   queuePromptRouting: (options: RoutingOptions) => invoke<void>("queue_prompt_routing", { options }),
-  previewPrompt: (input: PreviewInput) => invoke<PreviewOutput>("preview_prompt", { input }),
   cleanDictation: (text: string) => invoke<string>("clean_dictation", { text }),
   copyLastResult: () => invoke<void>("copy_last_result"),
   hideOverlay: () => invoke<void>("hide_overlay"),
@@ -331,17 +246,4 @@ export const api = {
   restoreInsertionClipboard: () => invoke<void>("restore_insertion_clipboard"),
   setVocabulary: (vocabulary: Vocabulary) => invoke<Vocabulary>("set_vocabulary", { vocabulary }),
   setScreenTextApps: (apps: string[]) => invoke<void>("set_screen_text_apps", { apps }),
-  remoteInfo: () => invoke<RemoteInfo>("remote_info"),
-  setRemoteSettings: (enabled: boolean, relayUrl: string | null, lanDirect: boolean, lanDiscovery: boolean) =>
-    invoke<void>("set_remote_settings", { enabled, relayUrl, lanDirect, lanDiscovery }),
-  createPairingOffer: () => invoke<OfferInfo>("create_pairing_offer"),
-  cancelPairing: () => invoke<void>("cancel_pairing"),
-  removeDevice: (id: string) => invoke<boolean>("remove_device", { id }),
-  renameDevice: (id: string, name: string) => invoke<boolean>("rename_device", { id, name }),
-  mcpInfo: () => invoke<McpInfo>("mcp_info"),
-  mcpReload: () => invoke<McpInfo>("mcp_reload"),
-  mcpTest: (name: string) => invoke<string[]>("mcp_test", { name }),
-  mcpRead: () => invoke<McpFile>("mcp_read"),
-  mcpValidate: (text: string) => invoke<number>("mcp_validate", { text }),
-  mcpSave: (text: string, original: string) => invoke<McpInfo>("mcp_save", { text, original }),
 };
