@@ -17,7 +17,7 @@ const CONTROL_L: i32 = 0xffe3;
 const SHIFT_L: i32 = 0xffe1;
 const KEY_V: i32 = 0x0076;
 const KEY_GAP: Duration = Duration::from_millis(8);
-const PERMISSION_HELP: &str = "Open Promptify Settings and choose Grant paste permission.";
+const PERMISSION_HELP: &str = "Open Promptify Settings and choose Enable desktop integration.";
 
 struct Active {
     proxy: RemoteDesktop,
@@ -143,7 +143,7 @@ pub fn has_saved_permission() -> Result<bool, String> {
     read_token(path).map(|token| token.is_some())
 }
 
-/// Permission creation/restoration runs only at startup or on an explicit Settings action.
+/// Permission creation/restoration runs only on an explicit Settings or native-test action.
 pub fn grant(on_closed: impl FnOnce() + Send + 'static) -> Result<(), String> {
     let _grant = GRANT.try_lock().map_err(|_| "A paste permission request is already running.".to_string())?;
     if active().is_ok() {
@@ -208,10 +208,17 @@ fn paste_keys(terminal: bool, mut send: impl FnMut(i32, KeyState) -> Result<(), 
 }
 
 pub fn paste(target: &WindowIdentity, terminal: bool) -> Result<(), String> {
+    paste_guarded(target, terminal, &|| true)
+}
+
+pub fn paste_guarded(target: &WindowIdentity, terminal: bool, allowed: &dyn Fn() -> bool) -> Result<(), String> {
     let session = active()?;
     let current = crate::system_context::SystemContext.foreground().map_err(|e| e.0)?;
     if current != *target {
         return Err("The focused window changed before the paste keystroke. Nothing was pasted.".into());
+    }
+    if !allowed() {
+        return Err("Insertion was cancelled or desktop integration changed before keyboard delivery. Nothing was pasted.".into());
     }
     let result = paste_keys(terminal, |key, state| {
         let result = zbus::block_on(session.proxy.notify_keyboard_keysym(&session.session, key, state, Default::default()))

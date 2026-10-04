@@ -150,11 +150,12 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
 
   const index = STEPS.findIndex((step) => step.id === status.step);
   const failedLoad = status.speech.state === "error" || status.language.state === "error";
-  const inputReady = info.engines_ready && !!info.input_device && !info.prompt_hotkey_error && !info.hotkeys_paused && info.paste_permission !== "required" && !info.desktop_error;
+  const inputReady = info.engines_ready && !!info.input_device && !info.prompt_hotkey_error && !info.hotkeys_paused && info.paste_permission !== "required" && !info.desktop_error && info.desktop_integration_enabled !== false;
   const passed = status.practice.phase === "passed";
   const modelReady = info.engines_ready && status.speech.state === "ready" && status.language.state === "ready";
   const active = status.practice.phase === "recording" || status.practice.phase === "processing";
-  const shortcut = info.hotkeys.prompt.replace("CommandOrControl", navigator.userAgent.includes("Mac") ? "Cmd" : "Ctrl");
+  const shortcut = info.activation_bindings?.find((binding) => binding.id === "prompt")?.trigger_description
+    ?? info.hotkeys.prompt.replace("CommandOrControl", navigator.userAgent.includes("Mac") ? "Cmd" : "Ctrl");
   const microphoneHelp = navigator.userAgent.includes("Windows")
     ? "In Windows Settings, check System > Sound > Input and Privacy & security > Microphone, including desktop app access."
     : navigator.userAgent.includes("Mac")
@@ -217,7 +218,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
           <p>Choose <strong>Prepare practice</strong>, then press <kbd>{shortcut}</kbd>, say <em>&quot;Write a friendly greeting for a new colleague&quot;</em>, and press the same shortcut again. You can also hold to talk. Press <kbd>Esc</kbd> to cancel.</p>
           <p className="hint">Keep the practice field focused until the prompt appears. This exercise stays local and does not use connected tools or save its text to history.</p>
           {!inputReady && <p role="alert" className="error">The required input or model configuration changed. Go back to check it before trying again.</p>}
-          {(!inputReady && (info.paste_permission === "required" || info.desktop_error)) && <DesktopIntegration info={info} onChange={onChange} />}
+          {(!inputReady && (info.paste_permission === "required" || info.desktop_error || info.desktop_integration_enabled === false)) && <DesktopIntegration info={info} onChange={onChange} />}
           <button disabled={busy || active || !inputReady || !listening} onClick={() => void arm()}>Prepare practice</button>
           <label className="practice-label" htmlFor="setup-practice">Practice field
             <textarea

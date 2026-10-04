@@ -107,6 +107,10 @@ pub trait ContextProvider: Send + Sync {
     /// Text of the focused element. Only called for apps the user opted in.
     fn focused_text(&self, window: &WindowIdentity) -> Result<Option<FocusedText>, BackendError>;
     fn foreground(&self) -> Result<WindowIdentity, BackendError>;
+
+    fn destination(&self, _window: &WindowIdentity) -> Result<crate::delivery::Destination, BackendError> {
+        Ok(crate::delivery::Destination::default())
+    }
 }
 
 pub trait Transcriber: Send + Sync {
@@ -124,6 +128,19 @@ pub trait Generator: Send + Sync {
 
 pub trait Inserter: Send + Sync {
     fn insert(&self, target: &WindowIdentity, text: &str, chord: PasteChord) -> Result<(), BackendError>;
+
+    fn insert_into(&self, target: &WindowIdentity, destination: &crate::delivery::Destination, text: &str, chord: PasteChord) -> Result<(), BackendError> {
+        let _ = destination;
+        self.insert(target, text, chord)
+    }
+
+    /// Native adapters recheck this after staging and immediately before keyboard delivery.
+    fn insert_guarded(&self, target: &WindowIdentity, destination: &crate::delivery::Destination, text: &str, chord: PasteChord, allowed: &dyn Fn() -> bool) -> Result<(), BackendError> {
+        if !allowed() {
+            return Err(BackendError("Insertion was cancelled or desktop integration changed. Nothing was pasted.".into()));
+        }
+        self.insert_into(target, destination, text, chord)
+    }
 }
 
 pub trait History: Send + Sync {
@@ -252,6 +269,15 @@ pub struct JobReport {
     pub structure: Option<StructureCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing: Option<ResolvedPromptPolicy>,
+    /// Native dispatch is not proof that an application consumed the paste.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryStatus {
+    SentUnverified,
 }
 
 struct BusyGuard(Arc<AtomicBool>);
@@ -268,6 +294,8 @@ pub struct Job {
     pub mode: Mode,
     pub target: ActiveContext,
     pub profile_id: String,
+    destination: crate::delivery::Destination,
+    delivery_generation: u64,
     options: JobOptions,
     routing: RoutingOptions,
     surrounding: Option<AdmittedText>,
@@ -306,7 +334,8 @@ pub struct Orchestrator {
     busy: Arc<AtomicBool>,
     next_id: AtomicU64,
     auto_mode: AtomicBool,
-    code_chat_paste: AtomicBool,
+    // Even generations permit delivery; changing permission invalidates in-flight jobs.
+    delivery_generation: AtomicU64,
     rendering: std::sync::RwLock<Rendering>,
     next_routing: std::sync::Mutex<Option<RoutingOptions>>,
 }
@@ -326,7 +355,7 @@ impl Orchestrator {
             busy: Arc::default(),
             next_id: AtomicU64::new(1),
             auto_mode: AtomicBool::new(false),
-            code_chat_paste: AtomicBool::new(false),
+            delivery_generation: AtomicU64::new(0),
             rendering: Default::default(),
             next_routing: Default::default(),
         }
@@ -337,8 +366,10 @@ impl Orchestrator {
         self.auto_mode.store(enabled, Ordering::SeqCst);
     }
 
-    pub fn set_code_chat_paste(&self, enabled: bool) {
-        self.code_chat_paste.store(enabled, Ordering::SeqCst);
+    pub fn set_delivery_enabled(&self, enabled: bool) {
+        let _ = self.delivery_generation.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+            ((generation & 1 == 0) != enabled).then(|| generation.wrapping_add(1))
+        });
     }
 
     pub fn set_rendering(&self, rendering: Rendering) {
@@ -383,7 +414,9 @@ impl Orchestrator {
             return Err(BeginError::Busy);
         }
         let busy = BusyGuard(self.busy.clone());
+        let delivery_generation = self.delivery_generation.load(Ordering::SeqCst);
         let target = self.context.identify().map_err(BeginError::Context)?;
+        let destination = self.context.destination(&target.window).map_err(BeginError::Context)?;
         let profile_id = self.profiles().resolve(&target).id.clone();
         let policy = self.policy.read().unwrap_or_else(|p| p.into_inner()).clone();
         let surrounding = if options.use_personal_context && mode != Mode::Dictation && policy.allows_surrounding_text(&target) {
@@ -395,25 +428,18 @@ impl Orchestrator {
         } else {
             None
         };
-        let mut routing = if mode == Mode::Prompt && options.use_personal_context {
+        let routing = if mode == Mode::Prompt && options.use_personal_context {
             self.next_routing.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_else(|| self.routing_options())
         } else {
             RoutingOptions::default()
         };
-        let profile = self.profiles().resolve(&target);
-        if routing.rendering == Rendering::Adaptive
-            && routing.surface.is_none()
-            && self.code_chat_paste.load(Ordering::SeqCst)
-            && ["vscode", "cursor"].contains(&profile.id.as_str())
-            && profile.directly_matches(&target)
-        {
-            routing.surface = Some(crate::routing::Surface::CodeChat);
-        }
         Ok(Job {
             id: self.next_id.fetch_add(1, Ordering::SeqCst),
             mode,
             target,
             profile_id,
+            destination,
+            delivery_generation,
             options,
             routing,
             surrounding,
@@ -452,11 +478,14 @@ impl Orchestrator {
             &transform, &job.routing, &job.cancel, on_event,
         );
         let (outcome, transcript, structure, mode, routing) = match report {
-            Ok(report) => {
+            Ok(mut report) => {
+                if job.destination.confirmed() && let Some(policy) = &mut report.routing {
+                    policy.confirm_destination();
+                }
                 let outcome = match report.outcome {
                     // Answers are only shown; they never reach the target app.
                     TransformOutcome::Ready { text } | TransformOutcome::Truncated { text } if report.mode == Mode::Answer => Outcome::Answered { text },
-                    TransformOutcome::Ready { text } if report.routing.as_ref().is_some_and(|policy| !policy.auto_paste) => {
+                    TransformOutcome::Ready { text } if report.routing.as_ref().is_some_and(|policy| !policy.auto_paste && (!job.destination.confirmed() || !policy.surface.can_reply())) => {
                         Outcome::Blocked {
                             text, reason: if report.routing.as_ref().is_some_and(|policy| !policy.surface.can_reply()) { BlockReason::GraphUnsupported } else { BlockReason::SurfaceUnconfirmed },
                             detail: report.routing.as_ref().map(|policy| policy.warnings.join(" ")),
@@ -484,6 +513,7 @@ impl Orchestrator {
             (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, mode, transcript, text, false, routing.as_ref()),
             _ => false,
         };
+        let delivery = matches!(outcome, Outcome::Inserted { .. }).then_some(DeliveryStatus::SentUnverified);
         JobReport {
             job_id: job.id,
             profile_id: job.profile_id.clone(),
@@ -492,6 +522,7 @@ impl Orchestrator {
             history_saved,
             structure,
             routing,
+            delivery,
         }
     }
 
@@ -513,6 +544,13 @@ impl Orchestrator {
 
     fn insert(&self, job: &Job, profile: &Profile, text: String, on_event: &mut dyn FnMut(JobEvent<'_>)) -> Outcome {
         on_event(JobEvent::Stage(Stage::Inserting));
+        let delivery_generation = self.delivery_generation.load(Ordering::SeqCst);
+        if delivery_generation & 1 != 0 || delivery_generation != job.delivery_generation {
+            return Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some("Desktop integration is disabled or changed during this job. Start a new job after enabling it.".into()) };
+        }
+        if job.destination.protected() {
+            return Outcome::Blocked { text, reason: BlockReason::SurfaceUnconfirmed, detail: Some("The destination is protected or not writable. Nothing was pasted.".into()) };
+        }
         match self.context.foreground() {
             Ok(window) if window == job.target.window => {}
             Ok(window) => {
@@ -540,11 +578,25 @@ impl Orchestrator {
                 Err(error) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(error.0) },
             }
         }
+        if job.destination.token.is_some() {
+            match self.context.destination(&job.target.window) {
+                Ok(current) if job.destination.unchanged(&current) => {}
+                Ok(_) => return Outcome::Blocked { text, reason: BlockReason::FocusChanged, detail: Some("The focused input changed or could not be confirmed. Nothing was pasted.".into()) },
+                Err(error) => return Outcome::Blocked { text, reason: BlockReason::FocusUnknown, detail: Some(error.0) },
+            }
+        }
         // Cancellation outranks insertion; this is the last check before the paste effect.
         if job.cancel.is_cancelled() {
             return Outcome::Cancelled;
         }
-        match self.inserter.insert(&job.target.window, &text, profile.paste) {
+        let delivery_generation = self.delivery_generation.load(Ordering::SeqCst);
+        if delivery_generation & 1 != 0 || delivery_generation != job.delivery_generation {
+            return Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some("Desktop integration changed before insertion. Nothing was pasted. Start a new job.".into()) };
+        }
+        let allowed = || !job.cancel.is_cancelled()
+            && job.delivery_generation & 1 == 0
+            && self.delivery_generation.load(Ordering::SeqCst) == job.delivery_generation;
+        match self.inserter.insert_guarded(&job.target.window, &job.destination, &text, profile.paste, &allowed) {
             Ok(()) => Outcome::Inserted { text },
             Err(err) => Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some(err.0) },
         }
@@ -571,9 +623,13 @@ mod tests {
         foreground: Mutex<Option<WindowIdentity>>,
         focused_calls: AtomicUsize,
         cancel_on_foreground: Mutex<Option<CancelToken>>,
+        destination: Mutex<crate::delivery::Destination>,
     }
 
     impl ContextProvider for FakeContext {
+        fn destination(&self, _: &WindowIdentity) -> Result<crate::delivery::Destination, BackendError> {
+            Ok(self.destination.lock().unwrap().clone())
+        }
         fn identify(&self) -> Result<ActiveContext, BackendError> {
             Ok(self.next_identity.lock().unwrap().clone().unwrap_or_else(|| self.ctx.clone()))
         }
@@ -756,6 +812,78 @@ mod tests {
         h.inserter.calls.lock().unwrap().len()
     }
 
+    fn writable_destination(token: &str) -> crate::delivery::Destination {
+        crate::delivery::Destination { token: Some(token.into()), writable: Some(true), secure: Some(false) }
+    }
+
+    #[test]
+    fn confirmed_field_allows_adaptive_paste_without_brand_consent() {
+        for process in ["Code.exe", "unknown-app"] {
+            let h = harness(ActiveContext { window: TARGET, process_name: process.into(), ..Default::default() }, "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+            *h.context.destination.lock().unwrap() = writable_destination("chat");
+            h.orchestrator.set_rendering(Rendering::Adaptive);
+            let report = run(&h, Mode::Prompt);
+            assert!(matches!(report.outcome, Outcome::Inserted { .. }), "{process}: {:?}", report.outcome);
+            assert_eq!(report.delivery, Some(DeliveryStatus::SentUnverified));
+            assert!(report.routing.as_ref().unwrap().auto_paste);
+            assert_eq!(h.context.focused_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(inserts(&h), 1);
+        }
+    }
+
+    #[test]
+    fn field_change_inside_same_window_blocks_native_effect() {
+        let h = harness(chat_ctx(), "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+        *h.context.destination.lock().unwrap() = writable_destination("chat");
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        *h.context.destination.lock().unwrap() = writable_destination("editor");
+        let report = h.orchestrator.finish(job, &[], &mut |_| {});
+        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, .. }), "{:?}", report.outcome);
+        assert_eq!(report.delivery, None);
+        assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn protected_fields_block_prompt_and_dictation() {
+        for mode in [Mode::Prompt, Mode::Dictation] {
+            let h = harness(chat_ctx(), "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
+            *h.context.destination.lock().unwrap() = crate::delivery::Destination { secure: Some(true), ..writable_destination("password") };
+            assert!(matches!(run(&h, mode).outcome, Outcome::Blocked { .. }));
+            assert_eq!(inserts(&h), 0);
+        }
+
+    }
+
+    #[test]
+    fn disabling_delivery_blocks_an_already_started_job() {
+        let h = harness(chat_ctx(), "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        h.orchestrator.set_delivery_enabled(false);
+        assert!(matches!(h.orchestrator.finish(job, &[], &mut |_| {}).outcome, Outcome::Blocked { reason: BlockReason::InsertFailed, .. }));
+        assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn re_enabling_delivery_never_resumes_an_old_job() {
+        let h = harness(chat_ctx(), "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        h.orchestrator.set_delivery_enabled(false);
+        h.orchestrator.set_delivery_enabled(true);
+        assert!(matches!(h.orchestrator.finish(job, &[], &mut |_| {}).outcome, Outcome::Blocked { reason: BlockReason::InsertFailed, .. }));
+        assert_eq!(inserts(&h), 0);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { .. }));
+        assert_eq!(inserts(&h), 1);
+    }
+
+    #[test]
+    fn guarded_inserter_rejects_delivery_without_calling_legacy_backend() {
+        let h = harness(chat_ctx(), "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+        assert!(h.inserter.insert_guarded(&TARGET, &Default::default(), "test", PasteChord::Standard, &|| false).is_err());
+        assert_eq!(inserts(&h), 0);
+        h.inserter.insert_guarded(&TARGET, &Default::default(), "test", PasteChord::Standard, &|| true).unwrap();
+        assert_eq!(inserts(&h), 1);
+    }
+
     #[test]
     fn adaptive_tasks_keep_the_graph_mandate_with_matching_examples() {
         let h = harness(chat_ctx(), "Write an email asking for meeting notes",
@@ -811,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn remembered_code_chat_consent_enables_paste_only_in_matching_apps() {
+    fn code_chat_requires_field_evidence_not_brand_consent() {
         for process in ["code", "cursor"] {
             let ctx = ActiveContext {
                 window: TARGET, process_name: process.into(),
@@ -820,26 +948,25 @@ mod tests {
             let h = harness(ctx, "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
             h.orchestrator.set_rendering(Rendering::Adaptive);
             assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
-            h.orchestrator.set_code_chat_paste(true);
+            *h.context.destination.lock().unwrap() = writable_destination("composer");
             assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { .. }));
             assert_eq!(inserts(&h), 1);
-            h.orchestrator.set_code_chat_paste(false);
+            *h.context.destination.lock().unwrap() = crate::delivery::Destination::default();
             assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
         }
         let ctx = ActiveContext { window: TARGET, process_name: "excel.exe".into(), ..Default::default() };
         let h = harness(ctx, "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
         h.orchestrator.set_rendering(Rendering::Adaptive);
-        h.orchestrator.set_code_chat_paste(true);
         assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
         assert_eq!(inserts(&h), 0);
     }
 
     #[test]
-    fn code_chat_consent_preserves_explicit_surface_and_focus_checks() {
+    fn confirmed_field_preserves_explicit_surface_and_focus_checks() {
         let ctx = ActiveContext { window: TARGET, process_name: "code".into(), ..Default::default() };
         let h = harness(ctx, "Explain a heat pump", generator("Explain a heat pump."), ContextPolicy::default(), Limits::default());
         h.orchestrator.set_rendering(Rendering::Adaptive);
-        h.orchestrator.set_code_chat_paste(true);
+        *h.context.destination.lock().unwrap() = writable_destination("composer");
         h.orchestrator.queue_routing(RoutingOptions {
             rendering: Rendering::Adaptive, surface: Some(crate::routing::Surface::Literal), ..Default::default()
         }).unwrap();

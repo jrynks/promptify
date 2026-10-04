@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod context;
+pub mod delivery;
 pub mod dictation;
 pub mod eval;
 pub mod history;

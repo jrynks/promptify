@@ -16,6 +16,7 @@ const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_SURROUNDING_CHARS: usize = 4_000;
 const MAX_FIELD_CHARS: usize = 2_048;
 const MAX_HISTORY_LISTED: usize = 200;
+static DESKTOP_INTEGRATION_CHANGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn check_len(label: &str, value: &str, max: usize) -> Result<(), String> {
     if value.chars().count() > max {
@@ -55,10 +56,31 @@ pub struct AppInfo {
     /// Wayland only: whether the one-time remote-input permission for pasting was granted.
     paste_permission: &'static str,
     desktop_error: Option<String>,
+    activation_bindings: Vec<ActivationBinding>,
+    desktop_integration_enabled: bool,
+    clipboard_restore_pending: bool,
+}
+
+#[derive(Serialize)]
+pub struct ActivationBinding {
+    id: String,
+    trigger_description: String,
+}
+
+fn activation_bindings() -> Vec<ActivationBinding> {
+    #[cfg(target_os = "linux")]
+    return crate::portal_shortcuts::bindings().into_iter().map(|binding| ActivationBinding {
+        id: binding.id, trigger_description: binding.trigger_description,
+    }).collect();
+    #[cfg(not(target_os = "linux"))]
+    Vec::new()
 }
 
 #[cfg(target_os = "linux")]
 fn paste_permission() -> &'static str {
+    if crate::wayland_paste::applies() && !crate::portal_shortcuts::active() {
+        return "required";
+    }
     match crate::wayland_paste::status() {
         crate::wayland_paste::PermissionState::NotNeeded => "not_needed",
         crate::wayland_paste::PermissionState::Granted => "granted",
@@ -66,24 +88,92 @@ fn paste_permission() -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn paste_permission() -> &'static str {
+    if crate::destination_macos::trusted() { "granted" } else { "required" }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn paste_permission() -> &'static str {
     "not_needed"
 }
 
 #[tauri::command]
 pub async fn grant_paste_permission(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || grant_desktop_integration(&app))
+        .await.map_err(|error| format!("Desktop integration permission request failed: {error}"))?
+}
+
+fn grant_desktop_integration(app: &AppHandle) -> Result<(), String> {
+    let _change = DESKTOP_INTEGRATION_CHANGE.try_lock()
+        .map_err(|_| "A desktop integration change is already running. Finish or cancel the system dialog before trying again.".to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let result = crate::destination_macos::request_permission().map_err(|error| error.0);
+        onboarding::notify(app);
+        result?;
+        enable_integration(app)?;
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if crate::wayland_paste::applies() {
         let closed_app = app.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || crate::wayland_paste::grant(move || {
+        let shortcut_app = app.clone();
+        let result = (|| {
+            crate::wayland_paste::grant(move || {
             let state = closed_app.state::<AppState>();
             onboarding::invalidate(&state, Some("Automatic paste permission was closed. Grant permission and try practice again."));
             onboarding::notify(&closed_app);
-        })).await.map_err(|e| format!("Paste permission request failed: {e}"))?;
-        onboarding::notify(&app);
-        return result;
+            })?;
+            if let Err(error) = crate::portal_shortcuts::grant(shortcut_app) {
+                crate::portal_shortcuts::stop();
+                crate::wayland_paste::shutdown();
+                return Err(error);
+            }
+            Ok(())
+        })();
+        onboarding::notify(app);
+        result?;
+        if let Err(error) = enable_integration(app) {
+            crate::portal_shortcuts::stop();
+            crate::wayland_paste::shutdown();
+            onboarding::notify(app);
+            return Err(error);
+        }
+        return Ok(());
     }
+    #[cfg(not(target_os = "macos"))]
+    enable_integration(app)?;
+    #[cfg(not(target_os = "macos"))]
+    Ok(())
+}
+
+fn enable_integration(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    settings::update(&state.settings, &state.data_dir, |settings| settings.desktop_integration_enabled = true)?;
+    state.orchestrator.set_delivery_enabled(true);
+    onboarding::notify(app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn restore_insertion_clipboard() -> Result<(), String> {
+    crate::insert::restore_previous().map_err(|error| error.0)
+}
+
+#[tauri::command]
+pub fn disable_desktop_integration(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let _change = DESKTOP_INTEGRATION_CHANGE.try_lock()
+        .map_err(|_| "A desktop integration change is already running. Finish or cancel the system dialog before disabling integration.".to_string())?;
+    settings::update(&state.settings, &state.data_dir, |settings| settings.desktop_integration_enabled = false)?;
+    state.orchestrator.set_delivery_enabled(false);
+    #[cfg(target_os = "linux")]
+    {
+        crate::portal_shortcuts::stop();
+        crate::wayland_paste::shutdown();
+    }
+    onboarding::invalidate(&state, Some("Desktop integration was disabled. Enable it before practice."));
+    onboarding::notify(&app);
     Ok(())
 }
 
@@ -123,11 +213,14 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         modifier_keyboard: settings.modifier_keyboard.clone(),
         modifier_keyboard_devices,
         auto_mode: settings.auto_mode,
-        code_chat_paste: settings.code_chat_paste,
+        code_chat_paste: false,
         vocabulary: settings.vocabulary.clone(),
         screen_text_apps: settings.screen_text_apps.clone(),
         paste_permission: paste_permission(),
         desktop_error: desktop_error(),
+        activation_bindings: activation_bindings(),
+        desktop_integration_enabled: settings.desktop_integration_enabled,
+        clipboard_restore_pending: crate::insert::restoration_pending(),
     }
 }
 
@@ -311,21 +404,14 @@ pub fn set_modifier_hold(app: AppHandle, state: State<'_, AppState>, enabled: bo
 
 #[tauri::command]
 pub fn set_modifier_keyboard(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
-    if !crate::modifier_hook::keyboards()?.iter().any(|keyboard| keyboard.path == path) {
-        return Err("Select a currently connected physical keyboard from the list.".into());
-    }
-    settings::update(&state.settings, &state.data_dir, |settings| settings.modifier_keyboard = Some(path))?;
-    let enabled = state.settings.read().unwrap().modifier_hold;
-    crate::modifier_hook::apply(&app, &state.modifier_hook, false)?;
-    let result = crate::modifier_hook::apply(&app, &state.modifier_hook, enabled);
-    onboarding::notify(&app);
-    result
+    let _ = (app, state, path);
+    Err("Physical-keyboard selection has been retired. Use the configured shortcut through desktop integration.".into())
 }
 
 /// Pushes the text-related settings into the pipeline; called at startup and after each change.
 pub fn apply_text_settings(orchestrator: &promptify_core::pipeline::Orchestrator, settings: &settings::AppSettings) {
+    orchestrator.set_delivery_enabled(settings.desktop_integration_enabled);
     orchestrator.set_auto_mode(settings.auto_mode);
-    orchestrator.set_code_chat_paste(settings.code_chat_paste);
     orchestrator.service().set_vocabulary(settings.vocabulary.clone());
     let apps = settings.screen_text_apps.iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect();
     orchestrator.set_policy(promptify_core::context::ContextPolicy { surrounding_text_apps: apps, ..Default::default() });
@@ -345,9 +431,8 @@ pub fn set_auto_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), St
 
 #[tauri::command]
 pub fn set_code_chat_paste(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    settings::update(&state.settings, &state.data_dir, |settings| settings.code_chat_paste = enabled)?;
-    state.orchestrator.set_code_chat_paste(enabled);
-    Ok(())
+    let _ = (state, enabled);
+    Err("Software-specific paste permission has been retired. Keep a writable input focused; Promptify inspects the destination independently of its app.".into())
 }
 
 #[tauri::command]

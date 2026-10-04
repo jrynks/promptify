@@ -66,6 +66,7 @@ export type Outcome =
   | { kind: "failed"; reason: string; detail: string | null };
 
 export interface JobReport {
+  delivery?: "sent_unverified" | null;
   job_id: number;
   profile_id: string;
   outcome: Outcome;
@@ -93,6 +94,8 @@ export interface Vocabulary {
 }
 
 export interface AppInfo {
+  desktop_integration_enabled?: boolean;
+  activation_bindings?: { id: string; trigger_description: string }[];
   input_device: string | null;
   hotkeys: { prompt: string; dictation: string; answer: string | null; cancel: string };
   hotkey_errors: string[];
@@ -116,6 +119,7 @@ export interface AppInfo {
   screen_text_apps: string[];
   paste_permission: "not_needed" | "granted" | "required";
   desktop_error: string | null;
+  clipboard_restore_pending?: boolean;
 }
 
 export type OnboardingStep = "models" | "input" | "practice";
@@ -301,6 +305,8 @@ export const api = {
   setModifierKeyboard: (path: string) => invoke<void>("set_modifier_keyboard", { path }),
   setAutoMode: (enabled: boolean) => invoke<void>("set_auto_mode", { enabled }),
   setCodeChatPaste: (enabled: boolean) => invoke<void>("set_code_chat_paste", { enabled }),
+  disableDesktopIntegration: () => invoke<void>("disable_desktop_integration"),
+  restoreInsertionClipboard: () => invoke<void>("restore_insertion_clipboard"),
   setVocabulary: (vocabulary: Vocabulary) => invoke<Vocabulary>("set_vocabulary", { vocabulary }),
   setScreenTextApps: (apps: string[]) => invoke<void>("set_screen_text_apps", { apps }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),

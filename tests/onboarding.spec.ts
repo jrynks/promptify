@@ -6,6 +6,7 @@ interface Fixture {
   status: OnboardingStatus;
   models: ModelStatus[];
   failures: Record<string, string>;
+  delays?: Record<string, number>;
   catalog: PromptCatalog;
 }
 
@@ -43,6 +44,8 @@ function fixture(ready = false): Fixture {
       modifier_keyboard_devices: [],
       paste_permission: "not_needed",
       desktop_error: null,
+      desktop_integration_enabled: true,
+      activation_bindings: [],
     },
     status: {
       required: true, step: "models",
@@ -87,6 +90,8 @@ async function launch(page: Page, state = fixture(), path = "/") {
     const savedStep = sessionStorage.getItem("test.setup.step");
     if (savedStep === "models" || savedStep === "input" || savedStep === "practice") initial.status.step = savedStep;
     if (sessionStorage.getItem("test.setup.complete") === "true") initial.status.required = false;
+    const integrationEnabled = sessionStorage.getItem("test.desktop.integration");
+    if (integrationEnabled !== null) initial.info.desktop_integration_enabled = integrationEnabled === "true";
     initial.info.code_chat_paste = sessionStorage.getItem("test.code.chat.paste") === "true";
     initial.info.modifier_keyboard = sessionStorage.getItem("test.modifier.keyboard") ?? initial.info.modifier_keyboard;
     for (const model of initial.models) {
@@ -99,6 +104,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
     const persist = () => {
       sessionStorage.setItem("test.setup.step", initial.status.step);
       sessionStorage.setItem("test.setup.complete", String(!initial.status.required));
+      sessionStorage.setItem("test.desktop.integration", String(initial.info.desktop_integration_enabled));
       if (initial.info.modifier_keyboard) sessionStorage.setItem("test.modifier.keyboard", initial.info.modifier_keyboard);
       for (const model of initial.models) sessionStorage.setItem(`test.model.${model.id}`, String(model.installed));
     };
@@ -148,6 +154,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
         transformCallback: (callback: (value: unknown) => void) => { const id = ++sequence; callbacks.set(id, callback); return id; },
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
           window.onboardingTest.calls.push(command);
+          if (initial.delays?.[command]) await new Promise((resolve) => window.setTimeout(resolve, initial.delays?.[command]));
           if (initial.failures[command]) throw new Error(initial.failures[command]);
           switch (command) {
             case "plugin:event|listen": {
@@ -160,6 +167,16 @@ async function launch(page: Page, state = fixture(), path = "/") {
             case "app_info": return structuredClone(initial.info);
             case "grant_paste_permission":
               initial.info.paste_permission = "granted";
+              initial.info.desktop_integration_enabled = true;
+              changed();
+              return;
+            case "disable_desktop_integration":
+              initial.info.desktop_integration_enabled = false;
+              initial.info.activation_bindings = [];
+              changed();
+              return;
+            case "restore_insertion_clipboard":
+              initial.info.clipboard_restore_pending = false;
               changed();
               return;
             case "set_code_chat_paste":
@@ -342,19 +359,68 @@ test("models below minimum RAM are grayed out without hiding compatible models",
   await expect(unsupported.getByRole("button", { name: /Download/ })).toBeEnabled();
 });
 
-test("code chat automatic paste consent is explicit, remembered and reversible", async ({ page }) => {
+test("automatic input inspection does not require software-specific settings", async ({ page }) => {
   const state = fixture(true);
   state.status.required = false;
   await launch(page, state);
-  const consent = page.getByRole("checkbox", { name: "Allow automatic prompt paste in VS Code and Cursor AI chat" });
-  await expect(consent).not.toBeChecked();
-  await expect(page.getByText("Promptify cannot distinguish it from an editor", { exact: false })).toBeVisible();
-  await consent.check();
+  await expect(page.getByRole("checkbox", { name: "Allow automatic prompt paste in VS Code and Cursor AI chat" })).toHaveCount(0);
+  await expect(page.getByText("Automatic input inspection is independent", { exact: false })).toBeVisible();
   await page.reload();
-  await expect(consent).toBeChecked();
-  await consent.uncheck();
+  await expect(page.getByText("Automatic input inspection is independent", { exact: false })).toBeVisible();
+});
+
+test("one desktop integration control disables and re-enables insertion", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  await page.getByRole("button", { name: "Disable desktop integration" }).click();
+  await expect(page.getByText("Desktop integration is disabled.", { exact: false })).toBeVisible();
   await page.reload();
-  await expect(consent).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "Enable desktop integration" })).toBeVisible();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
+  await expect(page.getByRole("button", { name: "Disable desktop integration" })).toBeVisible();
+});
+
+test("failed disable remains enabled and reports the persistence error", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.failures.disable_desktop_integration = "Could not save desktop integration setting";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Disable desktop integration" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: state.failures.disable_desktop_integration })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Disable desktop integration" })).toBeVisible();
+  expect(await page.evaluate(() => window.onboardingTest.state.info.desktop_integration_enabled)).toBe(true);
+});
+
+test("disabled desktop integration gates practice even without OS permission requirements", async ({ page }) => {
+  const state = fixture(true);
+  state.status.step = "input";
+  state.info.desktop_integration_enabled = false;
+  await launch(page, state);
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
+});
+
+test("desktop-assigned shortcuts are displayed rather than assumed", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.activation_bindings = [{ id: "prompt", trigger_description: "Super+P" }];
+  await launch(page, state);
+  await expect(page.getByLabel("Active desktop shortcuts").getByText("Super+P")).toBeVisible();
+});
+
+test("clipboard recovery requires an explicit action and surfaces errors", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.clipboard_restore_pending = true;
+  state.failures.restore_insertion_clipboard = "The clipboard changed since insertion";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Restore previous clipboard" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: state.failures.restore_insertion_clipboard })).toBeVisible();
+  await page.evaluate(() => { delete window.onboardingTest.state.failures.restore_insertion_clipboard; });
+  await page.getByRole("button", { name: "Restore previous clipboard" }).click();
+  await expect(page.getByRole("button", { name: "Restore previous clipboard" })).toHaveCount(0);
 });
 
 test("unknown hardware compatibility stays visible and reports detection failure", async ({ page }) => {
@@ -468,8 +534,8 @@ test("Wayland permission gates practice and can be granted", async ({ page }) =>
   state.info.paste_permission = "required";
   await launch(page, state);
   await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
-  await page.getByRole("button", { name: "Grant paste permission" }).click();
-  await expect(page.getByText("Automatic paste: keyboard permission is active.")).toBeVisible();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
+  await expect(page.getByText("Desktop integration permission is active.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
 });
 
@@ -479,11 +545,11 @@ test("denied paste permission is explicit and retryable", async ({ page }) => {
   state.info.paste_permission = "required";
   state.failures.grant_paste_permission = "Paste permission was not granted";
   await launch(page, state);
-  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Paste permission was not granted" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
   await page.evaluate(() => { delete window.onboardingTest.state.failures.grant_paste_permission; });
-  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
   await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
 });
 
@@ -505,7 +571,7 @@ test("permission loss during practice offers recovery without skipping verificat
   });
   await expect(page.getByRole("button", { name: "Prepare practice" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
-  await page.getByRole("button", { name: "Grant paste permission" }).click();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
   await expect(page.getByRole("button", { name: "Prepare practice" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
 });
@@ -515,8 +581,8 @@ test("configured users can recover paste permission in General Settings", async 
   state.status.required = false;
   state.info.paste_permission = "required";
   await launch(page, state);
-  await page.getByRole("button", { name: "Grant paste permission" }).click();
-  await expect(page.getByText("Automatic paste: keyboard permission is active.")).toBeVisible();
+  await page.getByRole("button", { name: "Enable desktop integration" }).click();
+  await expect(page.getByText("Desktop integration permission is active.")).toBeVisible();
 });
 
 test("Ctrl+Shift hold can be enabled and disabled outside Windows", async ({ page }) => {
@@ -531,7 +597,7 @@ test("Ctrl+Shift hold can be enabled and disabled outside Windows", async ({ pag
   await expect(checkbox).not.toBeChecked();
 });
 
-test("Wayland Ctrl+Shift monitors an explicitly selected keyboard only", async ({ page }) => {
+test("desktop activation does not expose physical keyboard selection", async ({ page }) => {
   const state = fixture(true);
   state.status.required = false;
   state.info.modifier_keyboard_devices = [
@@ -539,12 +605,10 @@ test("Wayland Ctrl+Shift monitors an explicitly selected keyboard only", async (
     { path: "/dev/input/by-id/consumer-event-kbd", name: "Consumer controls" },
   ];
   await launch(page, state);
-  await page.getByRole("combobox", { name: "Ctrl+Shift keyboard" }).selectOption("/dev/input/by-id/keyboard-event-kbd");
-  expect(await page.evaluate(() => window.onboardingTest.state.info.modifier_keyboard)).toBe("/dev/input/by-id/keyboard-event-kbd");
-  await page.getByRole("checkbox", { name: /Also start a prompt by holding/ }).check();
-  await expect(page.getByRole("checkbox", { name: /Also start a prompt by holding/ })).toBeChecked();
+  await expect(page.getByRole("combobox", { name: "Ctrl+Shift keyboard" })).toHaveCount(0);
+  await expect(page.getByText("never requires selecting a physical keyboard", { exact: false })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("combobox", { name: "Ctrl+Shift keyboard" })).toHaveValue("/dev/input/by-id/keyboard-event-kbd");
+  await expect(page.getByRole("combobox", { name: "Ctrl+Shift keyboard" })).toHaveCount(0);
 });
 
 test("Ctrl+Shift permission denial stays explicit and retryable", async ({ page }) => {
@@ -878,5 +942,54 @@ test.describe("native overlay sizing", () => {
     await page.evaluate(() => { delete window.onboardingTest.state.failures.copy_last_result; });
     await page.getByRole("button", { name: "Copy", exact: true }).click();
     await expect(page.locator(".pill")).toHaveCount(0);
+  });
+
+  test("dispatched paste is not presented as verified delivery and retains recovery", async ({ page }) => {
+    await openOverlay(page);
+    await emitOverlay(page, {
+      type: "finished", capped: false,
+      report: {
+        job_id: 1, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        delivery: "sent_unverified", outcome: { kind: "inserted", text: longGraph },
+      },
+    });
+    await expect(page.getByText("Paste sent", { exact: true })).toBeVisible();
+    await expect(page.getByText("sending a paste does not verify", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restore previous clipboard" })).toBeVisible();
+    await fitsWindow(page);
+    await page.evaluate(() => { window.onboardingTest.state.failures.restore_insertion_clipboard = "Clipboard is busy"; });
+    await page.getByRole("button", { name: "Restore previous clipboard" }).click();
+    await expect(page.getByRole("alert")).toContainText("Clipboard is busy");
+    await page.evaluate(() => { delete window.onboardingTest.state.failures.restore_insertion_clipboard; });
+    await page.getByRole("button", { name: "Restore previous clipboard" }).click();
+    await expect(page.getByText("Previous clipboard restored.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restore previous clipboard" })).toHaveCount(0);
+  });
+
+  test("an old clipboard restore response cannot alter a newer overlay result", async ({ page }) => {
+    await openOverlay(page);
+    await emitOverlay(page, {
+      type: "finished", capped: false,
+      report: {
+        job_id: 1, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        delivery: "sent_unverified", outcome: { kind: "inserted", text: longGraph },
+      },
+    });
+    await page.evaluate(() => { window.onboardingTest.state.delays = { restore_insertion_clipboard: 500 }; });
+    await page.getByRole("button", { name: "Restore previous clipboard" }).click();
+    await expect(page.getByRole("button", { name: "Restore previous clipboard" })).toBeDisabled();
+    await emitOverlay(page, {
+      type: "finished", capped: false,
+      report: {
+        job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        outcome: { kind: "answered", text: "New answer" },
+      },
+    });
+    await expect(page.getByText("New answer", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restore previous clipboard" })).toHaveCount(0);
+    await page.waitForFunction(() => window.onboardingTest.state.info.clipboard_restore_pending === false);
+    await expect(page.getByText("Previous clipboard restored.", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("New answer", { exact: true })).toBeVisible();
   });
 });

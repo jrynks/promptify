@@ -8,7 +8,7 @@ type View =
   | { kind: "idle" }
   | { kind: "listening"; mode: string; profile: string; target: string; latched: boolean }
   | { kind: "working"; label: string }
-  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean };
+  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean; canRestore?: boolean };
 
 const BLOCK_MESSAGES: Record<string, string> = {
   focus_changed: "You switched windows, so nothing was pasted.",
@@ -33,7 +33,7 @@ function describe(outcome: Outcome, capped: boolean): View {
   const note = capped ? " Recording hit the length limit; later speech was dropped." : "";
   switch (outcome.kind) {
     case "inserted":
-      return { kind: "result", tone: "ok", title: "Prompt ready" + note, canCopy: false };
+      return { kind: "result", tone: "ok", title: "Paste sent" + note, detail: "Check the destination: sending a paste does not verify that the application received it. Generated text stays on the clipboard until you restore it after checking.", canCopy: true, canRestore: true };
     case "answered":
       return { kind: "result", tone: "ok", title: "Answer" + note, body: outcome.text, canCopy: true };
     case "blocked":
@@ -68,6 +68,7 @@ function Overlay() {
   const [routing, setRouting] = useState<PromptRouting | null>(null);
   const [uiError, setUiError] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
   const streamPreview = useRef<HTMLDivElement>(null);
   const eventVersion = useRef(0);
@@ -134,6 +135,23 @@ function Overlay() {
     }
   }, [preview, view.kind]);
 
+  const restoreClipboard = async () => {
+    const version = eventVersion.current;
+    window.clearTimeout(hideTimer.current);
+    setRestoring(true);
+    setUiError(null);
+    try {
+      await api.restoreInsertionClipboard();
+      if (version === eventVersion.current) {
+        setView((current) => current.kind === "result" ? { ...current, canRestore: false, detail: "Previous clipboard restored." } : current);
+      }
+    } catch (error) {
+      if (version === eventVersion.current) setUiError(`Could not restore the clipboard: ${String(error)}`);
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   const copyResult = async () => {
     const version = eventVersion.current;
     setCopying(true);
@@ -189,17 +207,25 @@ function Overlay() {
           setRouting(payload.routing);
           break;
         case "finished": {
+          eventVersion.current += 1;
+          window.clearTimeout(hideTimer.current);
+          setUiError(null);
           setRouting(payload.report.routing ?? null);
           const next = describe(payload.report.outcome, payload.capped);
           setView(next);
-          if (next.kind === "result" && !next.canCopy) scheduleHide(next.tone === "ok" ? 1200 : next.tone === "error" ? 6000 : 3500);
+          if (payload.report.outcome.kind === "inserted") scheduleHide(3500);
+          else if (next.kind === "result" && !next.canCopy) scheduleHide(next.tone === "ok" ? 1200 : next.tone === "error" ? 6000 : 3500);
           break;
         }
         case "error":
+          eventVersion.current += 1;
+          setUiError(null);
           setView({ kind: "result", tone: "error", title: payload.message, canCopy: false });
           scheduleHide(4000);
           break;
         case "cancelled":
+          eventVersion.current += 1;
+          setUiError(null);
           setView({ kind: "result", tone: "warn", title: "Cancelled.", canCopy: false });
           scheduleHide(1200);
           break;
@@ -254,6 +280,7 @@ function Overlay() {
         {view.kind === "result" && view.canCopy && (
             <div className="actions">
               <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>
+              {view.canRestore && <button disabled={restoring} onClick={() => void restoreClipboard()}>Restore previous clipboard</button>}
               <button onClick={() => scheduleHide(0)}>Dismiss</button>
             </div>
         )}

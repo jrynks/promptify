@@ -44,10 +44,13 @@ pub struct AppSettings {
     pub lan_discovery: bool,
     /// Holding Ctrl+Shift alone starts a prompt recording.
     pub modifier_hold: bool,
-    /// Explicitly selected physical keyboard on Wayland; prefer a stable by-id path.
+    /// Read-only migration field; physical-device selection is retired.
+    #[serde(skip_serializing)]
     pub modifier_keyboard: Option<String>,
     /// The prompt hotkey writes plain dictation in apps that are not AI tools.
     pub auto_mode: bool,
+    pub desktop_integration_enabled: bool,
+    #[serde(skip_serializing)]
     pub code_chat_paste: bool,
     /// Words to expect and corrections for speech recognition.
     pub vocabulary: promptify_core::dictation::Vocabulary,
@@ -73,6 +76,7 @@ impl Default for AppSettings {
             modifier_hold: false,
             modifier_keyboard: None,
             auto_mode: false,
+            desktop_integration_enabled: true,
             code_chat_paste: false,
             vocabulary: Default::default(),
             screen_text_apps: Vec::new(),
@@ -197,28 +201,41 @@ mod tests {
     }
 
     #[test]
-    fn modifier_keyboard_defaults_to_unselected_and_survives_reload() {
-        let legacy: AppSettings = serde_json::from_str(r#"{"modifier_hold":true}"#).unwrap();
+    fn retired_keyboard_setting_is_readable_but_not_written() {
+        let legacy: AppSettings = serde_json::from_str(r#"{"modifier_hold":true,"modifier_keyboard":"/dev/input/by-id/keyboard-event-kbd"}"#).unwrap();
         assert!(legacy.modifier_hold);
-        assert!(legacy.modifier_keyboard.is_none());
+        assert!(legacy.desktop_integration_enabled);
+        assert_eq!(legacy.modifier_keyboard.as_deref(), Some("/dev/input/by-id/keyboard-event-kbd"));
         let dir = TestDir::new();
         let settings: SharedSettings = Arc::new(RwLock::new(legacy));
-        update(&settings, &dir.0, |s| s.modifier_keyboard = Some("/dev/input/by-id/keyboard-event-kbd".into())).unwrap();
+        update(&settings, &dir.0, |s| s.desktop_integration_enabled = false).unwrap();
         let loaded = load_checked(&dir.0).unwrap().unwrap();
-        assert_eq!(loaded.modifier_keyboard.as_deref(), Some("/dev/input/by-id/keyboard-event-kbd"));
+        assert!(loaded.modifier_keyboard.is_none());
+        assert!(!loaded.desktop_integration_enabled);
+        assert!(!std::fs::read_to_string(dir.0.join("settings.json")).unwrap().contains("modifier_keyboard"));
         assert!(loaded.modifier_hold);
     }
 
     #[test]
-    fn code_chat_paste_requires_explicit_persisted_consent() {
+    fn retired_code_chat_setting_is_readable_but_not_written() {
         let legacy: AppSettings = serde_json::from_str("{}").unwrap();
         assert!(!legacy.code_chat_paste);
         let dir = TestDir::new();
         let settings: SharedSettings = Arc::new(RwLock::new(legacy));
         update(&settings, &dir.0, |s| s.code_chat_paste = true).unwrap();
-        assert!(load_checked(&dir.0).unwrap().unwrap().code_chat_paste);
+        assert!(!std::fs::read_to_string(dir.0.join("settings.json")).unwrap().contains("code_chat_paste"));
+        assert!(!load_checked(&dir.0).unwrap().unwrap().code_chat_paste);
         update(&settings, &dir.0, |s| s.code_chat_paste = false).unwrap();
         assert!(!load_checked(&dir.0).unwrap().unwrap().code_chat_paste);
+    }
+
+    #[test]
+    fn failed_integration_save_keeps_the_live_preference() {
+        let dir = TestDir::new();
+        std::fs::create_dir(dir.0.join("settings.json")).unwrap();
+        let settings: SharedSettings = Arc::new(RwLock::new(AppSettings::default()));
+        assert!(update(&settings, &dir.0, |s| s.desktop_integration_enabled = false).is_err());
+        assert!(settings.read().unwrap().desktop_integration_enabled);
     }
 
     #[test]

@@ -30,6 +30,7 @@ const USAGE: &str = "usage:
   promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mcp mcp.json] [--mode prompt|dictation|answer] [--auto]
   promptify-cli screen-text   (reads the focused text box of the foreground app after 3 s, as the app would)
   promptify-cli paste-smoke-test <unique-window-title> <text>   (pastes into the matching focused test window after 3 s)
+  promptify-cli generated-paste-smoke-test <unique-window-title> <request>   (generates an adaptive prompt and pastes into the matching test input)
   promptify-cli eval <cases.toml>
   promptify-cli eval-adaptive <cases.toml> [--model ID]   (local model output contracts)
   promptify-cli eval-routing <cases.toml>   (classification only; no model needed)
@@ -282,29 +283,87 @@ fn main() {
     }
 }
 
+fn prepare_native_paste_test() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if promptify_lib::wayland_paste::applies() {
+        promptify_lib::wayland_paste::init(&settings::app_data_dir());
+        if !promptify_lib::wayland_paste::has_saved_permission()? {
+            return Err("Grant desktop integration permission in Settings before running the Wayland paste test.".into());
+        }
+        promptify_lib::wayland_paste::grant(|| {})?;
+    }
+    Ok(())
+}
+
+fn finish_native_paste_test() -> Result<(), String> {
+    if std::env::var_os("PROMPTIFY_NATIVE_TEST_ACK").is_none() {
+        return Ok(());
+    }
+    use std::io::Write;
+    std::io::stdout().flush().map_err(|error| error.to_string())?;
+    let mut acknowledgement = String::new();
+    std::io::stdin().read_line(&mut acknowledgement).map_err(|error| error.to_string())?;
+    if acknowledgement.trim() != "observed" {
+        return Err("The native harness did not acknowledge exact destination contents. Clipboard restoration was not attempted.".into());
+    }
+    promptify_lib::insert::restore_previous().map_err(|error| error.0)
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "generated-paste-smoke-test") {
+        if args.len() != 3 || !args[1].starts_with("Promptify paste test ") || args[2].trim().is_empty() {
+            return Err("Use generated-paste-smoke-test with a unique test-window title and a nonempty request.".into());
+        }
+        prepare_native_paste_test()?;
+        let data_dir = settings::app_data_dir();
+        let saved = settings::load_checked(&data_dir)?.ok_or("Configure models in Promptify before running the generated native test.")?;
+        let manifest = Manifest::bundled();
+        let shared = Arc::new(RwLock::new(saved));
+        let worker = Arc::new(LlmWorker::new(worker_exe(), manifest, settings::models_dir(&data_dir), shared));
+        std::thread::sleep(Duration::from_secs(3));
+        let context = promptify_lib::system_context::SystemContext;
+        let target = context.identify().map_err(|error| error.0)?;
+        if !target.window_title.contains(&args[1]) {
+            return Err("The unique test window is not focused. No generation or paste was attempted.".into());
+        }
+        if !context.destination(&target.window).map_err(|error| error.0)?.confirmed() {
+            return Err("The native test input was not confirmed writable.".into());
+        }
+        let orchestrator = Orchestrator::new(Backends {
+            context: Arc::new(context),
+            transcriber: Arc::new(TextTranscriber(args[2].clone())),
+            generator: worker,
+            inserter: Arc::new(promptify_lib::insert::ClipboardPaste),
+            history: Arc::new(NoHistory),
+        }, ProfileSet::bundled(), ContextPolicy::default(), Limits::default());
+        orchestrator.set_rendering(Rendering::Adaptive);
+        let job = orchestrator.begin(Mode::Prompt).map_err(|error| error.to_string())?;
+        let report = orchestrator.finish(job, &[], &mut |_| {});
+        if !matches!(report.outcome, Outcome::Inserted { .. }) {
+            return Err(format!("Generated native test did not dispatch: {:?}", report.outcome));
+        }
+        println!("{}", serde_json::to_string(&report).map_err(|error| error.to_string())?);
+        return finish_native_paste_test();
+    }
     if args.first().is_some_and(|arg| arg == "paste-smoke-test") {
         if args.len() != 3 || !args[1].starts_with("Promptify paste test ") || args[2].is_empty() {
             return Err("Use paste-smoke-test with a unique 'Promptify paste test ...' window title and nonempty text.".into());
         }
-        #[cfg(target_os = "linux")]
-        if promptify_lib::wayland_paste::applies() {
-            promptify_lib::wayland_paste::init(&settings::app_data_dir());
-            if !promptify_lib::wayland_paste::has_saved_permission()? {
-                return Err("Grant paste permission in Settings before running the Wayland paste test.".into());
-            }
-            promptify_lib::wayland_paste::grant(|| {})?;
-        }
+        prepare_native_paste_test()?;
         std::thread::sleep(Duration::from_secs(3));
         let context = promptify_lib::system_context::SystemContext;
         let target = context.identify().map_err(|error| error.0)?;
         if !target.window_title.contains(&args[1]) {
             return Err("The test window is not focused. No paste was attempted.".into());
         }
-        promptify_lib::insert::ClipboardPaste.insert(&target.window, &args[2], PasteChord::Standard).map_err(|error| error.0)?;
+        let destination = context.destination(&target.window).map_err(|error| error.0)?;
+        if !destination.confirmed() {
+            return Err("The native test input was not confirmed writable. No paste was attempted.".into());
+        }
+        promptify_lib::insert::ClipboardPaste.insert_into(&target.window, &destination, &args[2], PasteChord::Standard).map_err(|error| error.0)?;
         println!("Native paste dispatched; the test harness must verify the field contents.");
-        return Ok(());
+        return finish_native_paste_test();
     }
     if args.first().is_some_and(|arg| arg == "prompt-types") {
         println!("{}", serde_json::to_string_pretty(routing::catalog().all()).map_err(|e| e.to_string())?);
