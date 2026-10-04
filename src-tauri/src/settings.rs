@@ -30,6 +30,7 @@ pub struct AppSettings {
     pub stt_model: Option<String>,
     pub llm_model: Option<String>,
     pub history_enabled: bool,
+    pub check_updates_on_startup: bool,
     pub prompt_hotkey: Option<String>,
     pub dictation_hotkey: Option<String>,
     pub answer_hotkey: Option<String>,
@@ -65,6 +66,7 @@ impl Default for AppSettings {
             stt_model: None,
             llm_model: None,
             history_enabled: true,
+            check_updates_on_startup: true,
             prompt_hotkey: None,
             dictation_hotkey: None,
             answer_hotkey: None,
@@ -236,6 +238,20 @@ mod tests {
         let settings: SharedSettings = Arc::new(RwLock::new(AppSettings::default()));
         assert!(update(&settings, &dir.0, |s| s.desktop_integration_enabled = false).is_err());
         assert!(settings.read().unwrap().desktop_integration_enabled);
+    }
+
+    #[test]
+    fn update_check_preference_migrates_and_persists() {
+        let legacy: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(legacy.check_updates_on_startup);
+        let dir = TestDir::new();
+        let settings: SharedSettings = Arc::new(RwLock::new(legacy));
+        update(&settings, &dir.0, |settings| settings.check_updates_on_startup = false).unwrap();
+        assert!(!load_checked(&dir.0).unwrap().unwrap().check_updates_on_startup);
+        std::fs::remove_file(dir.0.join("settings.json")).unwrap();
+        std::fs::create_dir(dir.0.join("settings.json")).unwrap();
+        assert!(update(&settings, &dir.0, |settings| settings.check_updates_on_startup = true).is_err());
+        assert!(!settings.read().unwrap().check_updates_on_startup);
     }
 
     #[test]

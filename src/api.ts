@@ -122,6 +122,22 @@ export interface AppInfo {
   clipboard_restore_pending?: boolean;
 }
 
+export interface UpdateInfo {
+  current_version: string;
+  check_on_startup: boolean;
+  checking: boolean;
+  checked: boolean;
+  release: {
+    version: string;
+    url: string;
+    update_available: boolean;
+    install_error: string | null;
+  } | null;
+  error: string | null;
+  installation: "idle" | "downloading" | "installing" | "installed" | "installer_started" | "failed";
+  installation_error: string | null;
+}
+
 export type OnboardingStep = "models" | "input" | "practice";
 export type EngineStatus = { state: "missing" | "loading" | "ready" } | { state: "error"; message: string };
 export type PracticePhase = "armed" | "recording" | "processing" | "awaiting_paste" | "passed" | "failed";
@@ -267,6 +283,12 @@ export interface McpFile {
 }
 
 export const api = {
+  updateInfo: () => invoke<UpdateInfo>("update_info"),
+  checkForUpdates: () => invoke<UpdateInfo>("check_for_updates"),
+  setUpdateChecks: (enabled: boolean) => invoke<UpdateInfo>("set_update_checks", { enabled }),
+  installUpdate: () => invoke<UpdateInfo>("install_update"),
+  restartAfterUpdate: () => invoke<void>("restart_after_update"),
+  openUpdateRelease: () => invoke<void>("open_update_release"),
   appInfo: () => invoke<AppInfo>("app_info"),
   grantPastePermission: () => invoke<void>("grant_paste_permission"),
   onboardingStatus: () => invoke<OnboardingStatus>("onboarding_status"),

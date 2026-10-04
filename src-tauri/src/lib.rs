@@ -26,6 +26,8 @@ pub mod settings;
 pub mod stt;
 pub mod system_context;
 mod tray;
+mod updates;
+mod update_install;
 #[cfg(target_os = "linux")]
 pub mod wayland_paste;
 
@@ -118,10 +120,17 @@ pub fn run() {
     }));
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_settings(app)))
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).level_for("rmcp", log::LevelFilter::Warn).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
         .invoke_handler(tauri::generate_handler![
+            updates::update_info,
+            updates::check_for_updates,
+            updates::set_update_checks,
+            updates::open_update_release,
+            updates::install_update,
+            updates::restart_after_update,
             commands::app_info,
             commands::list_profiles,
             commands::preview_prompt,
@@ -264,6 +273,8 @@ pub fn run() {
             }
 
             tray::build(&handle, &tray_hotkeys)?;
+            app.manage(updates::Updates::default());
+            updates::start(handle.clone());
             tray::refresh(&handle);
             place_overlay(&handle);
             log::info!("desktop started pid={} embedded_ui={}", std::process::id(), cfg!(feature = "custom-protocol"));
