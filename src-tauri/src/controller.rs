@@ -14,12 +14,69 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::{LiveAudio, Recording};
 
+fn capture_and_inspect<C, J: Send>(
+    capture: impl FnOnce() -> Result<C, String>,
+    inspect: impl FnOnce() -> Result<J, BeginError> + Send,
+) -> (Result<C, String>, Result<J, BeginError>) {
+    std::thread::scope(|scope| {
+        let inspection = std::thread::Builder::new().name("capture-target".into()).spawn_scoped(scope, inspect);
+        match inspection {
+            Ok(inspection) => {
+                let recording = capture();
+                let job = inspection.join().unwrap_or_else(|_| Err(BeginError::Context(
+                    promptify_core::pipeline::BackendError("Target inspection failed unexpectedly.".into()),
+                )));
+                (recording, job)
+            }
+            Err(error) => (
+                Err(format!("Could not start target inspection: {error}")),
+                Err(BeginError::Context(promptify_core::pipeline::BackendError(error.to_string()))),
+            ),
+        }
+    })
+}
+
 pub enum Command {
     Press(Mode),
     Release(Mode),
     HoldPress(Mode),
     HoldRelease(Mode),
     Cancel,
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn microphone_and_target_capture_start_without_waiting_for_each_other() {
+        let (target_started, wait_for_target) = mpsc::channel();
+        let (audio_started, wait_for_audio) = mpsc::channel();
+        let (audio, target) = capture_and_inspect(
+            || {
+                wait_for_target.recv_timeout(Duration::from_secs(2)).unwrap();
+                audio_started.send(()).unwrap();
+                Ok(vec![0.25f32])
+            },
+            move || {
+                target_started.send(()).unwrap();
+                wait_for_audio.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok("gesture target")
+            },
+        );
+        assert_eq!(audio.unwrap(), [0.25]);
+        assert_eq!(target.unwrap(), "gesture target");
+    }
+
+    #[test]
+    fn failed_capture_still_releases_target_inspection() {
+        let (audio, target) = capture_and_inspect::<(), _>(
+            || Err("no microphone".into()),
+            || Ok("captured target"),
+        );
+        assert!(audio.is_err());
+        assert_eq!(target.unwrap(), "captured target");
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,28 +313,7 @@ impl Worker {
                 return;
             }
         };
-        let started = if practice.is_some() {
-            self.orchestrator.begin_with_options(mode, JobOptions { use_personal_context: false, auto_mode: false })
-        } else {
-            self.orchestrator.begin(mode)
-        };
-        let job = match started {
-            Ok(job) => job,
-            Err(BeginError::Busy) => {
-                self.gesture.reset();
-                if practice.is_some() {
-                    emit_for(&self.app, practice, OverlayEvent::Error { message: "The engines are still busy. Try practice again.".into() });
-                }
-                return;
-            }
-            Err(err) => {
-                self.gesture.reset();
-                self.show_overlay(practice);
-                emit_for(&self.app, practice, OverlayEvent::Error { message: err.to_string() });
-                return;
-            }
-        };
-        *self.last_result.lock().unwrap() = None;
+        let pressed_at = Instant::now();
         let app = self.app.clone();
         let last_emit = Mutex::new(Instant::now() - Duration::from_secs(1));
         let on_level = move |level: f32| {
@@ -287,16 +323,54 @@ impl Worker {
                 emit_for(&app, practice, OverlayEvent::Level { level });
             }
         };
-        let recording = match Recording::start(self.orchestrator.limits().max_audio_samples, on_level) {
+        // Start target capture at the gesture, concurrently with opening the mic.
+        // Desktop inspection cannot delay audio buffering; no focus-changing UI
+        // is shown until both are ready.
+        let (recording, started) = capture_and_inspect(
+            || {
+                let recording = Recording::start(self.orchestrator.limits().max_audio_samples, on_level);
+                log::info!("microphone capture startup: {} ms", pressed_at.elapsed().as_millis());
+                recording
+            },
+            || {
+                let result = if practice.is_some() {
+                    self.orchestrator.begin_with_options(mode, JobOptions { use_personal_context: false, auto_mode: false })
+                } else {
+                    self.orchestrator.begin(mode)
+                };
+                log::info!("target inspection: {} ms (microphone opens concurrently)", pressed_at.elapsed().as_millis());
+                result
+            },
+        );
+        let recording = match recording {
             Ok(recording) => recording,
             Err(message) => {
-                drop(job);
+                drop(started);
                 self.gesture.reset();
                 self.show_overlay(practice);
                 emit_for(&self.app, practice, OverlayEvent::Error { message });
                 return;
             }
         };
+        let job = match started {
+            Ok(job) => job,
+            Err(BeginError::Busy) => {
+                let _ = recording.stop();
+                self.gesture.reset();
+                if practice.is_some() {
+                    emit_for(&self.app, practice, OverlayEvent::Error { message: "The engines are still busy. Try practice again.".into() });
+                }
+                return;
+            }
+            Err(err) => {
+                let _ = recording.stop();
+                self.gesture.reset();
+                self.show_overlay(practice);
+                emit_for(&self.app, practice, OverlayEvent::Error { message: err.to_string() });
+                return;
+            }
+        };
+        *self.last_result.lock().unwrap() = None;
         if let Some(attempt) = practice
             && let Err(message) = crate::onboarding::attach_job(&self.app, attempt, &job, recording.device_id.as_deref())
         {

@@ -16,10 +16,11 @@ const REGISTRY: &str = "org.a11y.atspi.Registry";
 const DESKTOP_PATH: &str = "/org/a11y/atspi/accessible/root";
 const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
 const MAX_APPS: usize = 32;
+const MAX_SCOPED_REGISTRY_APPS: usize = 4096;
 const MAX_WINDOWS: usize = 24;
-const MAX_NODES: usize = 96;
-const MAX_DEPTH: usize = 12;
-const MAX_CHILDREN: usize = 32;
+const MAX_NODES: usize = 512;
+const MAX_DEPTH: usize = 32;
+const MAX_CHILDREN: usize = 256;
 const CALL_TIMEOUT: Duration = Duration::from_millis(50);
 const QUERY_BUDGET: Duration = Duration::from_millis(650);
 const CALLER_WAIT: Duration = Duration::from_millis(800);
@@ -40,11 +41,20 @@ const ROLE_PASSWORD_TEXT: u32 = 40;
 const ROLE_WINDOW: u32 = 69;
 
 type Reply = mpsc::SyncSender<Result<Snapshot, String>>;
-type Request = (Instant, Reply, Admission);
+type Request = (Instant, Option<u32>, Reply, Admission);
 
 static WORKER: OnceLock<Result<Worker, String>> = OnceLock::new();
 
 pub fn inspect(window: &WindowIdentity) -> Result<Destination, BackendError> {
+    inspect_for_session(window, crate::wayland_paste::applies())
+}
+
+fn inspect_for_session(window: &WindowIdentity, wayland: bool) -> Result<Destination, BackendError> {
+    // AT-SPI identities are synthetic. A PID alone cannot distinguish two
+    // windows of the same X11 process, so never weaken native focus evidence.
+    if !wayland {
+        return Ok(Destination::default());
+    }
     if window.handle == 0 || window.process_id == 0 {
         log::warn!(
             "AT-SPI destination metadata is unknown for invalid window identity {} (PID {})",
@@ -54,16 +64,42 @@ pub fn inspect(window: &WindowIdentity) -> Result<Destination, BackendError> {
         return Ok(Destination::default());
     }
 
-    let snapshot = match worker().and_then(Worker::capture) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            log::warn!("AT-SPI destination metadata is unavailable: {error}");
+    let native = crate::kwin::identify();
+    let scoped = match native {
+        Some(Ok(context)) if context.window == *window => true,
+        Some(Ok(_)) => {
+            log::warn!("native active window changed before AT-SPI destination inspection");
             return Ok(Destination::default());
         }
+        Some(Err(error)) => {
+            log::warn!("native focus could not be verified before AT-SPI inspection: {error}");
+            return Ok(Destination::default());
+        }
+        None => false,
     };
-    if snapshot.context.window != *window {
+    let snapshot =
+        match worker().and_then(|worker| worker.capture(scoped.then_some(window.process_id))) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                log::warn!("AT-SPI destination metadata is unavailable: {error}");
+                return Ok(Destination::default());
+            }
+        };
+    let still_focused = if scoped {
+        match crate::kwin::identify() {
+            Some(Ok(context)) => context.window == *window,
+            Some(Err(error)) => {
+                log::warn!("native focus recheck failed: {error}");
+                false
+            }
+            _ => false,
+        }
+    } else {
+        snapshot.context.window == *window
+    };
+    if !still_focused || snapshot.context.window.process_id != window.process_id {
         log::warn!(
-            "AT-SPI focused destination no longer matches synthetic active-window identity {} (PID {})",
+            "AT-SPI focused destination no longer matches active-window identity {} (PID {})",
             window.handle,
             window.process_id
         );
@@ -77,7 +113,7 @@ pub fn inspect(window: &WindowIdentity) -> Result<Destination, BackendError> {
 /// The returned handle is a deterministic synthetic hash of the active
 /// accessible's bus name and object path, not a native window handle.
 pub fn active_context() -> Result<promptify_core::context::ActiveContext, BackendError> {
-    worker()?.capture().map(|snapshot| snapshot.context)
+    worker()?.capture(None).map(|snapshot| snapshot.context)
 }
 
 fn worker() -> Result<&'static Worker, BackendError> {
@@ -114,8 +150,8 @@ impl Worker {
         std::thread::Builder::new()
             .name("destination-atspi".into())
             .spawn(move || {
-                while let Ok((deadline, reply, admission)) = receiver.recv() {
-                    let result = inspect_accessible(deadline);
+                while let Ok((deadline, target_pid, reply, admission)) = receiver.recv() {
+                    let result = inspect_accessible(deadline, target_pid);
                     drop(admission);
                     let _ = reply.send(result);
                 }
@@ -127,14 +163,14 @@ impl Worker {
         })
     }
 
-    fn capture(&self) -> Result<Snapshot, BackendError> {
+    fn capture(&self, target_pid: Option<u32>) -> Result<Snapshot, BackendError> {
         let Some(admission) = Admission::acquire(&self.busy) else {
             return Err(BackendError(
                 "AT-SPI destination worker is busy; no fresh focus snapshot is available".into(),
             ));
         };
         let (reply, receiver) = mpsc::sync_channel(1);
-        let request = (Instant::now() + QUERY_BUDGET, reply, admission);
+        let request = (Instant::now() + QUERY_BUDGET, target_pid, reply, admission);
         if let Err(error) = self.requests.try_send(request) {
             return Err(BackendError(format!(
                 "AT-SPI destination worker did not accept a fresh focus scan: {error}"
@@ -158,7 +194,7 @@ struct Snapshot {
     destination: Destination,
 }
 
-fn inspect_accessible(deadline: Instant) -> Result<Snapshot, String> {
+fn inspect_accessible(deadline: Instant, target_pid: Option<u32>) -> Result<Snapshot, String> {
     let session = ConnectionBuilder::session()
         .map_err(|error| format!("session bus unavailable: {error}"))?
         .method_timeout(CALL_TIMEOUT)
@@ -175,9 +211,9 @@ fn inspect_accessible(deadline: Instant) -> Result<Snapshot, String> {
         .method_timeout(CALL_TIMEOUT)
         .build()
         .map_err(|error| format!("accessibility bus unavailable: {error}"))?;
-    let active = locate_active_window(&connection, deadline)?;
+    let active = locate_active_window(&connection, deadline, target_pid)?;
     let snapshot = focused_snapshot(&connection, active, deadline)?;
-    let rechecked = locate_active_window(&connection, deadline)?;
+    let rechecked = locate_active_window(&connection, deadline, target_pid)?;
     if object_token(&rechecked.object) != snapshot.window_token
         || rechecked.process_id != snapshot.context.window.process_id
     {
@@ -186,7 +222,7 @@ fn inspect_accessible(deadline: Instant) -> Result<Snapshot, String> {
     Ok(snapshot)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ObjectRef {
     service: String,
     path: OwnedObjectPath,
@@ -198,13 +234,17 @@ fn proxy(
     path: &str,
     interface: &str,
 ) -> Result<Proxy<'static>, String> {
-    Proxy::<'static>::new_owned(
-        connection.clone(),
-        service.to_owned(),
-        path.to_owned(),
-        interface.to_owned(),
-    )
-    .map_err(|error| error.to_string())
+    // The AT-SPI registry may answer Get but return an empty body for GetAll.
+    zbus::blocking::proxy::Builder::<Proxy<'static>>::new(connection)
+        .destination(service.to_owned())
+        .and_then(|builder| builder.path(path.to_owned()))
+        .and_then(|builder| builder.interface(interface.to_owned()))
+        .and_then(|builder| {
+            builder
+                .cache_properties(zbus::proxy::CacheProperties::No)
+                .build()
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn accessible_proxy(connection: &Connection, object: &ObjectRef) -> Result<Proxy<'static>, String> {
@@ -233,21 +273,22 @@ fn children(
 ) -> Result<Vec<ObjectRef>, String> {
     check_deadline(deadline)?;
     let proxy = accessible_proxy(connection, object)?;
-    let child_count: i32 = proxy
-        .get_property("ChildCount")
-        .map_err(|error| format!("ChildCount: {error}"))?;
-    if child_count < 0 || child_count as usize > MAX_CHILDREN {
+    let references: Vec<(String, OwnedObjectPath)> = call(&proxy, "GetChildren", &())?;
+    check_deadline(deadline)?;
+    bounded_children(references)
+}
+
+fn bounded_children(references: Vec<(String, OwnedObjectPath)>) -> Result<Vec<ObjectRef>, String> {
+    if references.len() > MAX_CHILDREN {
         return Err(format!(
-            "AT-SPI child count {child_count} exceeds the per-node traversal bound"
+            "AT-SPI child count {} exceeds the per-node traversal bound",
+            references.len()
         ));
     }
-    let mut children = Vec::with_capacity(child_count as usize);
-    for index in 0..child_count {
-        check_deadline(deadline)?;
-        let (service, path): (String, OwnedObjectPath) = call(&proxy, "GetChildAtIndex", &index)?;
-        children.push(ObjectRef { service, path });
-    }
-    Ok(children)
+    Ok(references
+        .into_iter()
+        .map(|(service, path)| ObjectRef { service, path })
+        .collect())
 }
 
 fn process_id(
@@ -256,8 +297,19 @@ fn process_id(
     deadline: Instant,
 ) -> Result<i32, String> {
     check_deadline(deadline)?;
-    let proxy = accessible_proxy(connection, object)?;
-    call(&proxy, "GetProcessId", &())
+    if !object.service.starts_with(':') {
+        return Err("AT-SPI process identity requires a unique D-Bus connection name".into());
+    }
+    // GTK/Qt providers need not implement GetProcessId; the bus authenticates the owner.
+    let proxy = proxy(
+        connection,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )?;
+    let pid: u32 = call(&proxy, "GetConnectionUnixProcessID", &object.service)?;
+    i32::try_from(pid)
+        .map_err(|_| "AT-SPI connection process ID exceeds the supported range".into())
 }
 
 fn states(
@@ -287,22 +339,24 @@ struct ActiveWindow {
 fn locate_active_window(
     connection: &Connection,
     deadline: Instant,
+    target_pid: Option<u32>,
 ) -> Result<ActiveWindow, String> {
     let desktop = ObjectRef {
         service: REGISTRY.to_owned(),
         path: OwnedObjectPath::try_from(DESKTOP_PATH).map_err(|error| error.to_string())?,
     };
-    let applications = children(connection, &desktop, deadline)?;
-    if applications.len() > MAX_APPS {
-        return Err("AT-SPI application count exceeds the desktop scan bound".into());
-    }
+    // The registry is not an application tree. Bound its enumeration separately
+    // so unrelated registrations do not consume a target's traversal allowance.
+    check_deadline(deadline)?;
+    let registry = accessible_proxy(connection, &desktop)?;
+    let references: Vec<(String, OwnedObjectPath)> = call(&registry, "GetChildren", &())?;
+    check_deadline(deadline)?;
+    registry_count_allowed(references.len(), target_pid)?;
+    let applications = references.into_iter().map(|(service, path)| ObjectRef { service, path });
     let mut active_window = None;
     for application in applications {
         check_deadline(deadline)?;
-        let app_pid = process_id(connection, &application, deadline)?;
-        if app_pid <= 0 {
-            return Err("AT-SPI application has no verifiable process ID".into());
-        }
+        let Some(app_pid) = scoped_application(process_id(connection, &application, deadline), target_pid)? else { continue };
         let windows = children(connection, &application, deadline)?;
         if windows.len() > MAX_WINDOWS {
             return Err("AT-SPI application window count exceeds the scan bound".into());
@@ -336,8 +390,78 @@ fn locate_active_window(
     active_window.ok_or_else(|| "AT-SPI reports no unique active top-level window".into())
 }
 
+fn registry_count_allowed(count: usize, target_pid: Option<u32>) -> Result<(), String> {
+    let limit = if target_pid.is_some() { MAX_SCOPED_REGISTRY_APPS } else { MAX_APPS };
+    if count > limit {
+        Err("AT-SPI application count exceeds the desktop scan bound".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn scoped_application(pid: Result<i32, String>, target_pid: Option<u32>) -> Result<Option<i32>, String> {
+    match pid {
+        Ok(pid) if pid > 0 => Ok(matches_target(pid, target_pid).then_some(pid)),
+        _ if target_pid.is_some() => Ok(None),
+        Ok(_) => Err("AT-SPI application has no verifiable process ID".into()),
+        Err(error) => Err(error),
+    }
+}
+
+fn matches_target(app_pid: i32, target_pid: Option<u32>) -> bool {
+    target_pid.is_none_or(|expected| matches_pid(app_pid, expected))
+}
+
 fn is_top_level_window_role(role: u32) -> bool {
     matches!(role, ROLE_DIALOG | ROLE_FRAME | ROLE_WINDOW)
+}
+
+struct FocusNode {
+    states: Vec<u32>,
+    role: Option<u32>,
+    children: Vec<ObjectRef>,
+}
+
+fn scan_focused(
+    children: Vec<ObjectRef>,
+    deadline: Instant,
+    mut read: impl FnMut(&ObjectRef) -> Result<FocusNode, String>,
+) -> Result<(ObjectRef, Vec<u32>, u32), String> {
+    let mut pending: VecDeque<_> = children
+        .into_iter()
+        .map(|object| (object, 1usize))
+        .collect();
+    let mut visited = 0;
+    let mut focused = None;
+    while let Some((object, depth)) = pending.pop_front() {
+        check_deadline(deadline)?;
+        if visited == MAX_NODES {
+            return Err("AT-SPI tree node limit reached before focus was verified".into());
+        }
+        visited += 1;
+        let node = read(&object)?;
+        if state(&node.states, STATE_FOCUSED) {
+            let role = node
+                .role
+                .filter(|role| *role != 0)
+                .ok_or("AT-SPI focused object has an invalid role")?;
+            record_unique(
+                &mut focused,
+                (object, node.states, role),
+                "focused descendant in the active window",
+            )?;
+        }
+        if depth >= MAX_DEPTH && !node.children.is_empty() {
+            return Err("AT-SPI focus scan reached its maximum tree depth".into());
+        }
+        for child in node.children {
+            if pending.len() + visited >= MAX_NODES {
+                return Err("AT-SPI tree node limit prevents proving focus uniqueness".into());
+            }
+            pending.push_back((child, depth + 1));
+        }
+    }
+    focused.ok_or_else(|| "active AT-SPI window has no focused descendant".to_owned())
 }
 
 fn focused_snapshot(
@@ -346,54 +470,38 @@ fn focused_snapshot(
     deadline: Instant,
 ) -> Result<Snapshot, String> {
     let window_token = object_token(&active.object);
-    let mut pending = VecDeque::new();
-    for child in children(connection, &active.object, deadline)? {
-        pending.push_back((child, 1usize));
-    }
-    let mut visited = 0usize;
-    let mut focused: Option<(ObjectRef, Vec<u32>, u32)> = None;
-    while let Some((object, depth)) = pending.pop_front() {
-        check_deadline(deadline)?;
-        if visited == MAX_NODES {
-            return Err("AT-SPI tree node limit reached before focus was verified".into());
-        }
-        visited += 1;
-        let current_states = states(connection, &object, deadline)?;
-        if state(&current_states, STATE_FOCUSED) {
-            let actual_pid = process_id(connection, &object, deadline)?;
-            if !matches_pid(actual_pid, active.process_id) {
-                return Err(format!(
+    let (focused_object, _, role) = scan_focused(
+        children(connection, &active.object, deadline)?,
+        deadline,
+        |object| {
+            let current_states = states(connection, object, deadline)?;
+            let role = if state(&current_states, STATE_FOCUSED) {
+                let actual_pid = process_id(connection, object, deadline)?;
+                if !matches_pid(actual_pid, active.process_id) {
+                    return Err(format!(
                     "focused accessible PID {actual_pid} does not match active application PID {}",
                     active.process_id
                 ));
-            }
-            let accessible = accessible_proxy(connection, &object)?;
-            let role = match call(&accessible, "GetRole", &()) {
-                Ok(role) if role != 0 => role,
-                Ok(_) => {
-                    return Err("AT-SPI focused object has an invalid role".into());
                 }
-                Err(error) => return Err(format!("focused object GetRole: {error}")),
+                let accessible = accessible_proxy(connection, object)?;
+                let role = match call(&accessible, "GetRole", &()) {
+                    Ok(role) if role != 0 => role,
+                    Ok(_) => {
+                        return Err("AT-SPI focused object has an invalid role".into());
+                    }
+                    Err(error) => return Err(format!("focused object GetRole: {error}")),
+                };
+                Some(role)
+            } else {
+                None
             };
-            record_unique(
-                &mut focused,
-                (object.clone(), current_states, role),
-                "focused descendant in the active window",
-            )?;
-        }
-        let object_children = children(connection, &object, deadline)?;
-        if depth >= MAX_DEPTH && !object_children.is_empty() {
-            return Err("AT-SPI focus scan reached its maximum tree depth".into());
-        }
-        for child in object_children {
-            if pending.len() + visited >= MAX_NODES {
-                return Err("AT-SPI tree node limit prevents proving focus uniqueness".into());
-            }
-            pending.push_back((child, depth + 1));
-        }
-    }
-    let (focused_object, _, role) =
-        focused.ok_or_else(|| "active AT-SPI window has no focused descendant".to_owned())?;
+            Ok(FocusNode {
+                states: current_states,
+                role,
+                children: children(connection, object, deadline)?,
+            })
+        },
+    )?;
 
     let focused_states = states(connection, &focused_object, deadline)?;
     if !state(&focused_states, STATE_FOCUSED)
@@ -520,6 +628,232 @@ fn destination(token: &str, words: &[u32], role: Option<u32>) -> Destination {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_registry_tolerates_unrelated_counts_and_pid_failures() {
+        assert!(registry_count_allowed(33, Some(13362)).is_ok());
+        assert!(registry_count_allowed(300, Some(13362)).is_ok());
+        assert!(registry_count_allowed(33, None).is_err());
+        assert!(registry_count_allowed(MAX_SCOPED_REGISTRY_APPS + 1, Some(13362)).is_err());
+        assert_eq!(scoped_application(Err("exited".into()), Some(13362)).unwrap(), None);
+        assert_eq!(scoped_application(Ok(0), Some(13362)).unwrap(), None);
+        assert_eq!(scoped_application(Ok(9948), Some(13362)).unwrap(), None);
+        assert_eq!(scoped_application(Ok(13362), Some(13362)).unwrap(), Some(13362));
+        assert!(scoped_application(Err("exited".into()), None).is_err());
+    }
+
+    #[test]
+    fn electron_child_batches_preserve_all_references_and_remain_bounded() {
+        let references = |count| {
+            (0..count)
+                .map(|index| {
+                    (
+                        ":1.26".to_owned(),
+                        OwnedObjectPath::try_from(format!("/accessible/{index}")).unwrap(),
+                    )
+                })
+                .collect()
+        };
+        let children = bounded_children(references(41)).unwrap();
+        assert_eq!(children.len(), 41);
+        assert_eq!(children[40].path.as_str(), "/accessible/40");
+        assert_eq!(
+            bounded_children(references(MAX_CHILDREN)).unwrap().len(),
+            MAX_CHILDREN
+        );
+        assert!(bounded_children(references(MAX_CHILDREN + 1)).is_err());
+    }
+
+    #[test]
+    fn native_target_scope_excludes_other_applications_but_not_same_process_windows() {
+        assert!(!matches_target(9948, Some(13362)));
+        assert!(matches_target(13362, Some(13362)));
+        assert!(!matches_target(0, Some(13362)));
+        assert!(matches_target(9948, None));
+    }
+
+    #[test]
+    fn large_application_trees_find_fields_without_application_names() {
+        for service in [":1.26", ":1.900", ":2.42"] {
+            let references = (0..41)
+                .map(|index| {
+                    (
+                        service.to_owned(),
+                        OwnedObjectPath::try_from(format!("/field/{index}")).unwrap(),
+                    )
+                })
+                .collect();
+            let roots = bounded_children(references).unwrap();
+            let mut visited = 0;
+            let (object, words, role) =
+                scan_focused(roots, Instant::now() + QUERY_BUDGET, |object| {
+                    visited += 1;
+                    let focused = object.path.as_str() == "/field/40";
+                    Ok(FocusNode {
+                        states: state_words(if focused {
+                            &[
+                                STATE_FOCUSED,
+                                STATE_EDITABLE,
+                                STATE_ENABLED,
+                                STATE_SENSITIVE,
+                            ]
+                        } else {
+                            &[STATE_ENABLED]
+                        }),
+                        role: focused.then_some(1),
+                        children: vec![],
+                    })
+                })
+                .unwrap();
+            assert_eq!(visited, 41);
+            assert_eq!(object.service, service);
+            assert!(destination(&object_token(&object), &words, Some(role)).confirmed());
+        }
+    }
+
+    #[test]
+    fn universal_focus_scan_rejects_ambiguity_provider_errors_and_expired_budget() {
+        let roots = || {
+            (0..2)
+                .map(|index| ObjectRef {
+                    service: ":1.900".into(),
+                    path: OwnedObjectPath::try_from(format!("/field/{index}")).unwrap(),
+                })
+                .collect()
+        };
+        assert!(
+            scan_focused(roots(), Instant::now() + QUERY_BUDGET, |_| Ok(FocusNode {
+                states: state_words(&[STATE_FOCUSED]),
+                role: Some(1),
+                children: vec![],
+            }))
+            .unwrap_err()
+            .contains("multiple")
+        );
+        assert!(
+            scan_focused(roots(), Instant::now() + QUERY_BUDGET, |_| Err(
+                "provider unavailable".into()
+            ))
+            .unwrap_err()
+            .contains("provider unavailable")
+        );
+        assert!(scan_focused(
+            roots(),
+            Instant::now() - Duration::from_millis(1),
+            |_| panic!("expired scans must not query providers")
+        )
+        .unwrap_err()
+        .contains("deadline"));
+    }
+
+    #[test]
+    fn universal_focus_scan_keeps_node_depth_and_protected_field_limits() {
+        let object = || ObjectRef {
+            service: ":1.900".into(),
+            path: OwnedObjectPath::try_from("/field").unwrap(),
+        };
+        assert!(
+            scan_focused(vec![object()], Instant::now() + QUERY_BUDGET, |_| Ok(
+                FocusNode {
+                    states: state_words(&[]),
+                    role: None,
+                    children: vec![object()],
+                }
+            ))
+            .unwrap_err()
+            .contains("depth")
+        );
+        let roots = (0..MAX_NODES + 1).map(|_| object()).collect();
+        let mut queries = 0;
+        assert!(scan_focused(roots, Instant::now() + QUERY_BUDGET, |_| {
+            queries += 1;
+            Ok(FocusNode {
+                states: state_words(&[]),
+                role: None,
+                children: vec![],
+            })
+        })
+        .unwrap_err()
+        .contains("node limit"));
+        assert_eq!(queries, MAX_NODES);
+        let words = state_words(&[
+            STATE_FOCUSED,
+            STATE_EDITABLE,
+            STATE_ENABLED,
+            STATE_SENSITIVE,
+        ]);
+        assert!(!destination("field", &words, Some(ROLE_PASSWORD_TEXT)).confirmed());
+        let readonly = state_words(&[
+            STATE_FOCUSED,
+            STATE_EDITABLE,
+            STATE_ENABLED,
+            STATE_SENSITIVE,
+            STATE_READ_ONLY,
+        ]);
+        assert!(!destination("field", &readonly, Some(1)).confirmed());
+    }
+
+    #[test]
+    #[ignore = "requires a focused accessible input in a live KDE session"]
+    fn live_native_target_inspection() {
+        let context = crate::kwin::identify().expect("KDE required").unwrap();
+        eprintln!(
+            "native target PID={} process={}",
+            context.window.process_id, context.process_name
+        );
+        let snapshot = inspect_accessible(
+            Instant::now() + QUERY_BUDGET,
+            Some(context.window.process_id),
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot.context.window.process_id,
+            context.window.process_id
+        );
+        eprintln!(
+            "native target PID={} destination confirmed={} writable={:?} secure={:?}",
+            context.window.process_id,
+            snapshot.destination.confirmed(),
+            snapshot.destination.writable,
+            snapshot.destination.secure
+        );
+        assert!(
+            snapshot.destination.confirmed(),
+            "focus an editable non-protected input before running"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a live desktop accessibility bus"]
+    fn live_registry_child_count_does_not_require_bulk_properties() {
+        let session = ConnectionBuilder::session()
+            .unwrap()
+            .method_timeout(CALL_TIMEOUT)
+            .build()
+            .unwrap();
+        let bus = proxy(&session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus").unwrap();
+        let address: String = call(&bus, "GetAddress", &()).unwrap();
+        let connection = ConnectionBuilder::address(address.as_str())
+            .unwrap()
+            .method_timeout(CALL_TIMEOUT)
+            .build()
+            .unwrap();
+        let registry = proxy(&connection, REGISTRY, DESKTOP_PATH, ACCESSIBLE).unwrap();
+        let count: i32 = registry.get_property("ChildCount").unwrap();
+        assert!(count >= 0);
+        let next: i32 = registry.get_property("ChildCount").unwrap();
+        assert!(next >= 0);
+        let desktop = ObjectRef {
+            service: REGISTRY.to_owned(),
+            path: OwnedObjectPath::try_from(DESKTOP_PATH).unwrap(),
+        };
+        let deadline = Instant::now() + QUERY_BUDGET;
+        let applications = children(&connection, &desktop, deadline).unwrap();
+        assert!(!applications.is_empty());
+        for application in applications {
+            assert!(process_id(&connection, &application, deadline).unwrap() > 0);
+        }
+    }
 
     fn state_words(ids: &[u32]) -> Vec<u32> {
         let mut words = vec![0; 2];
@@ -686,3 +1020,10 @@ mod tests {
         assert!(!is_top_level_window_role(0));
     }
 }
+    #[test]
+    fn x11_native_handles_are_not_compared_to_synthetic_accessible_handles() {
+        let native = WindowIdentity { handle: 42, process_id: 13362 };
+        let destination = inspect_for_session(&native, false).unwrap();
+        assert_eq!(destination, Destination::default());
+        assert!(!destination.confirmed(), "PID-only evidence cannot confirm same-process windows");
+    }

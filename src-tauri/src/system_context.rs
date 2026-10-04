@@ -4,6 +4,13 @@ use promptify_core::pipeline::{BackendError, ContextProvider};
 /// Foreground-window identity via KWin on KDE Wayland, otherwise x-win.
 pub struct SystemContext;
 
+static LAST_ERROR: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Settings reads diagnostics from actual jobs, never competing for focus scans.
+pub fn last_error() -> Option<String> {
+    LAST_ERROR.read().unwrap_or_else(|error| error.into_inner()).clone()
+}
+
 /// Releases desktop window-tracking connections.
 pub fn shutdown() {
     #[cfg(target_os = "linux")]
@@ -57,20 +64,10 @@ impl ContextProvider for SystemContext {
         return crate::destination_macos::inspect(window);
     }
     fn identify(&self) -> Result<ActiveContext, BackendError> {
-        #[cfg(target_os = "linux")]
-        if crate::wayland_paste::applies() {
-            match crate::destination_linux::active_context() {
-                Ok(context) => return Ok(context),
-                Err(error) => log::warn!("Accessibility focus tracking unavailable; trying native window metadata: {error}"),
-            }
-        }
-        if let Some(result) = kde() {
-            return result;
-        }
-        let window = active_window()?;
-        let url = x_win::get_browser_url(&window).ok().filter(|url| !url.trim().is_empty());
-        let process_name = if window.info.exec_name.is_empty() { window.info.name.clone() } else { window.info.exec_name.clone() };
-        Ok(ActiveContext { window: identity(&window), process_name, window_title: window.title, url })
+        let result = identify();
+        *LAST_ERROR.write().unwrap_or_else(|error| error.into_inner()) =
+            result.as_ref().err().map(|error| error.0.clone());
+        result
     }
 
     /// Reads the focused control's text with UI Automation. Only called for apps the user opted in;
@@ -89,6 +86,23 @@ impl ContextProvider for SystemContext {
         }
         Ok(identity(&active_window()?))
     }
+}
+
+fn identify() -> Result<ActiveContext, BackendError> {
+    if let Some(result) = kde() {
+        return result;
+    }
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        match crate::destination_linux::active_context() {
+            Ok(context) => return Ok(context),
+            Err(error) => log::warn!("Accessibility focus tracking unavailable; trying native window metadata: {error}"),
+        }
+    }
+    let window = active_window()?;
+    let url = x_win::get_browser_url(&window).ok().filter(|url| !url.trim().is_empty());
+    let process_name = if window.info.exec_name.is_empty() { window.info.name.clone() } else { window.info.exec_name.clone() };
+    Ok(ActiveContext { window: identity(&window), process_name, window_title: window.title, url })
 }
 
 #[cfg(windows)]

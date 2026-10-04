@@ -7,6 +7,7 @@ import { DesktopIntegration } from "./DesktopIntegration";
 import { UpdateIndicator, UpdatesSettings, useUpdates } from "./Updates";
 import { PromptRoutingSettings } from "./PromptRouting";
 import "./settings.css";
+import { RecoveryButton } from "./RecoveryButton";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
 
@@ -67,7 +68,7 @@ function HotkeyField({ mode, value, onSaved }: { mode: "prompt" | "dictation"; v
 
 function ModifierHold({ info, onChange }: { info: AppInfo; onChange: () => void }) {
   const enabled = info.modifier_hold_requested;
-  const monitorError = info.modifier_hold_error;
+  const monitorError = enabled ? info.modifier_hold_error : null;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const setEnabled = async (next: boolean) => {
@@ -97,7 +98,11 @@ function ModifierHold({ info, onChange }: { info: AppInfo; onChange: () => void 
       <div className="hint desc indent-check">Shortcuts like Ctrl+Shift+T and the quick Ctrl+Shift layout switch are ignored.</div>
       <div className="hint desc indent-check">This optional gesture requires supported system input monitoring. If it is unavailable, use the configured Prompt shortcut through desktop integration. Promptify never requires selecting a physical keyboard or granting raw keyboard-device access.</div>
       {(error || monitorError) && <div className="error" role="alert">{error || monitorError}</div>}
-      {monitorError && <button disabled={busy} onClick={() => void setEnabled(true)}>Retry Ctrl+Shift monitoring</button>}
+      {monitorError && <div className="inline">
+        <button disabled={busy} onClick={() => void setEnabled(true)}>Retry Ctrl+Shift monitoring</button>
+        {enabled && <button disabled={busy} onClick={() => void setEnabled(false)}>Disable Ctrl+Shift hold</button>}
+        {navigator.userAgent.includes("Mac") && <RecoveryButton action={() => api.openSystemSettings("input_monitoring")} onComplete={onChange}>Open Input Monitoring settings</RecoveryButton>}
+      </div>}
     </div>
   );
 }
@@ -106,14 +111,20 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
   const [error, setError] = useState<string | null>(null);
   if (!info) return <p>Loading…</p>;
   const guided = guidedStep !== undefined;
+  const integrationNeedsPermission = info.paste_permission === "required";
   return (
     <section className={`general${guidedStep === "input" ? " tour-target" : ""}`} hidden={guidedStep === "practice"} aria-label="General settings">
       <h2>General</h2>
       <p className="hint">Hold a hotkey anywhere, say what you want, and Promptify writes it into the app you're using. Everything runs on this computer, and Promptify keeps running in the system tray when you close this window.</p>
-      {(guided ? (info.prompt_hotkey_error ? [info.prompt_hotkey_error] : []) : info.hotkey_errors).map((e) => (
+      {[...new Set(guided ? (info.prompt_hotkey_error ? [info.prompt_hotkey_error] : []) : info.hotkey_errors)].map((e) => (
         <p key={e} className="error">{e}</p>
       ))}
+      {!guided && integrationNeedsPermission && <DesktopIntegration info={info} onChange={onChange} />}
       <h3>Hotkeys</h3>
+      {!guided && info.hotkeys_paused && <div role="alert">
+        <p className="warn">Shortcuts are paused.</p>
+        <RecoveryButton action={api.resumeOnboardingHotkeys} onComplete={onChange}>Resume shortcuts</RecoveryButton>
+      </div>}
       <dl>
         <dt>Prompt</dt>
         <dd>
@@ -149,10 +160,16 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
       </>}
       <h3>This computer</h3>
       {!guided && <p className="hint">Automatic input inspection is independent of the app or site. With task-aware adaptation, a confirmed writable input can receive your prompt without an app-specific setting. Keep that input focused. Unconfirmed inputs require review; protected inputs are never pasted into.</p>}
-      {!guided && <DesktopIntegration info={info} onChange={onChange} />}
+      {!guided && !integrationNeedsPermission && <DesktopIntegration info={info} onChange={onChange} />}
       <dl>
         <dt>Microphone</dt>
-        <dd>{info.input_device ? `${info.input_device} (system default)` : <span className="warn">No default microphone found</span>}</dd>
+        <dd>
+          {info.input_device ? `${info.input_device} (system default)` : <span className="warn">No default microphone found</span>}
+          {!guided && <div className="actions">
+            <RecoveryButton action={() => api.openSystemSettings("microphone")} onComplete={onChange}>Open microphone settings</RecoveryButton>
+            <button onClick={onChange}>Refresh microphone and shortcut</button>
+          </div>}
+        </dd>
         <dt>Models</dt>
         <dd>{info.engines_ready ? "Loaded and ready" : <span className="warn">{info.engine_error || (info.models_installed ? "Loading the selected models..." : "Download a speech model and a prompt model under Models to start.")}</span>}</dd>
         <dt>Acceleration</dt>
@@ -164,6 +181,13 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
           <div className="hint desc">{info.gpu_device ? `Prompt model running on ${info.gpu_device}` : "Prompt model running on the CPU"}</div>
         </dd>
       </dl>
+      {!guided && !info.engines_ready && <div className="actions">
+        <RecoveryButton action={() => api.openRecoverySettings("models")}>Choose models</RecoveryButton>
+        {info.models_installed && info.engine_error && <>
+          <RecoveryButton action={api.retryModelLoading} onComplete={onChange}>Retry model loading</RecoveryButton>
+          {info.use_gpu && <RecoveryButton action={() => api.setUseGpu(false)} onComplete={onChange}>Try loading on CPU</RecoveryButton>}
+        </>}
+      </div>}
       {error && <p className="error" role="alert">{error}</p>}
     </section>
   );
@@ -174,6 +198,8 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
   const [progress, setProgress] = useState<Record<string, DownloadEvent>>({});
   const [error, setError] = useState<string | null>(null);
   const totalRam = models.find((m) => m.compatibility.total_ram_bytes !== null)?.compatibility.total_ram_bytes;
+  const [listenerAttempt, setListenerAttempt] = useState(0);
+  const [listenerError, setListenerError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     void api.listModels().then(setModels, (reason) => setError(`Could not read models: ${String(reason)}`));
@@ -193,10 +219,10 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
     });
     void unlisten.then((unlisten) => {
       if (disposed) unlisten();
-      else { stop = unlisten; refresh(); }
-    }, (reason) => setError(`Could not listen for model downloads: ${String(reason)}`));
+      else { stop = unlisten; setListenerError(null); refresh(); }
+    }, (reason) => { if (!disposed) setListenerError(`Could not listen for model downloads: ${String(reason)}`); });
     return () => { disposed = true; stop?.(); };
-  }, [refresh]);
+  }, [refresh, listenerAttempt]);
 
   const act = (fn: () => Promise<unknown>) => {
     setError(null);
@@ -275,7 +301,11 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
       </details>
       {group("stt", "Speech to text")}
       {group("llm", "Prompt writer")}
-      {error && <div role="alert"><p className="error">{error}</p><button onClick={refresh}>Refresh models</button></div>}
+      {(listenerError || error) && <div role="alert"><p className="error">{listenerError || error}</p><button onClick={() => {
+        setError(null);
+        setListenerAttempt((value) => value + 1);
+        refresh();
+      }}>Refresh models</button></div>}
     </section>
   );
 }
@@ -283,7 +313,12 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
 function History({ info, onChange }: { info: AppInfo | null; onChange: () => void }) {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const refresh = useCallback(() => void api.listHistory().then(setEntries, (reason) => setError(`Could not load history: ${String(reason)}`)), []);
+  const [listenerError, setListenerError] = useState<string | null>(null);
+  const [listenerAttempt, setListenerAttempt] = useState(0);
+  const refresh = useCallback(() => void api.listHistory().then((next) => {
+    setEntries(next);
+    setError(null);
+  }, (reason) => setError(`Could not load history: ${String(reason)}`)), []);
 
   useEffect(() => {
     refresh();
@@ -291,10 +326,13 @@ function History({ info, onChange }: { info: AppInfo | null; onChange: () => voi
     let stop: (() => void) | undefined;
     void listen("history-changed", refresh).then((unlisten) => {
       if (disposed) unlisten();
-      else stop = unlisten;
-    }, (reason) => { if (!disposed) setError(`Could not listen for history changes: ${String(reason)}`); });
+      else {
+        stop = unlisten;
+        setListenerError(null);
+      }
+    }, (reason) => { if (!disposed) setListenerError(`Could not listen for history changes: ${String(reason)}`); });
     return () => { disposed = true; stop?.(); };
-  }, [refresh]);
+  }, [refresh, listenerAttempt]);
 
   const act = (fn: () => Promise<unknown>) => {
     setError(null);
@@ -315,7 +353,10 @@ function History({ info, onChange }: { info: AppInfo | null; onChange: () => voi
         Save history and use it as context
       </label>
       <button disabled={entries.length === 0} onClick={() => window.confirm(`Delete all ${entries.length} history entries? This cannot be undone.`) && act(api.clearHistory)}>Clear all</button>
-      {error && <p className="error">{error}</p>}
+      {(listenerError || error) && <div role="alert"><p className="error">{listenerError || error}</p><button onClick={() => {
+        setListenerAttempt((value) => value + 1);
+        refresh();
+      }}>Refresh history</button></div>}
       <ul className="history">
         {entries.map((e) => (
           <li key={e.id}>
@@ -337,6 +378,8 @@ function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void 
   const [fixes, setFixes] = useState("");
   const [apps, setApps] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const dirty = useRef(false);
 
   useEffect(() => {
@@ -349,18 +392,29 @@ function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void 
   if (!info) return null;
   const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
   const save = () => {
+    setSaveError(null);
+    setStatus(null);
+    const invalid = lines(fixes).find((line) => {
+      const [from, ...rest] = line.split("=>");
+      return !from.trim() || !rest.length || !rest.join("=>").trim();
+    });
+    if (invalid) {
+      setSaveError(`Invalid correction "${invalid}". Use nonempty "heard => meant" pairs, then save again.`);
+      return;
+    }
     const replacements = lines(fixes).flatMap((l) => {
       const [from, ...rest] = l.split("=>");
       return rest.length ? [{ from: from.trim(), to: rest.join("=>").trim() }] : [];
     });
+    setSaving(true);
     Promise.all([api.setVocabulary({ words: lines(words), replacements }), api.setScreenTextApps(lines(apps))]).then(
       () => {
         dirty.current = false;
         setStatus("Saved.");
         onChange();
       },
-      (err) => setStatus(String(err)),
-    );
+      (err) => setSaveError(String(err)),
+    ).finally(() => setSaving(false));
   };
 
   return (
@@ -381,7 +435,8 @@ function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void 
         <textarea rows={3} value={apps} onChange={(e) => { dirty.current = true; setApps(e.target.value); }} />
       </label>
       <p className="hint">Only the focused text box is read, only when you press a hotkey in one of these apps, and never password fields. It is not saved in history.</p>
-      <button className="primary" onClick={save}>Save</button> {status && <span className="hint">{status}</span>}
+      <button className="primary" disabled={saving} onClick={save}>{saving ? "Saving..." : saveError ? "Retry save" : "Save"}</button> {status && <span className="hint" role="status">{status}</span>}
+      {saveError && <p role="alert" className="error">{saveError}</p>}
     </section>
   );
 }
@@ -452,6 +507,25 @@ function Settings() {
       window.removeEventListener("focus", refreshInfo);
     };
   }, [refreshInfo, connectionAttempt]);
+
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void listen<"general" | "models" | "prompts">("open-settings-section", ({ payload }) => {
+      if (disposed) return;
+      if (payload !== "general" && payload !== "models" && payload !== "prompts") {
+        setLoadError("An invalid recovery section was requested. Retry the connection.");
+        return;
+      }
+      setPane(payload);
+      localStorage.setItem(PANE_KEY, payload);
+      window.scrollTo(0, 0);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    }, (reason) => { if (!disposed) setLoadError(`Could not connect to recovery controls: ${String(reason)}`); });
+    return () => { disposed = true; stop?.(); };
+  }, [connectionAttempt]);
 
   // Until models are installed nothing works, so the first view goes straight there.
   useEffect(() => {

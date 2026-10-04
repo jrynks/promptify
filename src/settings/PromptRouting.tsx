@@ -90,6 +90,15 @@ export function PromptRoutingSettings() {
     finally { setBusy(false); }
   };
 
+  const reset = async () => {
+    setBusy(true); setError(null); setNotice("");
+    try {
+      setState(await api.resetRouting());
+      setNotice("Default routing restored. The previous routing file was backed up in the app data folder.");
+    } catch (reason) { setError(String(reason)); }
+    finally { setBusy(false); }
+  };
+
   const needle = query.trim().toLowerCase();
   const matches = catalog?.tasks.filter((task) =>
     (includeProposed || task.status === "enabled") &&
@@ -98,8 +107,13 @@ export function PromptRoutingSettings() {
   return <section>
     <h2>Prompt types</h2>
     <p className="hint">Adapt the prompt to the identified tool, its input surface, and what you ask it to do. Everything is rewritten locally; the destination does the work.</p>
-    {error && <p role="alert" className="error">{error}</p>}
-    {state?.error && <p role="alert" className="error">{state.error} Legacy rendering remains active until the routing settings are repaired.</p>}
+    {error && <div role="alert"><p className="error">{error}</p>
+      {catalog && state && <button disabled={busy} onClick={() => setAttempt((value) => value + 1)}>Retry prompt types</button>}
+    </div>}
+    {state?.error && <div role="alert"><p className="error">{state.error} Legacy rendering remains active until the routing settings are repaired.</p>
+      <p className="hint">Restoring defaults backs up the existing routing file before replacing it.</p>
+      <button disabled={busy} onClick={() => void reset()}>Restore default routing</button>
+    </div>}
     {!catalog || !state ? <>
       {!error && <p role="status">Loading prompt types...</p>}
       {error && <button onClick={() => setAttempt((value) => value + 1)}>Retry prompt types</button>}

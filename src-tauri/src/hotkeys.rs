@@ -44,7 +44,13 @@ pub struct HotkeyState {
 
 impl HotkeyState {
     pub fn errors(&self) -> Vec<String> {
-        self.prompt_error.iter().chain(&self.dictation_error).cloned().collect()
+        let mut errors: Vec<String> = self.prompt_error.iter().cloned().collect();
+        if let Some(error) = &self.dictation_error
+            && !errors.contains(error)
+        {
+            errors.push(error.clone());
+        }
+        errors
     }
 }
 
@@ -290,4 +296,24 @@ fn portal_errors(state: &mut HotkeyState) {
     let error = crate::portal_shortcuts::error();
     state.prompt_error = error.clone();
     state.dictation_error = error.clone();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_shortcut_errors_are_reported_once_without_hiding_distinct_errors() {
+        let config = HotkeyConfig::defaults();
+        let mut state = HotkeyState {
+            hotkeys: Hotkeys::parse(&config).unwrap(),
+            config,
+            prompt_error: Some("Permission required".into()),
+            dictation_error: Some("Permission required".into()),
+            paused: false,
+        };
+        assert_eq!(state.errors(), vec!["Permission required"]);
+        state.dictation_error = Some("Shortcut already in use".into());
+        assert_eq!(state.errors(), vec!["Permission required", "Shortcut already in use"]);
+    }
 }

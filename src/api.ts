@@ -200,6 +200,9 @@ export interface HistoryEntry {
 }
 
 export const api = {
+  openRecoverySettings: (section: "general" | "models" | "prompts") => invoke<void>("open_recovery_settings", { section }),
+  openDataFolder: () => invoke<void>("open_data_folder"),
+  openSystemSettings: (section: "microphone" | "accessibility" | "input_monitoring") => invoke<void>("open_system_settings", { section }),
   updateInfo: () => invoke<UpdateInfo>("update_info"),
   checkForUpdates: () => invoke<UpdateInfo>("check_for_updates"),
   setUpdateChecks: (enabled: boolean) => invoke<UpdateInfo>("set_update_checks", { enabled }),
@@ -220,6 +223,8 @@ export const api = {
   resumeOnboardingHotkeys: () => invoke<OnboardingStatus>("resume_onboarding_hotkeys"),
   routingState: () => invoke<RoutingState>("routing_state"),
   setRendering: (rendering: Rendering) => invoke<RoutingState>("set_rendering", { rendering }),
+  resetRouting: () => invoke<RoutingState>("reset_routing"),
+  retryFocusDetection: () => invoke<void>("retry_focus_detection"),
   promptCatalog: () => invoke<PromptCatalog>("prompt_catalog"),
   queuePromptRouting: (options: RoutingOptions) => invoke<void>("queue_prompt_routing", { options }),
   cleanDictation: (text: string) => invoke<string>("clean_dictation", { text }),

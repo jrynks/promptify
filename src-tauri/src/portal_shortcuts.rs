@@ -1,6 +1,6 @@
 //! Explicitly authorized Wayland activation. Never create a session from the paste path.
 //! API/schema: ashpd 0.13.13 and org.freedesktop.portal.GlobalShortcuts version 1.
-//! BindShortcuts is once per session; changes require a new explicit grant.
+//! BindShortcuts is once per session; authorized launches reconnect a fresh session.
 //! Escape is reserved for the session, but delivered only during an active job:
 //! version 1 has no per-shortcut temporary registration or pass-through mechanism.
 
@@ -72,7 +72,7 @@ pub fn set_cancel(enabled: bool) {
     BACKEND.lock().unwrap().cancel = enabled;
 }
 
-/// Only the common user-initiated desktop integration action may call this blocking function.
+/// Called by explicit Enable or restoration after a previously completed authorization.
 pub fn grant(app: AppHandle) -> Result<(), String> {
     if !crate::wayland_paste::applies() {
         return Err("GlobalShortcuts permission is only used in a Wayland session.".into());
@@ -104,11 +104,11 @@ pub fn grant(app: AppHandle) -> Result<(), String> {
     let worker_app = app.clone();
     let spawn = std::thread::Builder::new().name("portal-shortcuts".into()).spawn(move || {
         let result = zbus::block_on(async {
-            let portal = GlobalShortcuts::new().await.map_err(portal_error)?;
+            let portal = GlobalShortcuts::new().await.map_err(|error| permission_error(&worker_app, generation, error))?;
             if portal.version() < 1 {
                 return Err("The desktop does not expose a usable GlobalShortcuts portal.".into());
             }
-            let session = portal.create_session(Default::default()).await.map_err(portal_error)?;
+            let session = portal.create_session(Default::default()).await.map_err(|error| permission_error(&worker_app, generation, error))?;
             let result = Abortable::new(
                 run_session(&worker_app, &portal, &session, &config, &shortcuts, generation, &tx),
                 registration,
@@ -143,6 +143,27 @@ pub fn grant(app: AppHandle) -> Result<(), String> {
 
 fn portal_error(error: impl std::fmt::Display) -> String {
     format!("The desktop's GlobalShortcuts portal failed: {error}. {HELP}")
+}
+
+fn forget_authorization(app: &AppHandle, generation: u64) {
+    crate::commands::forget_desktop_authorization_if(app, || {
+        let mut backend = BACKEND.lock().unwrap();
+        if backend.generation != generation { return false; }
+        backend.active = false;
+        true
+    });
+}
+
+fn permission_error(app: &AppHandle, generation: u64, error: ashpd::Error) -> String {
+    if crate::wayland_paste::consent_denied(&error) {
+        forget_authorization(app, generation);
+    }
+    portal_error(error)
+}
+
+pub fn restoration_failed(app: &AppHandle, message: &str) {
+    let generation = BACKEND.lock().unwrap().generation;
+    publish(app, generation, Some(message));
 }
 
 /// Returns false for obsolete workers. Notifications never run under the hotkey lock.
@@ -195,11 +216,18 @@ async fn run_session(
     let binding = portal.bind_shortcuts(session, shortcuts, None, Default::default()).fuse();
     futures_util::pin_mut!(binding);
     let bound = futures_util::select! {
-        result = binding => result.map_err(portal_error)?.response().map_err(portal_error)?,
-        _ = closed.next() => return Err(format!("Shortcut permission was closed while binding. {HELP}")),
+        result = binding => result.map_err(|error| permission_error(app, generation, error))?
+            .response().map_err(|error| permission_error(app, generation, error))?,
+        event = closed.next() => {
+            if event.is_some() { forget_authorization(app, generation); }
+            return Err(format!("Shortcut permission was closed while binding. {HELP}"));
+        },
         _ = owner.next() => return Err(format!("The desktop portal disconnected while binding. {HELP}")),
     };
-    check_bound(bound.shortcuts())?;
+    check_bound(bound.shortcuts()).map_err(|error| {
+        forget_authorization(app, generation);
+        error
+    })?;
     remember_bindings(generation, bound.shortcuts());
     {
         let state = app.state::<AppState>();
@@ -223,12 +251,25 @@ async fn run_session(
                 let event = event.ok_or_else(|| portal_error("deactivation signal stream ended"))?;
                 deliver(app, generation, &path, PortalEvent::Deactivated(&event), &mut pressed);
             },
-            _ = closed.next() => return Err(format!("Shortcut permission was closed or revoked. {HELP}")),
+            event = closed.next() => {
+                if event.is_some() {
+                    {
+                        let mut backend = BACKEND.lock().unwrap();
+                        if backend.generation != generation { return Err(HELP.into()); }
+                        backend.active = false;
+                    }
+                    forget_authorization(app, generation);
+                }
+                return Err(format!("Shortcut permission was closed or revoked. {HELP}"));
+            },
             _ = owner.next() => return Err(format!("The desktop portal disconnected or restarted. {HELP}")),
             event = changed.next() => {
                 let event = event.ok_or_else(|| portal_error("shortcut change signal stream ended"))?;
                 if event.session_handle().as_str() == path {
-                    check_bound(event.shortcuts())?;
+                    check_bound(event.shortcuts()).map_err(|error| {
+                        forget_authorization(app, generation);
+                        error
+                    })?;
                     if remember_bindings(generation, event.shortcuts())
                         && let Err(error) = app.emit_to("settings", "desktop-integration-changed", bindings())
                     {

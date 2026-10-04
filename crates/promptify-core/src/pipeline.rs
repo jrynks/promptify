@@ -397,6 +397,15 @@ impl Orchestrator {
         self.begin_with_options(mode, JobOptions::default())
     }
 
+    /// Explicit diagnostics may inspect focus only while no job owns the context.
+    pub fn inspect_context_if_idle(&self) -> Result<Option<ActiveContext>, BackendError> {
+        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return Ok(None);
+        }
+        let _busy = BusyGuard(self.busy.clone());
+        self.context.identify().map(Some)
+    }
+
     pub fn begin_with_options(&self, mode: Mode, options: JobOptions) -> Result<Job, BeginError> {
         if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
             return Err(BeginError::Busy);
@@ -767,6 +776,16 @@ mod tests {
         assert_eq!(h.generator.calls.lock().unwrap().len(), calls, "normal automatic dictation must remain enabled");
     }
 
+    #[test]
+    fn explicit_focus_diagnostics_never_inspect_during_a_job() {
+        let h = harness(chat_ctx(), "", generator(""), ContextPolicy::default(), Limits::default());
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        assert!(h.orchestrator.inspect_context_if_idle().unwrap().is_none());
+        drop(job);
+        assert_eq!(h.orchestrator.inspect_context_if_idle().unwrap().unwrap().window, TARGET);
+        assert!(h.orchestrator.begin(Mode::Prompt).is_ok(), "diagnostics must release admission");
+    }
+
     fn chat_ctx() -> ActiveContext {
         ActiveContext {
             window: TARGET,
@@ -952,6 +971,31 @@ mod tests {
         h.orchestrator.set_rendering(Rendering::Adaptive);
         assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
         assert_eq!(inserts(&h), 0);
+    }
+
+    #[test]
+    fn explicit_code_chat_allows_one_paste_without_accessibility_and_still_checks_focus() {
+        let ctx = ActiveContext {
+            window: TARGET, process_name: "code".into(),
+            window_title: "Promptify - Agents - Visual Studio Code".into(), url: None,
+        };
+        let h = harness(ctx, "Explain a heat pump", generator(&test_graph("Explain a heat pump.")), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_rendering(Rendering::Adaptive);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+        let confirm = || RoutingOptions {
+            rendering: Rendering::Adaptive,
+            surface: Some(crate::routing::Surface::CodeChat),
+            ..Default::default()
+        };
+        h.orchestrator.queue_routing(confirm()).unwrap();
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Inserted { .. }));
+        assert_eq!(inserts(&h), 1);
+        assert!(matches!(run(&h, Mode::Prompt).outcome, Outcome::Blocked { reason: BlockReason::SurfaceUnconfirmed, .. }));
+        h.orchestrator.queue_routing(confirm()).unwrap();
+        let job = h.orchestrator.begin(Mode::Prompt).unwrap();
+        *h.context.foreground.lock().unwrap() = Some(WindowIdentity { handle: 999, process_id: 999 });
+        assert!(matches!(h.orchestrator.finish(job, &[], &mut |_| {}).outcome, Outcome::Blocked { reason: BlockReason::FocusChanged, .. }));
+        assert_eq!(inserts(&h), 1);
     }
 
     #[test]
