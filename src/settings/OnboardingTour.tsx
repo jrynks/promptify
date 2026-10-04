@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AppInfo, type EngineStatus, type OnboardingStatus, type OnboardingStep, type PracticeEvent } from "../api";
 import { DesktopIntegration } from "./DesktopIntegration";
+import { RecoveryButton } from "./RecoveryButton";
 
 const STEPS: { id: OnboardingStep; label: string }[] = [
   { id: "models", label: "Local models" },
@@ -169,6 +170,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
         <p role="alert" className="error">{status.startup_error}</p>
         <p>Check the settings file and folder permissions. Your existing configuration will not be replaced with defaults. After fixing the problem, retry to restart Promptify safely.</p>
         <button disabled={busy} onClick={() => void act(api.retryOnboardingStartup)}>Retry startup</button>
+        <RecoveryButton action={api.openDataFolder}>Open app data folder</RecoveryButton>
         {error && <p role="alert" className="error">{error}</p>}
       </section>
     );
@@ -202,6 +204,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
           <p>{info.input_device ? `Detected: ${info.input_device}. Recording access has not been tested yet.` : "No default microphone was detected. Connect or enable one, then refresh."}</p>
           <p className="hint">{microphoneHelp}</p>
           <div className="tour-actions">
+            <RecoveryButton action={() => api.openSystemSettings("microphone")} onComplete={onChange}>Open microphone settings</RecoveryButton>
             <button disabled={busy} onClick={onChange}>Refresh microphone and shortcut</button>
             {info.hotkeys_paused && <button disabled={busy} onClick={() => void act(api.resumeOnboardingHotkeys)}>Resume shortcuts</button>}
           </div>
@@ -220,6 +223,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
           {!inputReady && <p role="alert" className="error">The required input or model configuration changed. Go back to check it before trying again.</p>}
           {(!inputReady && (info.paste_permission === "required" || info.desktop_error || info.desktop_integration_enabled === false)) && <DesktopIntegration info={info} onChange={onChange} />}
           <button disabled={busy || active || !inputReady || !listening} onClick={() => void arm()}>Prepare practice</button>
+          {active && <RecoveryButton action={api.disarmOnboardingPractice} onComplete={onChange}>Cancel practice</RecoveryButton>}
           <label className="practice-label" htmlFor="setup-practice">Practice field
             <textarea
               id="setup-practice"

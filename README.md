@@ -307,14 +307,36 @@ Wayland desktop integration:
 - **Focus evidence**: bounded AT-SPI metadata inspection can establish the active accessible
   window and writable field without reading its contents or requiring a manual extension.
   Providers do not expose every application. Existing native window tracking is a reduced-assurance
-  fallback, not proof of a writable input. KDE's KWin snapshot uses a short-lived script,
+  fallback, not proof of a writable input. On KDE, KWin supplies the authoritative window
+  identity first. AT-SPI scans only application trees belonging to that authenticated process;
+  unrelated applications' child trees, active flags, and failed PID lookups do not invalidate
+  the target scan. Unscoped discovery is capped at 32 registrations; native-scoped discovery
+  allows up to 4096, with the same overall deadline and per-target tree bounds.
+  The native window is rechecked before and after inspection. KDE's KWin snapshot uses a short-lived script,
   unloaded after each query, accepting replies only from KWin's authenticated D-Bus connection.
 - **Permission lifecycle**: a private `remote-desktop-token` can reduce repeated permission
-  prompts. Sessions are acquired together by the explicit Enable action, not restored partially
-  at startup. Re-enable after a new launch or permission loss. **Disable desktop integration**
+  prompts. The first explicit Enable action acquires both sessions and saves authorization
+  only after both succeed. Subsequent Wayland launches reconnect both sessions in a background
+  worker using that saved choice and the RemoteDesktop restore token. Fresh profiles and
+  profiles with disabled integration never request startup authorization. Older profiles
+  need one explicit Enable after this upgrade to record combined consent.
+  The desktop still controls approval and may display a dialog again; cancellation, revocation,
+  or reconnection failure leaves explicit recovery controls rather than claiming permission.
+  Enabling on X11 does not record Wayland consent. Cancellation, denial, explicit disable,
+  and session revocation clear saved authorization, so startup does not repeat those dialogs.
+  Transient portal transport failures retain prior consent without claiming a live grant.
+  Partial sessions are closed on shortcut or settings-save failure. General Settings places
+  **Enable desktop integration** beside the permission warning and shows shared shortcut
+  errors only once. An unavailable optional modifier gesture offers **Disable Ctrl+Shift hold**
+  next to its error without disabling the ordinary Prompt shortcut. **Disable desktop integration**
   persists across launches, blocks insertion, invalidates old jobs even after re-enabling,
   and closes active Wayland input/shortcut sessions. Desktop-wide stored permission can also
   be revoked through the system's permission controls.
+- **Other permissions**: modifier-hold preferences and approved screen-text apps persist
+  in settings; supported hooks are reapplied on startup. Microphone access, macOS Accessibility
+  and Input Monitoring approvals are stored by the OS, not in Promptify's configuration.
+  Promptify uses existing OS grants and reports revocation; it cannot persist or bypass a denied
+  OS permission. Disable remains disabled across restarts, even with saved authorization.
 - Paste never opens a permission dialog or retries an ambiguous keystroke delivery. It checks
   focus immediately before injection, releases held modifiers on failure, and retains the
   generated result in the overlay for copying if insertion is blocked.
@@ -341,6 +363,32 @@ For an unbundled development build, a user-local `promptify.desktop` entry must 
 and point `Icon` to this checkout's `src-tauri/icons/icon.png`. Keep that development entry hidden with
 `NoDisplay=true` and continue launching through the task above; Linux bundles install their own desktop entry and icons.
 
+### Recovery controls
+
+Errors that need user action keep their recovery controls nearby:
+
+| Area | Available actions |
+| --- | --- |
+| Startup / connection | Retry startup or connection; open the app data folder to inspect invalid configuration without resetting it |
+| Microphone | Open system microphone settings; refresh microphone and shortcut detection |
+| Shortcuts / desktop access | Enable integration, retry focus detection, change shortcuts, resume paused shortcuts, retry or disable optional Ctrl+Shift hold; open macOS Accessibility or Input Monitoring settings when permission is needed |
+| Models | Download, resume, cancel, select or delete models; refresh model events; retry loading, use CPU fallback, or choose another model |
+| Failed results | Open General, Models or Prompt types as appropriate; dismiss any result; copy retained output and restore the previous clipboard |
+| History / vocabulary | Refresh history and its connection; edit invalid correction pairs; retry failed saves |
+| Prompt types | Retry loading; explicitly restore default routing when the routing settings need repair |
+| Updates | Retry status/event connection or update checks; download manually from the release page when no installer is supported; install and restart |
+| Practice | Prepare, cancel, retry the practice connection, return to setup checks or finish after a verified paste |
+
+Actionable overlay errors remain visible until dismissed or replaced by a new request.
+Recovery never retries paste into an uncertain destination, grants desktop permission
+without consent, or resets the user's configuration automatically. System-settings
+shortcuts use fixed OS panels; Linux launchers currently support KDE and GNOME.
+Other desktops receive an explicit instruction to open their settings manually.
+Settings refreshes read cached focus diagnostics and run hardware/status work off the UI thread.
+Only an explicit **Retry focus detection** performs a new scan, and it refuses while a job
+owns the context. Recording opens the microphone concurrently with target inspection,
+without showing focus-changing UI first; startup and inspection timings are logged separately.
+
 ### Optional Ctrl+Shift hold gesture
 
 Enable **Also start a prompt by holding Ctrl+Shift on their own** in General Settings after setup.
@@ -361,6 +409,9 @@ The ordinary Prompt shortcut remains available if the monitor is disabled or per
 
 The monitor does not grab, block, or consume keys. Permission or runtime failures remain
 visible and the optional gesture can be disabled without changing the main shortcut.
+Failed enable attempts restore the previous monitoring state and leave the saved option
+unchanged. A disabled gesture does not display cached background-monitoring errors or
+Retry monitoring controls; the failed action itself still reports its error.
 
 ### Verify native automatic paste on Windows and macOS
 
@@ -422,6 +473,47 @@ Cross-platform destination adapters and native test results are tracked in
 [the universal insertion plan](./UNIVERSAL-INSERTION-PLAN.md) and
 [Linux/Steam Deck research](./LINUX-INSERTION-RESEARCH.md). This development work is not
 certification of every distro or Steam Deck Gaming Mode.
+
+#### Application-independent Linux focus discovery
+
+A KDE Wayland reproduction identified the target application successfully but blocked
+adaptive insertion with `SurfaceUnconfirmed`: the desktop-wide AT-SPI scan timed out or
+encountered a node with 41 children, above its former 32-child bound. This was an inspection
+failure before paste dispatch, not proof of a destination application's clipboard defect.
+
+The fix uses native focused-process evidence on KDE and AT-SPI field metadata without
+application-name allowlists. It fetches each node's child references through `GetChildren`
+instead of one IPC round trip per child. Inspection remains bounded: 256 children per node,
+512 nodes, depth 32, 50 ms per call and a 650 ms overall scan budget. Ambiguous focus,
+provider errors, expired budgets, process mismatches and password/read-only fields still
+fail closed. Outside KDE on Wayland, unique-active-window accessibility discovery remains in use;
+Windows/macOS native adapters are unchanged.
+On X11, native window handles cannot be equated with synthetic AT-SPI identities.
+Field inspection is skipped instead of scanning and then comparing incompatible handles
+or trusting a PID alone: same-process windows must remain distinguishable. Native window
+focus checks remain intact; adaptive routing uses review/copy unless its input is confirmed.
+
+Regression coverage exercises a 41-child tree under three unrelated service identities,
+native process filtering, complete child retention, ambiguous focus, provider failure,
+deadline/node/depth limits and protected fields. The live registry batch/PID probe passed
+on the affected KDE host. Audit recovery validation passed 93 desktop library tests,
+183 core tests and 74 browser tests; four optional live tests are skipped by the default
+desktop suite. The read-only live KWin test separately passed, measuring three focus
+snapshots at 2, 2 and 1 ms on this host. Those timings are not microphone-startup or
+end-to-end paste measurements; no destination-delivery claim follows from them.
+A live writable-field check additionally requires the destination
+input to be focused and exposed by its accessibility provider:
+
+```bash
+cargo test --locked -p promptify --lib destination_linux::tests
+cargo test --locked -p promptify --lib live_registry_child_count -- --ignored --nocapture
+cargo test --locked -p promptify --lib live_native_target_inspection -- --ignored --nocapture
+```
+
+The fix does not turn every application window into an approved AI input. If an application
+does not expose the focused field, review/copy or explicitly select the actual AI input
+surface for the next request. Enabling that application's accessibility support may help;
+Promptify does not change external application settings or grant permissions automatically.
 
 Run the native smoke test in an interactive Windows or macOS desktop session:
 
@@ -577,7 +669,13 @@ history metadata uses `history.routing.jsonl`, keyed by existing history IDs wit
 output. History disabling, deletion, clearing, and retention apply to both. Only compatible graph examples
 are reused; explicit same-app follow-ups can still refer to the previous prompt. No usage telemetry is uploaded.
 Unreadable or newer routing settings are reported instead of overwritten; existing-profile behavior remains
-available. The graph/loop requirement applies in both policies and cannot be disabled by a task override.
+available. **Restore default routing** is an explicit repair command: it first saves the exact existing
+bytes to a new `routing-settings.json.backup-N`, never replaces older backups, and only then writes
+legacy defaults. Backup/read failures leave the original untouched.
+History IDs reserve a durable `history.id` high-water mark under the shared history lock before append.
+Clearing, deleting, retention, restarts and clock rollback do not reuse issued IDs; an invalid high-water
+mark fails closed rather than resetting the sequence. The graph/loop requirement applies in both policies
+and cannot be disabled by a task override.
 
 The taxonomy was informed by primary task/capability documentation and cross-product evidence, not Promptify
 usage statistics: [NBER/OpenAI usage research](https://www.nber.org/papers/w34255),

@@ -53,6 +53,7 @@ pub struct AppSettings {
     /// The prompt hotkey writes plain dictation in apps that are not AI tools.
     pub auto_mode: bool,
     pub desktop_integration_enabled: bool,
+    pub desktop_integration_authorized: bool,
     #[serde(skip_serializing)]
     pub code_chat_paste: bool,
     /// Words to expect and corrections for speech recognition.
@@ -81,6 +82,7 @@ impl Default for AppSettings {
             modifier_keyboard: None,
             auto_mode: false,
             desktop_integration_enabled: true,
+            desktop_integration_authorized: false,
             code_chat_paste: false,
             vocabulary: Default::default(),
             screen_text_apps: Vec::new(),
@@ -165,6 +167,42 @@ pub fn load_routing(data_dir: &Path) -> Result<promptify_core::routing::Renderin
 pub fn save_routing(data_dir: &Path, rendering: promptify_core::routing::Rendering) -> Result<(), String> {
     // An unreadable or newer sidecar must be repaired explicitly, not overwritten.
     load_routing(data_dir)?;
+    write_routing(data_dir, rendering)
+}
+
+pub fn reset_routing(data_dir: &Path) -> Result<(), String> {
+    let path = data_dir.join("routing-settings.json");
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            // Never replace an earlier backup, including after a failed reset.
+            let mut index = 0u64;
+            loop {
+                let backup = data_dir.join(format!("routing-settings.json.backup-{index}"));
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&backup) {
+                    Ok(mut file) => {
+                        file.set_permissions(std::fs::metadata(&path).map_err(|error| error.to_string())?.permissions())
+                            .map_err(|error| format!("could not protect routing backup: {error}"))?;
+                        file.write_all(&bytes).and_then(|_| file.sync_all())
+                            .map_err(|error| format!("could not back up {}: {error}", path.display()))?;
+                        #[cfg(unix)]
+                        std::fs::File::open(data_dir).and_then(|directory| directory.sync_all())
+                            .map_err(|error| format!("could not persist routing backup: {error}"))?;
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        index = index.checked_add(1).ok_or("routing backup index exhausted")?;
+                    }
+                    Err(error) => return Err(format!("could not back up {}: {error}", path.display())),
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("could not read {} for backup: {error}", path.display())),
+    }
+    write_routing(data_dir, Default::default())
+}
+
+fn write_routing(data_dir: &Path, rendering: promptify_core::routing::Rendering) -> Result<(), String> {
     let path = data_dir.join("routing-settings.json");
     let tmp = path.with_extension("json.tmp");
     let preferences = RoutingPreferences { version: 1, rendering };
@@ -278,12 +316,42 @@ mod tests {
     }
 
     #[test]
+    fn permission_related_preferences_survive_restarts_and_disable() {
+        let dir = TestDir::new();
+        let settings: SharedSettings = Arc::new(RwLock::new(AppSettings::default()));
+        update(&settings, &dir.0, |s| {
+            s.desktop_integration_enabled = true;
+            s.desktop_integration_authorized = true;
+            s.modifier_hold = true;
+            s.screen_text_apps = vec!["approved-app".into()];
+        }).unwrap();
+        let loaded = load_checked(&dir.0).unwrap().unwrap();
+        assert!(loaded.desktop_integration_enabled);
+        assert!(loaded.desktop_integration_authorized);
+        assert!(loaded.modifier_hold);
+        assert_eq!(loaded.screen_text_apps, vec!["approved-app"]);
+        update(&settings, &dir.0, |s| {
+            s.desktop_integration_enabled = false;
+            s.desktop_integration_authorized = false;
+        }).unwrap();
+        let disabled = load_checked(&dir.0).unwrap().unwrap();
+        assert!(!disabled.desktop_integration_enabled);
+        assert!(!disabled.desktop_integration_authorized);
+        let legacy: AppSettings = serde_json::from_str(r#"{"desktop_integration_enabled":true}"#).unwrap();
+        assert!(!legacy.desktop_integration_authorized, "default enable is not prior consent");
+    }
+
+    #[test]
     fn failed_integration_save_keeps_the_live_preference() {
         let dir = TestDir::new();
         std::fs::create_dir(dir.0.join("settings.json")).unwrap();
         let settings: SharedSettings = Arc::new(RwLock::new(AppSettings::default()));
-        assert!(update(&settings, &dir.0, |s| s.desktop_integration_enabled = false).is_err());
+        assert!(update(&settings, &dir.0, |s| {
+            s.desktop_integration_enabled = false;
+            s.desktop_integration_authorized = true;
+        }).is_err());
         assert!(settings.read().unwrap().desktop_integration_enabled);
+        assert!(!settings.read().unwrap().desktop_integration_authorized);
     }
 
     #[test]
@@ -367,5 +435,36 @@ mod tests {
         assert!(load_routing(&dir.0).is_err());
         assert!(save_routing(&dir.0, promptify_core::routing::Rendering::Legacy).is_err());
         assert_eq!(std::fs::read_to_string(path).unwrap(), invalid);
+    }
+
+    #[test]
+    fn explicit_routing_reset_preserves_invalid_bytes_and_previous_backups() {
+        let dir = TestDir::new();
+        let path = dir.0.join("routing-settings.json");
+        let invalid = b"\xffinvalid";
+        std::fs::write(&path, invalid).unwrap();
+        reset_routing(&dir.0).unwrap();
+        assert_eq!(load_routing(&dir.0).unwrap(), promptify_core::routing::Rendering::Legacy);
+        assert_eq!(std::fs::read(dir.0.join("routing-settings.json.backup-0")).unwrap(), invalid);
+        let newer = br#"{"version":99,"rendering":"adaptive"}"#;
+        std::fs::write(&path, newer).unwrap();
+        reset_routing(&dir.0).unwrap();
+        assert_eq!(std::fs::read(dir.0.join("routing-settings.json.backup-0")).unwrap(), invalid);
+        assert_eq!(std::fs::read(dir.0.join("routing-settings.json.backup-1")).unwrap(), newer);
+    }
+
+    #[test]
+    fn routing_reset_failure_never_overwrites_an_unbacked_file() {
+        let dir = TestDir::new();
+        let path = dir.0.join("routing-settings.json");
+        std::fs::create_dir(&path).unwrap();
+        assert!(reset_routing(&dir.0).is_err());
+        assert!(path.is_dir());
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, b"invalid").unwrap();
+        std::fs::create_dir(dir.0.join("routing-settings.json.tmp")).unwrap();
+        assert!(reset_routing(&dir.0).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"invalid");
+        assert_eq!(std::fs::read(dir.0.join("routing-settings.json.backup-0")).unwrap(), b"invalid");
     }
 }

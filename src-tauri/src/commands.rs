@@ -3,7 +3,7 @@ use promptify_core::history::HistoryEntry;
 use promptify_core::models::{ModelKind, ModelTier, final_path, is_installed, part_path};
 use promptify_core::pipeline::Mode;
 use promptify_core::routing::{self, Rendering, RoutingOptions, Surface};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::hotkeys::HotkeyConfig;
@@ -12,6 +12,136 @@ use crate::{AppState, ensure_selection, onboarding, preload_engines, settings};
 const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_HISTORY_LISTED: usize = 200;
 static DESKTOP_INTEGRATION_CHANGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[derive(Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoverySection {
+    General,
+    Models,
+    Prompts,
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::{RecoverySection, SystemSettings};
+
+    #[test]
+    fn recovery_targets_accept_only_fixed_sections() {
+        for section in ["general", "models", "prompts"] {
+            assert!(serde_json::from_value::<RecoverySection>(serde_json::json!(section)).is_ok());
+        }
+        for section in ["microphone", "accessibility", "input_monitoring"] {
+            assert!(serde_json::from_value::<SystemSettings>(serde_json::json!(section)).is_ok());
+        }
+        for invalid in ["shell", "https://example.com", "models; arbitrary-command", "../settings"] {
+            assert!(serde_json::from_value::<RecoverySection>(serde_json::json!(invalid)).is_err());
+            assert!(serde_json::from_value::<SystemSettings>(serde_json::json!(invalid)).is_err());
+        }
+
+    }
+
+    #[test]
+    fn startup_restoration_requires_saved_authorization_and_enabled_preference() {
+        let mut settings = crate::settings::AppSettings::default();
+        assert!(!super::should_restore_integration(&settings));
+        settings.desktop_integration_authorized = true;
+        assert!(super::should_restore_integration(&settings));
+        settings.desktop_integration_enabled = false;
+        assert!(!super::should_restore_integration(&settings));
+        settings.desktop_integration_authorized = false;
+        assert!(!super::should_restore_integration(&settings));
+    }
+
+    #[test]
+    fn only_actual_wayland_grants_record_startup_consent() {
+        let mut settings = crate::settings::AppSettings::default();
+        super::enable_preference(&mut settings, None);
+        assert!(!settings.desktop_integration_authorized, "X11 enable is not a Wayland grant");
+        super::enable_preference(&mut settings, Some(false));
+        assert!(!super::should_restore_integration(&settings));
+        super::enable_preference(&mut settings, Some(true));
+        assert!(super::should_restore_integration(&settings));
+        super::enable_preference(&mut settings, None);
+        assert!(settings.desktop_integration_authorized, "a real earlier grant is retained on X11");
+        super::enable_preference(&mut settings, Some(false));
+        assert!(!super::should_restore_integration(&settings));
+    }
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemSettings {
+    Microphone,
+    Accessibility,
+    InputMonitoring,
+}
+
+#[tauri::command]
+pub fn open_recovery_settings(app: AppHandle, section: RecoverySection) -> Result<(), String> {
+    let window = app.get_webview_window("settings").ok_or("The Settings window is unavailable.")?;
+    window.show().map_err(|error| error.to_string())?;
+    window.unminimize().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    app.emit_to("settings", "open-settings-section", section).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn open_data_folder(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(state.data_dir.to_string_lossy(), None::<&str>)
+        .map_err(|error| format!("Could not open the app data folder: {error}"))
+}
+
+#[tauri::command]
+pub fn open_system_settings(app: AppHandle, section: SystemSettings) -> Result<(), String> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        #[cfg(windows)]
+        let url = match section {
+            SystemSettings::Microphone => "ms-settings:privacy-microphone",
+            SystemSettings::Accessibility => "ms-settings:easeofaccess",
+            SystemSettings::InputMonitoring => return Err("Windows does not require Input Monitoring permission.".into()),
+        };
+        #[cfg(target_os = "macos")]
+        let url = match section {
+            SystemSettings::Microphone => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            SystemSettings::Accessibility => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            SystemSettings::InputMonitoring => "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        };
+        app.opener().open_url(url, None::<&str>).map_err(|error| format!("Could not open system settings: {error}"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
+        let (command, panel) = if desktop.split(':').any(|part| part == "kde") {
+            ("systemsettings", match section {
+                SystemSettings::Microphone => "kcm_pulseaudio",
+                SystemSettings::Accessibility => "kcm_access",
+                SystemSettings::InputMonitoring => return Err("This Wayland session does not provide permissioned modifier-only monitoring. Disable Ctrl+Shift hold and use the Prompt shortcut.".into()),
+            })
+        } else if desktop.split(':').any(|part| part == "gnome") {
+            ("gnome-control-center", match section {
+                SystemSettings::Microphone => "sound",
+                SystemSettings::Accessibility => "universal-access",
+                SystemSettings::InputMonitoring => return Err("This Wayland session does not provide permissioned modifier-only monitoring. Disable Ctrl+Shift hold and use the Prompt shortcut.".into()),
+            })
+        } else {
+            return Err("No supported system-settings launcher was found for this desktop. Open your desktop's sound or accessibility settings, then retry detection.".into());
+        };
+        let child = std::process::Command::new(command).arg(panel).spawn()
+            .map_err(|error| format!("Could not open system settings with {command}: {error}"))?;
+        std::thread::spawn(move || {
+            match child.wait_with_output() {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => log::warn!("system settings exited with {}", output.status),
+                Err(error) => log::warn!("could not wait for system settings: {error}"),
+            }
+        });
+        Ok(())
+    }
+}
 
 fn check_len(label: &str, value: &str, max: usize) -> Result<(), String> {
     if value.chars().count() > max {
@@ -95,13 +225,19 @@ fn paste_permission() -> &'static str {
 
 #[tauri::command]
 pub async fn grant_paste_permission(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || grant_desktop_integration(&app))
+    tauri::async_runtime::spawn_blocking(move || grant_desktop_integration(&app, false))
         .await.map_err(|error| format!("Desktop integration permission request failed: {error}"))?
 }
 
-fn grant_desktop_integration(app: &AppHandle) -> Result<(), String> {
+fn grant_desktop_integration(app: &AppHandle, restoring: bool) -> Result<(), String> {
     let _change = DESKTOP_INTEGRATION_CHANGE.try_lock()
         .map_err(|_| "A desktop integration change is already running. Finish or cancel the system dialog before trying again.".to_string())?;
+    if restoring {
+        let state = app.state::<AppState>();
+        if !should_restore_integration(&state.settings.read().unwrap()) {
+            return Ok(());
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         let result = crate::destination_macos::request_permission().map_err(|error| error.0);
@@ -115,11 +251,17 @@ fn grant_desktop_integration(app: &AppHandle) -> Result<(), String> {
         let closed_app = app.clone();
         let shortcut_app = app.clone();
         let result = (|| {
-            crate::wayland_paste::grant(move || {
+            let denied_app = app.clone();
+            crate::wayland_paste::grant_with_lifecycle(move |revoked| {
             let state = closed_app.state::<AppState>();
+            if revoked {
+                forget_desktop_authorization_if(&closed_app, || {
+                    crate::wayland_paste::status() != crate::wayland_paste::PermissionState::Granted
+                });
+            }
             onboarding::invalidate(&state, Some("Automatic paste permission was closed. Grant permission and try practice again."));
             onboarding::notify(&closed_app);
-            })?;
+            }, move || forget_desktop_authorization(&denied_app))?;
             if let Err(error) = crate::portal_shortcuts::grant(shortcut_app) {
                 crate::portal_shortcuts::stop();
                 crate::wayland_paste::shutdown();
@@ -145,10 +287,77 @@ fn grant_desktop_integration(app: &AppHandle) -> Result<(), String> {
 
 fn enable_integration(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    settings::update(&state.settings, &state.data_dir, |settings| settings.desktop_integration_enabled = true)?;
-    state.orchestrator.set_delivery_enabled(true);
+    let mut current = state.settings.write().unwrap();
+    let mut next = current.clone();
+    #[cfg(target_os = "linux")]
+    let grants = if crate::wayland_paste::applies() {
+        Some(crate::wayland_paste::status() == crate::wayland_paste::PermissionState::Granted
+            && crate::portal_shortcuts::active())
+    } else { None };
+    #[cfg(not(target_os = "linux"))]
+    let grants = None;
+    enable_preference(&mut next, grants);
+    settings::save(&state.data_dir, &next).map_err(|error| format!("could not save settings: {error}"))?;
+    *current = next;
+    // Serialize consent and delivery admission with revocation, including the
+    // gap between persisting authorization and enabling native delivery.
+    state.orchestrator.set_delivery_enabled(grants != Some(false));
+    drop(current);
+    if grants == Some(false) {
+        return Err("Desktop permission was closed before authorization completed. Enable desktop integration again.".into());
+    }
     onboarding::notify(app);
     Ok(())
+}
+
+fn enable_preference(settings: &mut settings::AppSettings, wayland_grants: Option<bool>) {
+    settings.desktop_integration_enabled = true;
+    if let Some(granted) = wayland_grants {
+        settings.desktop_integration_authorized = granted;
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn forget_desktop_authorization(app: &AppHandle) {
+    forget_desktop_authorization_if(app, || true);
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn forget_desktop_authorization_if(app: &AppHandle, current: impl FnOnce() -> bool) {
+    let state = app.state::<AppState>();
+    if let Err(error) = settings::update(&state.settings, &state.data_dir, |settings| {
+        if current() {
+            settings.desktop_integration_authorized = false;
+            state.orchestrator.set_delivery_enabled(false);
+        }
+    }) {
+        log::error!("could not persist revoked desktop consent: {error}");
+    }
+}
+
+fn should_restore_integration(settings: &settings::AppSettings) -> bool {
+    settings.desktop_integration_enabled && settings.desktop_integration_authorized
+}
+
+#[cfg(target_os = "linux")]
+pub fn restore_desktop_integration(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if !crate::wayland_paste::applies()
+        || !should_restore_integration(&state.settings.read().unwrap())
+    {
+        return Ok(());
+    }
+    let handle = app.clone();
+    std::thread::Builder::new().name("restore-desktop-integration".into()).spawn(move || {
+        log::info!("reconnecting previously authorized Wayland desktop integration");
+        if let Err(error) = grant_desktop_integration(&handle, true) {
+            let message = format!("Could not reconnect saved desktop integration: {error}");
+            log::warn!("{message}");
+            crate::portal_shortcuts::restoration_failed(&handle, &message);
+        } else {
+            log::info!("saved Wayland desktop integration restoration completed");
+        }
+    }).map(|_| ()).map_err(|error| format!("Could not start desktop integration restoration: {error}"))
 }
 
 #[tauri::command]
@@ -160,7 +369,10 @@ pub fn restore_insertion_clipboard() -> Result<(), String> {
 pub fn disable_desktop_integration(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let _change = DESKTOP_INTEGRATION_CHANGE.try_lock()
         .map_err(|_| "A desktop integration change is already running. Finish or cancel the system dialog before disabling integration.".to_string())?;
-    settings::update(&state.settings, &state.data_dir, |settings| settings.desktop_integration_enabled = false)?;
+    settings::update(&state.settings, &state.data_dir, |settings| {
+        settings.desktop_integration_enabled = false;
+        settings.desktop_integration_authorized = false;
+    })?;
     state.orchestrator.set_delivery_enabled(false);
     #[cfg(target_os = "linux")]
     {
@@ -172,15 +384,19 @@ pub fn disable_desktop_integration(app: AppHandle, state: State<'_, AppState>) -
     Ok(())
 }
 
-fn desktop_error() -> Option<String> {
-    use promptify_core::pipeline::ContextProvider;
-    crate::system_context::SystemContext.identify().err().map(|e| e.0)
+#[tauri::command]
+pub async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || app_info_snapshot(&app.state::<AppState>()))
+        .await.map_err(|error| format!("Could not read desktop status: {error}"))
 }
 
-#[tauri::command]
-pub fn app_info(state: State<'_, AppState>) -> AppInfo {
+fn app_info_snapshot(state: &AppState) -> AppInfo {
     let settings = state.settings.read().unwrap().clone();
-    let (modifier_hold, mut modifier_hold_error) = crate::modifier_hook::status(&state.modifier_hook);
+    let (modifier_hold, mut modifier_hold_error) = if settings.modifier_hold {
+        crate::modifier_hook::status(&state.modifier_hook)
+    } else {
+        (false, None)
+    };
     let modifier_keyboard_devices = match crate::modifier_hook::keyboards() {
         Ok(keyboards) => keyboards,
         Err(error) => {
@@ -212,11 +428,23 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         vocabulary: settings.vocabulary.clone(),
         screen_text_apps: settings.screen_text_apps.clone(),
         paste_permission: paste_permission(),
-        desktop_error: desktop_error(),
+        desktop_error: crate::system_context::last_error(),
         activation_bindings: activation_bindings(),
         desktop_integration_enabled: settings.desktop_integration_enabled,
         clipboard_restore_pending: crate::insert::restoration_pending(),
     }
+}
+
+#[tauri::command]
+pub async fn retry_focus_detection(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        match state.orchestrator.inspect_context_if_idle() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err("Wait for the active recording or paste job to finish before retrying focus detection.".into()),
+            Err(error) => Err(error.0),
+        }
+    }).await.map_err(|error| format!("Could not retry focus detection: {error}"))?
 }
 
 #[derive(Serialize)]
@@ -386,7 +614,15 @@ pub fn set_use_gpu(app: AppHandle, state: State<'_, AppState>, enabled: bool) ->
 #[tauri::command]
 pub fn set_modifier_hold(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     let previous = state.settings.read().unwrap().modifier_hold;
-    crate::modifier_hook::apply(&app, &state.modifier_hook, enabled)?;
+    if let Err(error) = crate::modifier_hook::apply(&app, &state.modifier_hook, enabled) {
+        if previous != enabled {
+            if let Err(restore_error) = crate::modifier_hook::apply(&app, &state.modifier_hook, previous) {
+                return Err(format!("{error}; could not restore Ctrl+Shift monitoring: {restore_error}"));
+            }
+        }
+        onboarding::notify(&app);
+        return Err(error);
+    }
     if let Err(error) = settings::update(&state.settings, &state.data_dir, |settings| settings.modifier_hold = enabled) {
         if let Err(restore_error) = crate::modifier_hook::apply(&app, &state.modifier_hook, previous) {
             return Err(format!("{error}; could not restore Ctrl+Shift monitoring: {restore_error}"));
@@ -479,6 +715,16 @@ pub fn routing_state(state: State<'_, AppState>) -> settings::RoutingState {
 pub fn set_rendering(state: State<'_, AppState>, rendering: Rendering) -> Result<settings::RoutingState, String> {
     let mut current = state.routing.lock().unwrap();
     settings::save_routing(&state.data_dir, rendering)?;
+    state.orchestrator.set_rendering(rendering);
+    *current = settings::RoutingState { rendering, error: None };
+    Ok(current.clone())
+}
+
+#[tauri::command]
+pub fn reset_routing(state: State<'_, AppState>) -> Result<settings::RoutingState, String> {
+    let mut current = state.routing.lock().unwrap();
+    settings::reset_routing(&state.data_dir)?;
+    let rendering = Rendering::default();
     state.orchestrator.set_rendering(rendering);
     *current = settings::RoutingState { rendering, error: None };
     Ok(current.clone())

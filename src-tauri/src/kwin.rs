@@ -230,7 +230,9 @@ mod tests {
     fn live_snapshots_are_fresh_and_cleaned_up() {
         let mut tracker = Tracker::start().unwrap();
         for _ in 0..3 {
+            let started = std::time::Instant::now();
             let context = tracker.current().unwrap();
+            eprintln!("KWin focus snapshot: {} ms", started.elapsed().as_millis());
             assert_ne!(context.window.process_id, 0);
             assert!(!context.process_name.is_empty());
         }

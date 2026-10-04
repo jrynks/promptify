@@ -129,8 +129,13 @@ pub fn run() {
             updates::install_update,
             updates::restart_after_update,
             commands::app_info,
+            commands::retry_focus_detection,
+            commands::open_recovery_settings,
+            commands::open_data_folder,
+            commands::open_system_settings,
             commands::routing_state,
             commands::set_rendering,
+            commands::reset_routing,
             commands::queue_prompt_routing,
             commands::prompt_catalog,
             commands::clean_dictation,
@@ -252,6 +257,8 @@ pub fn run() {
 
             tray::build(&handle, &tray_hotkeys)?;
             app.manage(updates::Updates::default());
+            #[cfg(target_os = "linux")]
+            commands::restore_desktop_integration(&handle)?;
             updates::start(handle.clone());
             tray::refresh(&handle);
             place_overlay(&handle);

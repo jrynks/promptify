@@ -108,8 +108,18 @@ fn close(active: &Active) {
     }
 }
 
-async fn connect(token: Option<&str>) -> Result<(Arc<Active>, Option<String>), String> {
-    let failed = |e: ashpd::Error| format!("The desktop's remote-input portal failed: {e}");
+pub(crate) fn consent_denied(error: &ashpd::Error) -> bool {
+    matches!(error,
+        ashpd::Error::Response(_)
+        | ashpd::Error::Portal(ashpd::PortalError::Cancelled(_))
+        | ashpd::Error::Portal(ashpd::PortalError::NotAllowed(_)))
+}
+
+async fn connect(token: Option<&str>, on_denied: &dyn Fn()) -> Result<(Arc<Active>, Option<String>), String> {
+    let failed = |e: ashpd::Error| {
+        if consent_denied(&e) { on_denied(); }
+        format!("The desktop's remote-input portal failed: {e}")
+    };
     let proxy = RemoteDesktop::new().await.map_err(failed)?;
     let session = proxy.create_session(Default::default()).await.map_err(failed)?;
     let result = async {
@@ -121,8 +131,9 @@ async fn connect(token: Option<&str>) -> Result<(Arc<Active>, Option<String>), S
                 .set_restore_token(token),
         ).await.map_err(failed)?.response().map_err(failed)?;
         let selected = proxy.start(&session, None, Default::default()).await.map_err(failed)?
-            .response().map_err(|e| format!("Paste permission was not granted: {e}"))?;
+            .response().map_err(failed)?;
         if !selected.devices().contains(DeviceType::Keyboard) {
+            on_denied();
             return Err("Paste permission did not include the keyboard.".into());
         }
         Ok(selected.restore_token().map(str::to_owned))
@@ -143,15 +154,22 @@ pub fn has_saved_permission() -> Result<bool, String> {
     read_token(path).map(|token| token.is_some())
 }
 
-/// Permission creation/restoration runs only on an explicit Settings or native-test action.
+/// Called by explicit Enable, authorized startup restoration, or a native test, never paste.
 pub fn grant(on_closed: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    grant_with_lifecycle(move |_| on_closed(), || {})
+}
+
+pub fn grant_with_lifecycle(
+    on_closed: impl FnOnce(bool) + Send + 'static,
+    on_denied: impl Fn(),
+) -> Result<(), String> {
     let _grant = GRANT.try_lock().map_err(|_| "A paste permission request is already running.".to_string())?;
     if active().is_ok() {
         return Ok(());
     }
     let path = TOKEN_PATH.get().ok_or("Paste permission storage is not initialized.")?;
     let token = read_token(path)?;
-    let (next, restore_token) = zbus::block_on(connect(token.as_deref()))?;
+    let (next, restore_token) = zbus::block_on(connect(token.as_deref(), &on_denied))?;
     if let Some(token) = restore_token && let Err(e) = write_token(path, &token) {
         close(&next);
         return Err(e);
@@ -164,9 +182,11 @@ pub fn grant(on_closed: impl FnOnce() + Send + 'static) -> Result<(), String> {
             match watched.session.receive_closed().await {
                 Ok(mut stream) => {
                     let _ = tx.send(Ok(()));
-                    stream.next().await;
-                    watched.closed.store(true, Ordering::SeqCst);
-                    on_closed();
+                    let revoked = stream.next().await.is_some();
+                    // Locally initiated cleanup is not user revocation.
+                    if !watched.closed.swap(true, Ordering::SeqCst) {
+                        on_closed(revoked);
+                    }
                 }
                 Err(e) => { let _ = tx.send(Err(format!("Could not monitor paste permission: {e}"))); }
             }
@@ -242,6 +262,20 @@ pub fn shutdown() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn denial_is_distinct_from_transport_failure() {
+        use ashpd::desktop::ResponseError;
+        for error in [
+            ashpd::Error::Response(ResponseError::Cancelled),
+            ashpd::Error::Response(ResponseError::Other),
+            ashpd::Error::Portal(ashpd::PortalError::NotAllowed("denied".into())),
+        ] {
+            assert!(super::consent_denied(&error));
+        }
+        assert!(!super::consent_denied(&ashpd::Error::NoResponse));
+        assert!(!super::consent_denied(&ashpd::Error::IO(std::io::Error::other("disconnected"))));
+    }
+
     use super::*;
 
     #[test]

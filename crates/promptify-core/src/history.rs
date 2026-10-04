@@ -140,6 +140,7 @@ impl HistoryLog {
         let log = Self { path, limits, enabled: AtomicBool::new(enabled), local: Mutex::new(()) };
         let _lock = log.lock()?;
         let (mut entries, mut report) = log.load()?;
+        log.preserve_high_water(&entries)?;
         let over = entries.len().saturating_sub(log.limits.max_entries);
         entries.drain(..over);
         if report.skipped > 0 || over > 0 {
@@ -173,6 +174,37 @@ impl HistoryLog {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((Vec::new(), LoadReport { loaded: 0, skipped: 0 })),
             Err(e) => Err(e),
         }
+    }
+
+    fn high_water_path(&self) -> PathBuf {
+        self.path.with_extension("id")
+    }
+
+    fn preserve_high_water(&self, entries: &[HistoryEntry]) -> io::Result<u64> {
+        let saved = match fs::read_to_string(self.high_water_path()) {
+            Ok(text) => text.trim().parse::<u64>().map_err(io::Error::other)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error),
+        };
+        let high_water = entries.iter().map(|entry| entry.id).max().unwrap_or(0).max(saved);
+        if high_water > saved {
+            self.save_high_water(high_water)?;
+        }
+        Ok(high_water)
+    }
+
+    fn save_high_water(&self, id: u64) -> io::Result<()> {
+        let path = self.high_water_path();
+        let staging = path.with_extension("id.new");
+        {
+            let mut file = File::create(&staging)?;
+            writeln!(file, "{id}")?;
+            file.sync_all()?;
+        }
+        fs::rename(staging, path)?;
+        #[cfg(unix)]
+        File::open(self.path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+        Ok(())
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -228,8 +260,10 @@ impl HistoryLog {
         let (mut entries, report) = self.load()?;
         let mut metadata = self.load_routing()?;
         let now = now_ms();
-        // Time-based ids stay unique across processes and after a clear.
-        let id = entries.iter().map(|e| e.id + 1).max().unwrap_or(0).max(now);
+        let id = self.preserve_high_water(&entries)?.checked_add(1)
+            .ok_or_else(|| io::Error::other("history ID space exhausted"))?.max(now);
+        // Reserve durably before publishing; a failed append must not reuse an ID.
+        self.save_high_water(id)?;
         let entry = HistoryEntry {
             id,
             created_ms: now,
@@ -261,6 +295,7 @@ impl HistoryLog {
     pub fn delete(&self, id: u64) -> io::Result<bool> {
         let _lock = self.lock()?;
         let (entries, _) = self.load()?;
+        self.preserve_high_water(&entries)?;
         let next: Vec<HistoryEntry> = entries.iter().filter(|e| e.id != id).cloned().collect();
         if next.len() == entries.len() {
             return Ok(false);
@@ -276,6 +311,7 @@ impl HistoryLog {
 
     pub fn clear(&self) -> io::Result<()> {
         let _lock = self.lock()?;
+        self.preserve_high_water(&self.load()?.0)?;
         if self.routing_path().exists() {
             self.rewrite_routing(&[])?;
         }
@@ -535,6 +571,37 @@ mod tests {
         app.clear().unwrap();
         let after = cli.record(new("after clear")).unwrap().unwrap();
         assert!(after.id > b.id, "ids are never reused after a clear");
+    }
+
+    #[test]
+    fn high_water_survives_clear_restart_and_clock_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        let future = now_ms() + 1_000_000;
+        fs::write(&path, format!("{}\n", serde_json::to_string(
+            &entry(future, 0, "claude", "x", Mode::Prompt, true)
+        ).unwrap())).unwrap();
+        let (log, _) = HistoryLog::open(path.clone(), HistoryLimits::default(), true).unwrap();
+        log.clear().unwrap();
+        drop(log);
+        let (log, _) = HistoryLog::open(path, HistoryLimits::default(), true).unwrap();
+        let saved = log.record(new("after rollback")).unwrap().unwrap();
+        assert_eq!(saved.id, future + 1);
+        assert!(!log.delete(future).unwrap(), "stale IDs cannot delete new records");
+    }
+
+    #[test]
+    fn corrupt_or_exhausted_high_water_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        let (log, _) = HistoryLog::open(path.clone(), HistoryLimits::default(), true).unwrap();
+        fs::write(log.high_water_path(), "not an ID").unwrap();
+        assert!(log.record(new("not saved")).is_err());
+        assert!(log.clear().is_err());
+        assert!(HistoryLog::open(path, HistoryLimits::default(), true).is_err());
+        fs::write(log.high_water_path(), u64::MAX.to_string()).unwrap();
+        assert!(log.record(new("not saved")).is_err());
+        assert!(log.entries().is_empty());
     }
 
     #[test]

@@ -8,6 +8,7 @@ interface Fixture {
   failures: Record<string, string>;
   delays?: Record<string, number>;
   catalog: PromptCatalog;
+  routingError?: string | null;
   updates: UpdateInfo;
 }
 
@@ -164,12 +165,17 @@ async function launch(page: Page, state = fixture(), path = "/") {
           switch (command) {
             case "plugin:event|listen": {
               if (typeof args.event !== "string" || typeof args.handler !== "number") throw new Error("Invalid listener");
+              if (initial.failures[`listen:${args.event}`]) throw new Error(initial.failures[`listen:${args.event}`]);
               const id = ++sequence;
               listeners.set(id, { event: args.event, handler: args.handler });
               return id;
             }
             case "plugin:event|unlisten": listeners.delete(Number(args.eventId)); return;
             case "app_info": return structuredClone(initial.info);
+            case "retry_focus_detection":
+              initial.info.desktop_error = null;
+              changed();
+              return;
             case "update_info": return structuredClone(initial.updates);
             case "check_for_updates":
               emit("updates-changed", null);
@@ -183,10 +189,17 @@ async function launch(page: Page, state = fixture(), path = "/") {
               emit("updates-changed", null);
               return structuredClone(initial.updates);
             case "open_update_release":
+            case "open_data_folder":
+            case "open_system_settings":
             case "restart_after_update": return;
+            case "open_recovery_settings":
+              emit("open-settings-section", args.section);
+              return;
             case "grant_paste_permission":
               initial.info.paste_permission = "granted";
               initial.info.desktop_integration_enabled = true;
+              initial.info.hotkey_errors = [];
+              initial.info.prompt_hotkey_error = null;
               changed();
               return;
             case "disable_desktop_integration":
@@ -230,11 +243,17 @@ async function launch(page: Page, state = fixture(), path = "/") {
             case "overlay_max_height": return 1064;
             case "copy_last_result":
             case "hide_overlay": return;
-            case "routing_state": return { rendering, error: null };
+            case "routing_state": return { rendering, error: initial.routingError ?? null };
             case "prompt_catalog": return structuredClone(initial.catalog);
             case "set_rendering":
+              if (initial.routingError) throw new Error(initial.routingError);
               if (args.rendering !== "legacy" && args.rendering !== "adaptive") throw new Error("Invalid rendering");
               rendering = args.rendering;
+              sessionStorage.setItem("test.routing", rendering);
+              return { rendering, error: null };
+            case "reset_routing":
+              initial.routingError = null;
+              rendering = "legacy";
               sessionStorage.setItem("test.routing", rendering);
               return { rendering, error: null };
             case "queue_prompt_routing":
@@ -472,6 +491,51 @@ test("automatic input inspection does not require software-specific settings", a
   await expect(page.getByText("Automatic input inspection is independent", { exact: false })).toBeVisible();
 });
 
+test("shared shortcut permission error appears once with an adjacent recovery action", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  const message = "Wayland shortcuts need permission. Open Settings and enable desktop integration again.";
+  state.info.paste_permission = "required";
+  state.info.prompt_hotkey_error = message;
+  state.info.hotkey_errors = [message, message];
+  await launch(page, state);
+  await expect(page.getByText(message, { exact: true })).toHaveCount(1);
+  const enable = page.getByRole("button", { name: "Enable desktop integration" });
+  await expect(enable).toBeInViewport();
+  await expect(enable).toHaveCount(1);
+  await enable.click();
+  await expect(page.getByText(message, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Disable desktop integration" })).toHaveCount(1);
+});
+
+test("unavailable optional modifier hold offers a direct disable action", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.modifier_hold_requested = true;
+  state.info.modifier_hold_error = "This session does not expose permissioned modifier-only monitoring.";
+  await launch(page, state);
+  await expect(page.getByRole("alert").filter({ hasText: "modifier-only monitoring" })).toBeVisible();
+  await page.getByRole("button", { name: "Disable Ctrl+Shift hold" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "modifier-only monitoring" })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: /Also start a prompt by holding/ })).not.toBeChecked();
+});
+
+test("disabled modifier hold does not display stale monitoring errors or retry controls", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.modifier_hold_requested = false;
+  state.info.modifier_hold_error = "This session does not expose permissioned modifier-only monitoring.";
+  await launch(page, state);
+  const checkbox = page.getByRole("checkbox", { name: /Also start a prompt by holding/ });
+  await expect(checkbox).not.toBeChecked();
+  await expect(page.getByRole("alert").filter({ hasText: "modifier-only monitoring" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry Ctrl+Shift monitoring" })).toHaveCount(0);
+  await page.evaluate(() => { window.onboardingTest.state.failures.set_modifier_hold = "Monitoring permission unavailable"; });
+  await checkbox.click();
+  await expect(checkbox).not.toBeChecked();
+  await expect(page.getByRole("alert").filter({ hasText: "Monitoring permission unavailable" })).toBeVisible();
+});
+
 test("one desktop integration control disables and re-enables insertion", async ({ page }) => {
   const state = fixture(true);
   state.status.required = false;
@@ -664,6 +728,16 @@ test("unknown desktop focus blocks practice even with permission", async ({ page
   await launch(page, state);
   await expect(page.getByRole("alert").filter({ hasText: state.info.desktop_error })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
+  expect(await page.evaluate(() => window.onboardingTest.calls)).not.toContain("retry_focus_detection");
+  await page.evaluate(() => {
+    window.onboardingTest.state.failures.retry_focus_detection = "Wait for the active recording or paste job to finish";
+  });
+  await page.getByRole("button", { name: "Retry focus detection" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Wait for the active" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeDisabled();
+  await page.evaluate(() => { delete window.onboardingTest.state.failures.retry_focus_detection; });
+  await page.getByRole("button", { name: "Retry focus detection" }).click();
+  await expect(page.getByRole("button", { name: "Continue to practice" })).toBeEnabled();
 });
 
 test("permission loss during practice offers recovery without skipping verification", async ({ page }) => {
@@ -879,6 +953,26 @@ test("prompt routing defaults to legacy and persists explicit opt-in", async ({ 
   await expect(enabled).toBeChecked();
 });
 
+test("corrupt routing can only be repaired by explicit backed-up reset", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.routingError = "routing-settings.json is invalid";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Prompt types", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: state.routingError })).toBeVisible();
+  await page.evaluate(() => { window.onboardingTest.state.failures.reset_routing = "Could not back up routing settings"; });
+  await page.getByRole("button", { name: "Restore default routing" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Could not back up" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Restore default routing" })).toBeVisible();
+  await page.evaluate(() => { delete window.onboardingTest.state.failures.reset_routing; });
+  await page.getByRole("button", { name: "Restore default routing" }).click();
+  await expect(page.getByText("Default routing restored. The previous routing file was backed up in the app data folder.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Restore default routing" })).toHaveCount(0);
+  const calls = await page.evaluate(() => window.onboardingTest.calls);
+  expect(calls.filter((command) => command === "reset_routing")).toHaveLength(2);
+  expect(calls).not.toContain("set_rendering");
+});
+
 test("prompt routing queues scoped overrides and distinguishes proposed types", async ({ page }) => {
   const state = fixture(true);
   state.status.required = false;
@@ -972,6 +1066,34 @@ test("retained settings remain usable at minimum window size", async ({ page }, 
   await page.screenshot({ path: testInfo.outputPath("simplified-models.png"), fullPage: true });
 });
 
+test("all other tabs share General spacing scale without overflowing", async ({ page }, testInfo) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  for (const width of [960, 640]) {
+    await page.setViewportSize({ width, height: width === 640 ? 480 : 760 });
+    for (const pane of ["Models", "Prompt types", "Your words", "History", "Updates"]) {
+      await page.getByRole("button", { name: pane, exact: true }).click();
+      const section = page.locator(".settings-pane:not([hidden]) > section");
+      await expect(section.getByRole("heading", { name: pane, exact: true })).toBeVisible();
+      expect(await section.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { gap: style.gap, direction: style.flexDirection };
+      })).toEqual({ gap: "16px", direction: "column" });
+      if (pane === "Prompt types") await section.locator("details").evaluate((element) => { element.setAttribute("open", ""); });
+      const actions = section.locator(".actions:not(td)");
+      for (const action of await actions.all()) {
+        expect(await action.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { gap: style.columnGap, wrap: style.flexWrap };
+        })).toEqual({ gap: "8px", wrap: "wrap" });
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await page.screenshot({ path: testInfo.outputPath(`spacing-${pane.replaceAll(" ", "-")}-${width}.png`), fullPage: true });
+    }
+  }
+});
+
 test("simplified settings retire remembered tabs and defer unvisited panes", async ({ page }) => {
   const state = fixture(true);
   state.status.required = false;
@@ -1007,6 +1129,161 @@ test("prompt catalog stays usable in the minimum window", async ({ page }, testI
   await page.screenshot({ path: testInfo.outputPath("prompt-types-minimum-window.png"), fullPage: true });
 });
 
+test.describe("actionable recovery controls", () => {
+  test("General spacing separates recovery controls and stays stable at minimum width", async ({ page }, testInfo) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.info.paste_permission = "required";
+    state.info.modifier_hold_requested = true;
+    state.info.modifier_hold_error = "Modifier-only monitoring is unavailable on this desktop.";
+    state.info.desktop_error = "Focus detection needs attention.";
+    state.info.clipboard_restore_pending = true;
+    await launch(page, state);
+    const general = page.getByRole("region", { name: "General settings", exact: true });
+    const integration = general.getByLabel("Desktop integration", { exact: true });
+    await expect(integration.getByRole("button", { name: "Enable desktop integration", exact: true })).toBeVisible();
+    for (const width of [960, 640]) {
+      await page.setViewportSize({ width, height: width === 640 ? 480 : 760 });
+      expect(await general.locator(".stack > div.inline").evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { gap: style.gap, wrap: style.flexWrap };
+      })).toEqual({ gap: "8px", wrap: "wrap" });
+      expect(await general.locator("dl").first().evaluate((element) => getComputedStyle(element).rowGap)).toBe(width === 640 ? "8px" : "24px");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      const buttons = await integration.getByRole("button").evaluateAll((elements) => elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+      }));
+      for (let i = 0; i < buttons.length; i++) {
+        for (let j = i + 1; j < buttons.length; j++) {
+          const a = buttons[i], b = buttons[j];
+          const sameRow = a.top < b.bottom && b.top < a.bottom;
+          expect(sameRow ? Math.max(b.left - a.right, a.left - b.right) : Math.max(b.top - a.bottom, a.top - b.bottom)).toBeGreaterThanOrEqual(8);
+        }
+      }
+      await page.screenshot({ path: testInfo.outputPath(`general-spacing-${width}.png`), fullPage: true });
+    }
+  });
+
+  test("listener failures remain visible after successful reads and reconnect locally", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.failures["listen:history-changed"] = "History events disconnected";
+    state.failures["listen:updates-changed"] = "Update events disconnected";
+    await launch(page, state);
+    await page.getByRole("button", { name: "History", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("History events disconnected");
+    await page.evaluate(() => { delete window.onboardingTest.state.failures["listen:history-changed"]; });
+    await page.getByRole("button", { name: "Refresh history", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await page.getByRole("button", { name: "Updates", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Update events disconnected");
+    await page.evaluate(() => { delete window.onboardingTest.state.failures["listen:updates-changed"]; });
+    await page.getByRole("button", { name: "Retry update connection", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+  });
+
+  test("ordinary Settings resumes shortcuts and opens microphone settings with explicit launch errors", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.info.hotkeys_paused = true;
+    state.info.input_device = null;
+    state.failures.open_system_settings = "System settings launcher is unavailable";
+    await launch(page, state);
+    await page.getByRole("button", { name: "Resume shortcuts", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Resume shortcuts", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Open microphone settings", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "launcher is unavailable" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Refresh microphone and shortcut", exact: true })).toBeVisible();
+  });
+
+  test("ordinary Settings offers load retry, CPU fallback and direct model navigation", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.info.engines_ready = false;
+    state.info.engine_error = "Vulkan device failed";
+    await launch(page, state);
+    await expect(page.getByRole("button", { name: "Retry model loading", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Try loading on CPU", exact: true }).click();
+    await expect(page.getByLabel("Use the GPU when available")).not.toBeChecked();
+    await page.evaluate(() => {
+      window.onboardingTest.state.info.engines_ready = false;
+      window.onboardingTest.state.info.engine_error = "Model unavailable";
+      window.onboardingTest.change({});
+    });
+    await page.getByRole("button", { name: "Choose models", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Models", exact: true })).toHaveAttribute("aria-current", "page");
+  });
+
+  test("startup errors provide non-destructive access to the data folder", async ({ page }) => {
+    const state = fixture();
+    state.status.startup_error = "settings.json is invalid";
+    await launch(page, state);
+    await page.getByRole("button", { name: "Open app data folder", exact: true }).click();
+    expect(await page.evaluate(() => window.onboardingTest.calls.includes("open_data_folder"))).toBe(true);
+    await expect(page.getByRole("button", { name: "Retry startup", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.onboardingTest.state.status.startup_error)).toBe("settings.json is invalid");
+  });
+
+  test("history load failures retry and clear on success", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.failures.list_history = "History unavailable";
+    await launch(page, state);
+    await page.getByRole("button", { name: "History", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("History unavailable");
+    await page.evaluate(() => { delete window.onboardingTest.state.failures.list_history; });
+    await page.getByRole("button", { name: "Refresh history", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.locator(".history li")).toHaveCount(0);
+  });
+
+  test("malformed word corrections stay editable and never save silently", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    await launch(page, state);
+    await page.getByRole("button", { name: "Your words", exact: true }).click();
+    const corrections = page.getByRole("textbox", { name: /Corrections/ });
+    await corrections.fill("missing delimiter");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Invalid correction");
+    expect(await page.evaluate(() => window.onboardingTest.calls.includes("set_vocabulary"))).toBe(false);
+    await corrections.fill("wrong => right");
+    await page.getByRole("button", { name: "Retry save", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Saved");
+    expect(await page.evaluate(() => window.onboardingTest.state.info.vocabulary.replacements)).toEqual([{ from: "wrong", to: "right" }]);
+  });
+
+  test("update status failure reconnects even when Check for updates is disabled", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.failures.update_info = "Update status unavailable";
+    await launch(page, state);
+    await page.getByRole("button", { name: "Updates", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Update status unavailable");
+    await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeDisabled();
+    await page.evaluate(() => { delete window.onboardingTest.state.failures.update_info; });
+    await page.getByRole("button", { name: "Retry update connection", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("unsupported update installer offers an adjacent release download", async ({ page }) => {
+    const state = fixture(true);
+    state.status.required = false;
+    state.updates.release!.update_available = true;
+    state.updates.release!.version = "1.2.0";
+    state.updates.release!.install_error = "No supported installer for this OS";
+    await launch(page, state);
+    const notice = page.getByLabel("Available update");
+    await expect(notice.getByText("No supported installer for this OS", { exact: true })).toBeVisible();
+    await notice.getByRole("button", { name: "Download from release page", exact: true }).click();
+    expect(await page.evaluate(() => window.onboardingTest.calls.includes("open_update_release"))).toBe(true);
+    expect(await page.evaluate(() => window.onboardingTest.calls.includes("install_update"))).toBe(false);
+  });
+});
+
 test.describe("native overlay sizing", () => {
   test.use({ viewport: { width: 560, height: 180 }, contextOptions: { screen: { width: 1920, height: 1080 } }, deviceScaleFactor: 1.5 });
 
@@ -1025,6 +1302,50 @@ test.describe("native overlay sizing", () => {
       return bounds.bottom <= window.innerHeight && bounds.right <= window.innerWidth;
     })).toBe(true);
   }
+
+  test("failed results stay actionable and offer Settings without retrying insertion", async ({ page }) => {
+    await openOverlay(page);
+    await emitOverlay(page, { type: "error", message: "Microphone access was denied" });
+    await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy", exact: true })).toHaveCount(0);
+    await page.waitForTimeout(4200);
+    await expect(page.getByText("Microphone access was denied", { exact: true })).toBeVisible();
+    await page.evaluate(() => { window.onboardingTest.state.failures.open_recovery_settings = "Settings window unavailable"; });
+    await page.getByRole("button", { name: "Open Settings", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Settings window unavailable");
+    await page.evaluate(() => { delete window.onboardingTest.state.failures.open_recovery_settings; });
+    await page.getByRole("button", { name: "Open Settings", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await fitsWindow(page);
+    await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(page.locator(".pill")).toHaveCount(0);
+  });
+
+  test("generation failures link to models and remain dismissible", async ({ page }) => {
+    await openOverlay(page);
+    await emitOverlay(page, {
+      type: "finished", capped: false,
+      report: { job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: null,
+        outcome: { kind: "failed", reason: "generation_failed", detail: "Model unavailable" } },
+    });
+    await expect(page.getByRole("button", { name: "Model settings", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Model settings", exact: true }).click();
+    expect(await page.evaluate(() => window.onboardingTest.calls.includes("open_recovery_settings"))).toBe(true);
+  });
+
+  test("overlay event connection failure offers a functional reconnect", async ({ page }) => {
+    const state = fixture(true);
+    state.failures["plugin:event|listen"] = "IPC interrupted";
+    await launch(page, state, "/overlay.html");
+    await expect(page.getByRole("alert")).toContainText("IPC interrupted");
+    await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
+    await page.evaluate(() => { delete window.onboardingTest.state.failures["plugin:event|listen"]; });
+    await page.getByRole("button", { name: "Retry overlay connection" }).click();
+    await expect(page.getByRole("button", { name: "Retry overlay connection" })).toHaveCount(0);
+    await emitOverlay(page, { type: "error", message: "New event received" });
+    await expect(page.getByText("New event received", { exact: true })).toBeVisible();
+  });
 
   const longGraph = [
     "Explain a heat pump to a beginner.",

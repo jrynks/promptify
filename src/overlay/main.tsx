@@ -8,7 +8,7 @@ type View =
   | { kind: "idle" }
   | { kind: "listening"; mode: string; profile: string; target: string; latched: boolean }
   | { kind: "working"; label: string }
-  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean; canRestore?: boolean };
+  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean; canRestore?: boolean; settings?: "general" | "models" | "prompts" };
 
 const BLOCK_MESSAGES: Record<string, string> = {
   focus_changed: "You switched windows, so nothing was pasted.",
@@ -35,7 +35,8 @@ function describe(outcome: Outcome, capped: boolean): View {
     case "inserted":
       return { kind: "result", tone: "ok", title: "Paste sent" + note, detail: "Check the destination: sending a paste does not verify that the application received it. Generated text stays on the clipboard until you restore it after checking.", canCopy: true, canRestore: true };
     case "blocked":
-      return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, detail: outcome.detail ?? undefined, canCopy: true };
+      return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, detail: outcome.detail ?? undefined, canCopy: true,
+        settings: outcome.reason === "surface_unconfirmed" || outcome.reason === "graph_unsupported" ? "prompts" : outcome.reason === "output_truncated" ? "models" : "general" };
     case "no_speech":
       return { kind: "result", tone: "warn", title: "Didn't catch any speech.", canCopy: false };
     case "cancelled":
@@ -47,6 +48,7 @@ function describe(outcome: Outcome, capped: boolean): View {
         title: FAIL_MESSAGES[outcome.reason] ?? "Something went wrong.",
         body: outcome.detail ?? undefined,
         canCopy: false,
+        settings: outcome.reason === "transcription_failed" || outcome.reason === "generation_failed" || outcome.reason === "timed_out" || outcome.reason === "empty_output" ? "models" : "general",
       };
   }
 }
@@ -66,6 +68,8 @@ function Overlay() {
   const [uiError, setUiError] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [connectionFailed, setConnectionFailed] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
   const streamPreview = useRef<HTMLDivElement>(null);
   const eventVersion = useRef(0);
@@ -162,7 +166,18 @@ function Overlay() {
     }
   };
 
+  const openSettings = async (section: "general" | "models" | "prompts") => {
+    window.clearTimeout(hideTimer.current);
+    setUiError(null);
+    try {
+      await api.openRecoverySettings(section);
+    } catch (error) {
+      setUiError(`Could not open Settings: ${String(error)}`);
+    }
+  };
+
   useEffect(() => {
+    setConnectionFailed(false);
     let disposed = false;
     let stopListening: (() => void) | undefined;
     const unlisten = listen<OverlayEvent>("overlay-event", ({ payload }) => {
@@ -209,14 +224,14 @@ function Overlay() {
           const next = describe(payload.report.outcome, payload.capped);
           setView(next);
           if (payload.report.outcome.kind === "inserted") scheduleHide(3500);
-          else if (next.kind === "result" && !next.canCopy) scheduleHide(next.tone === "ok" ? 1200 : next.tone === "error" ? 6000 : 3500);
+          else if (next.kind === "result" && !next.canCopy && !next.settings) scheduleHide(next.tone === "ok" ? 1200 : 3500);
           break;
         }
         case "error":
           eventVersion.current += 1;
           setUiError(null);
-          setView({ kind: "result", tone: "error", title: payload.message, canCopy: false });
-          scheduleHide(4000);
+          window.clearTimeout(hideTimer.current);
+          setView({ kind: "result", tone: "error", title: payload.message, canCopy: false, settings: "general" });
           break;
         case "cancelled":
           eventVersion.current += 1;
@@ -231,6 +246,7 @@ function Overlay() {
       else stopListening = stop;
     }, (error) => {
         if (!disposed) {
+          setConnectionFailed(true);
           setView({ kind: "result", tone: "error", title: "The overlay could not connect to Promptify.", canCopy: false });
           setUiError(String(error));
         }
@@ -240,7 +256,7 @@ function Overlay() {
       window.clearTimeout(hideTimer.current);
       stopListening?.();
     };
-  }, []);
+  }, [connectionAttempt]);
 
   if (view.kind === "idle") return null;
 
@@ -272,10 +288,12 @@ function Overlay() {
           </div>
         </>}
         {uiError && <div role="alert" className="ui-error">{uiError}</div>}
-        {view.kind === "result" && view.canCopy && (
+        {view.kind === "result" && (
             <div className="actions">
-              <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>
+              {view.canCopy && <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>}
               {view.canRestore && <button disabled={restoring} onClick={() => void restoreClipboard()}>Restore previous clipboard</button>}
+              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
+              {connectionFailed && <button onClick={() => { setUiError(null); setConnectionAttempt((value) => value + 1); }}>Retry overlay connection</button>}
               <button onClick={() => scheduleHide(0)}>Dismiss</button>
             </div>
         )}

@@ -162,6 +162,73 @@ dd label.inline { margin: 0; }
 .general > p.hint:first-of-type { line-height: 1.6; }
 .general > .indent { margin: -4px 0 0 24px; }
 
+.general dl { row-gap: 24px; }
+.general .desc { margin-top: 6px; }
+.general .stack { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.general .stack > label,
+.general .stack > .desc { margin-top: 0; margin-bottom: 0; }
+.general .actions,
+.general .stack > div.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.general .actions { margin-top: 12px; }
+.general .desktop-integration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 8px;
+  margin: 24px 0;
+}
+.general .desktop-integration > h3,
+.general .desktop-integration > p { flex-basis: 100%; margin: 0; }
+.general .desktop-integration > p { line-height: 1.6; }
+.general .desktop-integration > h3 { margin-bottom: 4px; }
+
+.settings-pane > section:not(.general) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+.settings-pane > section:not(.general) > * { margin-top: 0; margin-bottom: 0; }
+.settings-pane > section:not(.general) > button { align-self: flex-start; }
+.settings-pane > section:not(.general) label { gap: 8px; }
+.settings-pane > section:not(.general) p { line-height: 1.6; }
+.settings-pane > section:not(.general) > h3,
+.settings-pane > section:not(.general) .settings-group > h3 {
+  margin: 8px 0 16px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(127, 127, 127, 0.2);
+}
+.settings-pane > section:not(.general) > h3 { margin-bottom: 0; }
+.settings-pane > section:not(.general) .settings-group + .settings-group { margin-top: 8px; }
+.settings-pane > section:not(.general) .settings-group td { padding-top: 12px; padding-bottom: 12px; }
+.settings-pane > section:not(.general) .settings-group td.actions > * { margin: 4px; max-width: 100%; }
+.settings-pane > section:not(.general) .actions:not(td),
+.settings-pane > section:not(.general) [role="alert"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 8px;
+}
+.settings-pane > section:not(.general) [role="alert"] > p { flex-basis: 100%; margin: 0; }
+.settings-pane > section:not(.general) .routing-controls { gap: 16px; margin: 16px 0; }
+.settings-pane > section:not(.general) .routing-controls > label { margin-bottom: 0; }
+.settings-pane > section:not(.general) .rows > li,
+.settings-pane > section:not(.general) .history > li { padding: 16px 0; }
+.settings-pane > section:not(.general) .rows p { margin: 8px 0; }
+
+@media (max-width: 760px) {
+  .general dl { row-gap: 8px; }
+  .general dd + dt { margin-top: 16px; }
+  .general .actions > *,
+  .general .stack > div.inline > *,
+  .general .desktop-integration > * { max-width: 100%; }
+}
+
 kbd {
   padding: 1px 6px;
   border: 1px solid GrayText;
