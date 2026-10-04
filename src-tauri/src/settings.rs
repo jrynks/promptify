@@ -33,16 +33,18 @@ pub struct AppSettings {
     pub check_updates_on_startup: bool,
     pub prompt_hotkey: Option<String>,
     pub dictation_hotkey: Option<String>,
-    pub answer_hotkey: Option<String>,
+    #[serde(skip_serializing, rename = "answer_hotkey")]
+    pub(crate) retired_answer_hotkey: Option<String>,
     pub use_gpu: bool,
-    /// Lets local MCP tools use this desktop's engines. Phone access also needs the mobile-networking build feature.
-    pub server_enabled: bool,
-    /// Self-hosted relay for access over the internet, e.g. wss://relay.example.net.
-    pub relay_url: Option<String>,
-    /// Accept direct (still end-to-end encrypted) connections from the local network.
-    pub lan_direct: bool,
-    /// Announce this desktop on the local network (mDNS) so paired phones can find it.
-    pub lan_discovery: bool,
+    // Read-only migration fields; these integrations no longer exist.
+    #[serde(skip_serializing, rename = "server_enabled")]
+    pub(crate) retired_server_enabled: bool,
+    #[serde(skip_serializing, rename = "relay_url")]
+    pub(crate) retired_relay_url: Option<String>,
+    #[serde(skip_serializing, rename = "lan_direct")]
+    pub(crate) retired_lan_direct: bool,
+    #[serde(skip_serializing, rename = "lan_discovery")]
+    pub(crate) retired_lan_discovery: bool,
     /// Holding Ctrl+Shift alone starts a prompt recording.
     pub modifier_hold: bool,
     /// Read-only migration field; physical-device selection is retired.
@@ -69,12 +71,12 @@ impl Default for AppSettings {
             check_updates_on_startup: true,
             prompt_hotkey: None,
             dictation_hotkey: None,
-            answer_hotkey: None,
+            retired_answer_hotkey: None,
             use_gpu: true,
-            server_enabled: false,
-            relay_url: None,
-            lan_direct: false,
-            lan_discovery: false,
+            retired_server_enabled: false,
+            retired_relay_url: None,
+            retired_lan_direct: false,
+            retired_lan_discovery: false,
             modifier_hold: false,
             modifier_keyboard: None,
             auto_mode: false,
@@ -181,6 +183,50 @@ pub fn save_routing(data_dir: &Path, rendering: promptify_core::routing::Renderi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_integrations_migrate_without_resetting_preferences() {
+        let dir = TestDir::new();
+        let text = r#"{
+            "answer_hotkey":"Ctrl+Alt+A","server_enabled":true,
+            "relay_url":"wss://example.invalid","lan_direct":true,"lan_discovery":true,
+            "stt_model":"whisper-small-en","llm_model":"qwen3.5-9b-q4km",
+            "prompt_hotkey":"Ctrl+Alt+P","dictation_hotkey":"Ctrl+Alt+D",
+            "history_enabled":false,"use_gpu":false,"auto_mode":true,
+            "check_updates_on_startup":false,"modifier_hold":true,
+            "onboarding":{"version":1,"step":"practice","completed":true},
+            "vocabulary":{"words":["Promptify"],"replacements":[]},
+            "screen_text_apps":["outlook"],"desktop_integration_enabled":false
+        }"#;
+        std::fs::write(dir.0.join("settings.json"), text).unwrap();
+        let settings = load_checked(&dir.0).unwrap().unwrap();
+        assert_eq!(settings.llm_model.as_deref(), Some("qwen3.5-9b-q4km"));
+        assert_eq!(settings.stt_model.as_deref(), Some("whisper-small-en"));
+        assert_eq!(settings.prompt_hotkey.as_deref(), Some("Ctrl+Alt+P"));
+        assert_eq!(settings.dictation_hotkey.as_deref(), Some("Ctrl+Alt+D"));
+        assert!(!settings.history_enabled && !settings.use_gpu && !settings.check_updates_on_startup);
+        assert!(settings.auto_mode && settings.modifier_hold);
+        assert!(!settings.desktop_integration_enabled);
+        assert!(settings.onboarding.as_ref().unwrap().completed);
+        assert_eq!(settings.vocabulary.words, ["Promptify"]);
+        assert_eq!(settings.screen_text_apps, ["outlook"]);
+        save(&dir.0, &settings).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.0.join("settings.json")).unwrap()).unwrap();
+        for key in ["answer_hotkey", "server_enabled", "relay_url", "lan_direct", "lan_discovery"] {
+            assert!(saved.get(key).is_none(), "{key} must not be written");
+        }
+        let reloaded = load_checked(&dir.0).unwrap().unwrap();
+        assert_eq!(reloaded.vocabulary, settings.vocabulary);
+        assert_eq!(reloaded.llm_model, settings.llm_model);
+        assert_eq!(reloaded.onboarding, settings.onboarding);
+    }
+
+    #[test]
+    fn migration_keeps_strict_settings_validation() {
+        assert!(serde_json::from_str::<AppSettings>(r#"{"unknown_preference":true}"#).is_err());
+        assert!(serde_json::from_str::<AppSettings>(r#"{"server_enabled":"yes"}"#).is_err());
+        assert!(serde_json::from_str::<AppSettings>(r#"{"answer_hotkey":42}"#).is_err());
+    }
 
     struct TestDir(PathBuf);
 

@@ -3,6 +3,10 @@
 Status: shared delivery foundation implemented; complete universal feature and
 cross-platform certification remain open.
 
+Scope update: Answer mode, the Advanced playground, MCP, and external API/phone networking
+have been removed. Historical references to Answer below describe the earlier scope,
+not a currently available feature. Prompt and Dictation insertion safety remains required.
+
 ## Implementation evidence and remaining gates
 
 - Synchronized with origin/main at

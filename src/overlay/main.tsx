@@ -34,8 +34,6 @@ function describe(outcome: Outcome, capped: boolean): View {
   switch (outcome.kind) {
     case "inserted":
       return { kind: "result", tone: "ok", title: "Paste sent" + note, detail: "Check the destination: sending a paste does not verify that the application received it. Generated text stays on the clipboard until you restore it after checking.", canCopy: true, canRestore: true };
-    case "answered":
-      return { kind: "result", tone: "ok", title: "Answer" + note, body: outcome.text, canCopy: true };
     case "blocked":
       return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, detail: outcome.detail ?? undefined, canCopy: true };
     case "no_speech":
@@ -55,7 +53,6 @@ function describe(outcome: Outcome, capped: boolean): View {
 
 const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing…",
-  researching: "Looking up context…",
   generating: "Writing your prompt…",
   revising: "Checking the prompt's format…",
   inserting: "Pasting…",
@@ -72,7 +69,6 @@ function Overlay() {
   const hideTimer = useRef<number | undefined>(undefined);
   const streamPreview = useRef<HTMLDivElement>(null);
   const eventVersion = useRef(0);
-  const mode = useRef("prompt");
   // The transcript is shown until the first token arrives; then the draft replaces it.
   const streaming = useRef(false);
 
@@ -177,7 +173,6 @@ function Overlay() {
           if (!payload.latched) setPreview("");
           setUiError(null);
           setRouting(null);
-          mode.current = payload.mode;
           setView({ kind: "listening", mode: payload.mode, profile: payload.profile, target: payload.target, latched: payload.latched });
           break;
         case "level":
@@ -189,7 +184,7 @@ function Overlay() {
         case "stage":
           if (payload.stage === "revising") setPreview("");
           if (payload.stage === "generating" || payload.stage === "revising") streaming.current = false;
-          setView({ kind: "working", label: payload.stage === "generating" && mode.current === "answer" ? "Answering…" : STAGE_LABELS[payload.stage] });
+          setView({ kind: "working", label: STAGE_LABELS[payload.stage] });
           break;
         case "transcript":
           streaming.current = false;
@@ -256,7 +251,7 @@ function Overlay() {
       </div>}
       <div className="text">
         {view.kind === "listening" && <>
-            <strong role="status">{view.mode === "prompt" ? "Listening for a prompt" : view.mode === "answer" ? "Listening for a question" : "Dictating"}</strong>
+            <strong role="status">{view.mode === "prompt" ? "Listening for a prompt" : "Dictating"}</strong>
             <span className="metadata">
               {view.profile} · {view.target}
               {view.latched ? " · press the hotkey again to finish" : " · release to finish"} · Esc cancels

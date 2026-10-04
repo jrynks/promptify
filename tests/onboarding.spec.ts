@@ -18,7 +18,6 @@ interface TestBridge {
   emit: (event: string, payload: unknown) => void;
   practice: (event: OverlayEvent, attempt?: number) => void;
   lastRouting: unknown;
-  lastPreview: unknown;
   overlaySizes: number[];
 }
 
@@ -33,7 +32,7 @@ function fixture(ready = false): Fixture {
   return {
     info: {
       input_device: "Test microphone",
-      hotkeys: { prompt: "CommandOrControl+Alt+Space", dictation: "CommandOrControl+Alt+Shift+Space", answer: null, cancel: "Escape" },
+      hotkeys: { prompt: "CommandOrControl+Alt+Space", dictation: "CommandOrControl+Alt+Shift+Space", cancel: "Escape" },
       hotkey_errors: [], prompt_hotkey_error: null, hotkeys_paused: false,
       engines_ready: ready, models_installed: ready, engine_error: null,
       history_enabled: true, data_dir: "isolated-test-data", use_gpu: true, gpu_device: null,
@@ -126,7 +125,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
       initial.status.speech = initial.status.language = { state: "ready" };
     };
     window.onboardingTest = {
-      state: initial, calls: [], emit, lastRouting: null, lastPreview: null, overlaySizes: [],
+      state: initial, calls: [], emit, lastRouting: null, overlaySizes: [],
       change: (update) => { Object.assign(initial, update); changed(); },
       practice: (event, id = initial.status.practice.attempt_id ?? -1) => {
         const practice = initial.status.practice;
@@ -216,11 +215,13 @@ async function launch(page: Page, state = fixture(), path = "/") {
               return;
             case "onboarding_status": return structuredClone(initial.status);
             case "list_models": return structuredClone(initial.models);
-            case "list_profiles":
             case "list_history": return [];
-            case "remote_info": return { mobile_available: false, enabled: false, relay_url: null, lan_direct: false, lan_discovery: false, status: null, error: null, devices: [], api_token_path: "test-token-path" };
-            case "mcp_info": return { path: "test-mcp-path", error: null, active: false, servers: [] };
-            case "mcp_read": return { text: "", exists: false, template: "" };
+            case "set_vocabulary":
+              initial.info.vocabulary = args.vocabulary as AppInfo["vocabulary"];
+              return structuredClone(initial.info.vocabulary);
+            case "set_screen_text_apps":
+              initial.info.screen_text_apps = args.apps as string[];
+              return;
             case "resize_overlay":
               if (typeof args.height !== "number" || !Number.isInteger(args.height) || args.height <= 0) throw new Error("Invalid overlay size");
               window.onboardingTest.overlaySizes.push(args.height);
@@ -239,23 +240,6 @@ async function launch(page: Page, state = fixture(), path = "/") {
             case "queue_prompt_routing":
               window.onboardingTest.lastRouting = structuredClone(args.options);
               return;
-            case "preview_prompt": {
-              window.onboardingTest.lastPreview = structuredClone(args.input);
-              const input = args.input;
-              if (!input || typeof input !== "object" || !("routing" in input)) throw new Error("Missing preview routing");
-              const options = input.routing;
-              if (!options || typeof options !== "object" || !("surface" in options) || !("rendering" in options)) throw new Error("Invalid preview routing");
-              if (options.surface === "literal") throw new Error("This is a literal-content field. Use Dictation.");
-              return {
-                profileId: "chatgpt", profileName: "ChatGPT",
-                messages: [{ role: "system", content: "Write only the prompt." }, { role: "user", content: "Debug the checkout crash" }],
-                routing: options.rendering === "adaptive" ? {
-                  version: 1, target_profile_id: "chatgpt", target_name: "ChatGPT", surface: options.surface ?? "chat",
-                  task_type: "code.debug", task_label: "Diagnose and fix a defect", secondary_tasks: [],
-                  form: "graph", conversational: false, reason: "matched", auto_paste: true, warnings: [], max_chars: null, newlines: "keep",
-                } : null,
-              };
-            }
             case "download_model":
             case "select_model": {
               const model = initial.models.find((m) => m.id === args.id);
@@ -585,8 +569,8 @@ test("fresh setup overrides remembered tabs and excludes optional features", asy
   await launch(page);
   await expect(page.getByRole("heading", { name: "Local models" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Tools (MCP)", exact: true })).toBeDisabled();
-  expect(await page.evaluate(() => window.onboardingTest.calls.includes("remote_info"))).toBe(false);
+  await expect(page.getByRole("button", { name: "Prompt types", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Advanced", exact: true })).toHaveCount(0);
 });
 
 test("balanced downloads unlock input checks only when both engines are ready", async ({ page }) => {
@@ -787,7 +771,7 @@ test("verified practice completes once and stays complete after relaunch", async
   await expect(page.getByRole("heading", { name: "Your first prompt" })).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole("heading", { name: "Your first prompt" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Tools (MCP)", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Prompt types", exact: true })).toBeEnabled();
   await testInfo.attach("ui-test-timings", {
     body: JSON.stringify({ startup_and_preparation_ms: prepared - started, practice_and_relaunch_ms: performance.now() - prepared, note: "Mocked UI timing only; native download and inference timings require the desktop acceptance run." }),
     contentType: "application/json",
@@ -885,8 +869,7 @@ test("prompt routing defaults to legacy and persists explicit opt-in", async ({ 
   await expect(enabled).not.toBeChecked();
   await enabled.check();
   await expect(enabled).toBeChecked();
-  await page.getByRole("button", { name: "Advanced", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Rendering", exact: true })).toHaveValue("adaptive");
+  await page.getByRole("button", { name: "General", exact: true }).click();
   await page.reload();
   await page.getByRole("button", { name: "Prompt types", exact: true }).click();
   await expect(enabled).toBeChecked();
@@ -919,25 +902,93 @@ test("prompt routing queues scoped overrides and distinguishes proposed types", 
   await expect(panel.getByRole("combobox", { name: "Prompt type", exact: true }).locator("option[value='audio.song']")).toHaveCount(0);
 });
 
-test("adaptive playground exposes routing and rejects literal fields", async ({ page }, testInfo) => {
+test("quality recommendations preserve selections and never start downloads", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.models.push({
+    ...state.models[1], id: "quality-writer", tier: "quality", display_name: "Quality writer",
+    min_ram_gb: 16, compatibility: { supported: true, total_ram_bytes: 32_000_000_000, reason: null },
+    installed: false, selected: false,
+  });
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  const quality = page.getByRole("row").filter({ hasText: "Quality writer" });
+  await expect(quality).toContainText("Recommended");
+  await expect(quality.getByRole("radio")).not.toBeChecked();
+  await expect(page.getByRole("row").filter({ hasText: "Qwen3.5 4B" }).getByRole("radio")).toBeChecked();
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((command) =>
+    command === "select_model" || command === "download_model"))).toEqual([]);
+});
+
+test("quality recommendations exclude unsupported and unknown models", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  for (const supported of [false, null]) {
+    state.models.push({
+      ...state.models[1], id: `quality-${supported}`, tier: "quality", display_name: `Quality ${supported}`,
+      compatibility: { supported, total_ram_bytes: supported === null ? null : 8_000_000_000, reason: "Compatibility not confirmed" },
+      installed: false, selected: false,
+    });
+  }
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Qwen3.5 4B" })).toContainText("Recommended");
+  for (const supported of [false, null]) {
+    await expect(page.getByRole("row").filter({ hasText: `Quality ${supported}` })).not.toContainText("Recommended");
+  }
+});
+
+test("word drafts and routing filters survive navigation and setup refresh", async ({ page }) => {
   const state = fixture(true);
   state.status.required = false;
   await launch(page, state);
-  await page.getByRole("button", { name: "Advanced", exact: true }).click();
-  const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Context playground" }) });
-  await panel.getByRole("combobox", { name: "Rendering", exact: true }).selectOption("adaptive");
-  await panel.getByLabel("Spoken text").fill("Debug the checkout crash");
-  await panel.getByRole("combobox", { name: "Input surface", exact: true }).selectOption("code_chat");
-  await panel.getByRole("button", { name: "Preview", exact: true }).click();
-  await expect(panel.locator(".routing-summary")).toContainText("code.debug");
-  expect(await page.evaluate(() => window.onboardingTest.lastPreview)).toMatchObject({
-    transcript: "Debug the checkout crash", routing: { rendering: "adaptive", task_type: null, surface: "code_chat" },
-  });
-  await page.screenshot({ path: testInfo.outputPath("adaptive-playground.png"), fullPage: true });
-  await panel.getByRole("combobox", { name: "Input surface", exact: true }).selectOption("literal");
-  await panel.getByRole("button", { name: "Preview", exact: true }).click();
-  await expect(panel.locator(".error")).toContainText("literal-content field");
-  await expect(panel.locator(".routing-summary")).toHaveCount(0);
+  await page.getByRole("button", { name: "Your words", exact: true }).click();
+  const words = page.getByLabel("Names and terms to expect, one per line");
+  await words.fill("My unsaved vocabulary");
+  await page.getByRole("button", { name: "Prompt types", exact: true }).click();
+  await page.getByLabel("Find a prompt type").fill("code.debug");
+  await page.evaluate(() => window.onboardingTest.emit("onboarding-changed", {}));
+  await page.getByRole("button", { name: "Your words", exact: true }).click();
+  await expect(words).toHaveValue("My unsaved vocabulary");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved.", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.onboardingTest.state.info.vocabulary.words)).toEqual(["My unsaved vocabulary"]);
+  await page.getByRole("button", { name: "Prompt types", exact: true }).click();
+  await expect(page.getByLabel("Find a prompt type")).toHaveValue("code.debug");
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((command) => command === "prompt_catalog").length)).toBe(1);
+});
+
+test("retained settings remain usable at minimum window size", async ({ page }, testInfo) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await page.setViewportSize({ width: 640, height: 480 });
+  await launch(page, state);
+  for (const pane of ["General", "Models", "Prompt types", "Your words", "History", "Updates"]) {
+    await page.getByRole("button", { name: pane, exact: true }).click();
+    await expect(page.getByRole("heading", { name: pane, exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath("simplified-models.png"), fullPage: true });
+});
+
+test("simplified settings retire remembered tabs and defer unvisited panes", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await page.addInitScript(() => localStorage.setItem("promptify.settings.pane", "advanced"));
+  await launch(page, state);
+  await expect(page.getByRole("heading", { name: "General", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation").getByRole("button")).toHaveText([
+    "General", "Models", "Prompt types", "Your words", "History", "Updates",
+  ]);
+  await expect(page.getByText("Answer", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((command) =>
+    ["remote_info", "mcp_info", "mcp_read", "preview_prompt", "list_profiles", "list_models", "list_history", "prompt_catalog"].includes(command)))).toEqual([]);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Models", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "General", exact: true }).click();
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((command) => command === "list_models").length)).toBe(1);
 });
 
 test("prompt catalog stays usable in the minimum window", async ({ page }, testInfo) => {
@@ -1102,13 +1153,13 @@ test.describe("native overlay sizing", () => {
       type: "finished", capped: false,
       report: {
         job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
-        outcome: { kind: "answered", text: "New answer" },
+        outcome: { kind: "blocked", text: "New prompt", reason: "focus_changed", detail: null },
       },
     });
-    await expect(page.getByText("New answer", { exact: true })).toBeVisible();
+    await expect(page.getByText("New prompt", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Restore previous clipboard" })).toHaveCount(0);
     await page.waitForFunction(() => window.onboardingTest.state.info.clipboard_restore_pending === false);
     await expect(page.getByText("Previous clipboard restored.", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("New answer", { exact: true })).toBeVisible();
+    await expect(page.getByText("New prompt", { exact: true })).toBeVisible();
   });
 });

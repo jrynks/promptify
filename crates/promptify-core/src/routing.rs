@@ -382,7 +382,7 @@ pub fn validate_rewrite_with_context(policy: &ResolvedPromptPolicy, original: &s
             && !has_alias(&references.to_lowercase(), number)
             && !policy.max_chars.is_some_and(|limit| number == &limit.to_string())
         {
-            return Err("the prompt introduces a number the user did not supply; remove invented numeric facts and constraints".into());
+            return Err(format!("the prompt introduces the number {number}, which the user did not supply; remove invented numeric facts and constraints, and use only valid numeric dependency clauses"));
         }
     }
     let facts_lower = text.to_lowercase();
@@ -978,7 +978,7 @@ mod tests {
             )
         };
         let invented = graph("Say the library is at 123 Main Street.");
-        assert!(validate_rewrite(&policy, "Draft an article about our library", &invented).is_err());
+        assert!(validate_rewrite(&policy, "Draft an article about our library", &invented).unwrap_err().contains("number 123"));
         assert!(validate_rewrite_with_context(&policy, "Draft an article about our library", "The library is at 123 Main Street.", &invented).is_ok());
         let missing = graph("Write the draft concisely.");
         assert!(validate_rewrite(&policy, "Draft a 100 word article about our library", &missing).is_err());

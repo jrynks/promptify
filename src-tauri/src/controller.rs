@@ -43,7 +43,6 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
         OverlayEvent::Listening { .. } => Some("listening\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Transcribing } => Some("transcribing\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Generating } => Some("writing prompt\u{2026}"),
-        OverlayEvent::Stage { stage: Stage::Researching } => Some("looking up context\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Revising } => Some("revising prompt\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
         OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),
@@ -237,7 +236,7 @@ impl Worker {
             return;
         }
         #[cfg(target_os = "linux")]
-        if mode != Mode::Answer && let Err(message) = crate::wayland_paste::require_ready() {
+        if let Err(message) = crate::wayland_paste::require_ready() {
             self.gesture.reset();
             if crate::onboarding::required(&self.app.state::<crate::AppState>()) {
                 crate::onboarding::record_error(&self.app, &message);
@@ -258,7 +257,7 @@ impl Worker {
             }
         };
         let started = if practice.is_some() {
-            self.orchestrator.begin_with_options(mode, JobOptions { use_personal_context: false, use_tools: false, auto_mode: false })
+            self.orchestrator.begin_with_options(mode, JobOptions { use_personal_context: false, auto_mode: false })
         } else {
             self.orchestrator.begin(mode)
         };
@@ -390,7 +389,7 @@ impl Worker {
                 if let Outcome::Blocked { reason, detail, .. } = &report.outcome {
                     log::warn!("job {} insertion blocked: reason={reason:?} detail={detail:?}", report.job_id);
                 }
-                if let Outcome::Blocked { text, .. } | Outcome::Answered { text } | Outcome::Inserted { text } = &report.outcome {
+                if let Outcome::Blocked { text, .. } | Outcome::Inserted { text } = &report.outcome {
                     *last_result.lock().unwrap() = Some(text.clone());
                 }
                 if report.history_saved {

@@ -18,10 +18,8 @@ mod destination_macos;
 #[cfg(target_os = "linux")]
 mod kwin;
 pub mod llm_client;
-mod mcp;
 mod modifier_hook;
 pub mod onboarding;
-mod remote;
 pub mod settings;
 pub mod stt;
 pub mod system_context;
@@ -62,7 +60,6 @@ pub struct AppState {
     pub stt: Arc<WhisperEngine>,
     pub llm: Arc<LlmWorker>,
     pub onboarding: Arc<onboarding::Onboarding>,
-    pub remote: remote::RemoteState,
     pub modifier_hook: std::sync::Mutex<Option<modifier_hook::Hook>>,
 }
 
@@ -122,7 +119,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_settings(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).level_for("rmcp", log::LevelFilter::Warn).build())
+        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
         .invoke_handler(tauri::generate_handler![
             updates::update_info,
@@ -132,8 +129,6 @@ pub fn run() {
             updates::install_update,
             updates::restart_after_update,
             commands::app_info,
-            commands::list_profiles,
-            commands::preview_prompt,
             commands::routing_state,
             commands::set_rendering,
             commands::queue_prompt_routing,
@@ -158,12 +153,6 @@ pub fn run() {
             commands::set_code_chat_paste,
             commands::set_vocabulary,
             commands::set_screen_text_apps,
-            mcp::mcp_info,
-            mcp::mcp_reload,
-            mcp::mcp_test,
-            mcp::mcp_read,
-            mcp::mcp_validate,
-            mcp::mcp_save,
             commands::set_hotkey,
             commands::set_use_gpu,
             commands::grant_paste_permission,
@@ -178,12 +167,6 @@ pub fn run() {
             onboarding::confirm_onboarding_paste,
             onboarding::complete_onboarding,
             onboarding::resume_onboarding_hotkeys,
-            remote::remote_info,
-            remote::set_remote_settings,
-            remote::create_pairing_offer,
-            remote::cancel_pairing,
-            remote::remove_device,
-            remote::rename_device,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -238,7 +221,7 @@ pub fn run() {
             let controller = Controller::spawn(handle.clone(), orchestrator.clone(), move |active| {
                 hotkeys::set_cancel_registered(&esc_handle, cancel, active)
             });
-            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, answer_error: None, paused: false };
+            let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, paused: false };
             hotkeys::register_mode_hotkeys(&handle, &mut hotkey_state);
             let tray_hotkeys = hotkey_state.config.clone();
             let engines_ready = [&settings.read().unwrap().stt_model, &settings.read().unwrap().llm_model].iter().all(|m| m.is_some());
@@ -256,14 +239,9 @@ pub fn run() {
                 stt,
                 llm,
                 onboarding: Arc::new(onboarding::Onboarding::new(startup_error)),
-                remote: remote::RemoteState::default(),
                 modifier_hook: Default::default(),
             });
-            if !onboarding::required(&app.state::<AppState>()) {
-                let _ = mcp::reload(&app.state::<AppState>());
-            }
             preload_engines(&handle);
-            remote::apply(&app.state::<AppState>());
             {
                 let state = app.state::<AppState>();
                 let enabled = state.settings.read().unwrap().modifier_hold;

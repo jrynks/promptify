@@ -15,8 +15,6 @@ const DEFAULT_DICTATION: &str = "CommandOrControl+Alt+Shift+Space";
 pub struct HotkeyConfig {
     pub prompt: String,
     pub dictation: String,
-    /// Unset until the user picks one, so it never collides with another app by default.
-    pub answer: Option<String>,
     pub cancel: String,
 }
 
@@ -25,7 +23,6 @@ impl HotkeyConfig {
         Self {
             prompt: settings.prompt_hotkey.clone().unwrap_or_else(|| DEFAULT_PROMPT.into()),
             dictation: settings.dictation_hotkey.clone().unwrap_or_else(|| DEFAULT_DICTATION.into()),
-            answer: settings.answer_hotkey.clone(),
             cancel: "Escape".into(),
         }
     }
@@ -41,14 +38,13 @@ pub struct HotkeyState {
     pub hotkeys: Hotkeys,
     pub prompt_error: Option<String>,
     pub dictation_error: Option<String>,
-    pub answer_error: Option<String>,
     /// Paused from the tray: mode hotkeys are released so other apps can use them.
     pub paused: bool,
 }
 
 impl HotkeyState {
     pub fn errors(&self) -> Vec<String> {
-        self.prompt_error.iter().chain(&self.dictation_error).chain(&self.answer_error).cloned().collect()
+        self.prompt_error.iter().chain(&self.dictation_error).cloned().collect()
     }
 }
 
@@ -56,7 +52,6 @@ impl HotkeyState {
 pub struct Hotkeys {
     pub prompt: Shortcut,
     pub dictation: Shortcut,
-    pub answer: Option<Shortcut>,
     pub cancel: Shortcut,
 }
 
@@ -66,20 +61,18 @@ impl Hotkeys {
         Ok(Self {
             prompt: parse("prompt", &config.prompt)?,
             dictation: parse("dictation", &config.dictation)?,
-            answer: config.answer.as_deref().map(|a| parse("answer", a)).transpose()?,
             cancel: parse("cancel", &config.cancel)?,
         })
     }
 
     fn mode_shortcuts(&self) -> Vec<Shortcut> {
-        [Some(self.prompt), Some(self.dictation), self.answer].into_iter().flatten().collect()
+        vec![self.prompt, self.dictation]
     }
 
     fn get(&self, mode: Mode) -> Option<Shortcut> {
         match mode {
             Mode::Prompt => Some(self.prompt),
             Mode::Dictation => Some(self.dictation),
-            Mode::Answer => self.answer,
         }
     }
 }
@@ -88,7 +81,6 @@ fn label(mode: Mode) -> &'static str {
     match mode {
         Mode::Prompt => "prompt",
         Mode::Dictation => "dictation",
-        Mode::Answer => "answer",
     }
 }
 
@@ -111,19 +103,13 @@ pub fn register_mode_hotkeys<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyS
         log::warn!("could not register dictation hotkey: {e}");
         state.dictation_error = Some(unavailable("dictation", &state.config.dictation, e));
     }
-    if let (Some(answer), Some(accelerator)) = (state.hotkeys.answer, state.config.answer.clone())
-        && let Err(e) = app.global_shortcut().register(answer)
-    {
-        log::warn!("could not register answer hotkey: {e}");
-        state.answer_error = Some(unavailable("answer", &accelerator, e));
-    }
 }
 
 /// Rebinds one mode. The old binding is restored if the new one cannot be claimed.
 pub fn rebind<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, mode: Mode, accelerator: &str) -> Result<(), String> {
     let shortcut = accelerator.parse::<Shortcut>().map_err(|e| format!("invalid hotkey {accelerator:?}: {e}"))?;
     let current = state.hotkeys.get(mode);
-    let taken = [Mode::Prompt, Mode::Dictation, Mode::Answer]
+    let taken = [Mode::Prompt, Mode::Dictation]
         .into_iter()
         .filter(|m| *m != mode)
         .filter_map(|m| state.hotkeys.get(m))
@@ -178,11 +164,6 @@ fn apply_binding(state: &mut HotkeyState, mode: Mode, shortcut: Shortcut, accele
             state.config.dictation = accelerator.to_owned();
             state.dictation_error = None;
         }
-        Mode::Answer => {
-            state.hotkeys.answer = Some(shortcut);
-            state.config.answer = Some(accelerator.to_owned());
-            state.answer_error = None;
-        }
     }
 }
 
@@ -211,7 +192,6 @@ pub fn restore_config<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, c
     state.hotkeys = hotkeys;
     state.prompt_error = None;
     state.dictation_error = None;
-    state.answer_error = None;
     if !state.paused {
         register_mode_hotkeys(app, state);
     }
@@ -247,7 +227,6 @@ pub fn set_paused<R: Runtime>(app: &AppHandle<R>, paused: bool) {
     } else {
         hotkeys.prompt_error = None;
         hotkeys.dictation_error = None;
-        hotkeys.answer_error = None;
         register_mode_hotkeys(app, &mut hotkeys);
     }
     drop(hotkeys);
@@ -298,8 +277,6 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, even
             Mode::Prompt
         } else if shortcut.id() == hotkeys.dictation.id() {
             Mode::Dictation
-        } else if hotkeys.answer.is_some_and(|a| a.id() == shortcut.id()) {
-            Mode::Answer
         } else {
             return;
         };
@@ -313,5 +290,4 @@ fn portal_errors(state: &mut HotkeyState) {
     let error = crate::portal_shortcuts::error();
     state.prompt_error = error.clone();
     state.dictation_error = error.clone();
-    state.answer_error = state.config.answer.as_ref().and(error);
 }
