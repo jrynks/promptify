@@ -42,13 +42,13 @@ checks still use HTTPS; speech and prompt generation run locally through a child
 ## Download and install
 
 Download the x64 installer for your platform from the
-[v1.2.0 release](https://github.com/jrynks/promptify/releases/tag/v1.2.0).
+[v1.2.1 release](https://github.com/jrynks/promptify/releases/tag/v1.2.1).
 Quit any running Promptify instance before upgrading. Models are downloaded separately on first launch.
 Verify your download against the release's **SHA256SUMS.txt**.
 
 ### Windows
 
-Promptify supports Windows 10 and 11 on x64 computers with AVX2. Run **Promptify_1.2.0_x64-setup.exe**. The installer is currently
+Promptify supports Windows 10 and 11 on x64 computers with AVX2. Run **Promptify_1.2.1_x64-setup.exe**. The installer is currently
 unsigned, so Windows SmartScreen may show a warning: choose **More info**, verify that the app is **Promptify**, and then
 choose **Run anyway**.
 
@@ -71,19 +71,19 @@ Use the package for your distribution:
 
 | Distribution | Package | Install |
 | --- | --- | --- |
-| Ubuntu 22.04+, Debian 12+, Linux Mint 21+ | `.deb` | `sudo apt install ./Promptify_1.2.0_amd64.deb` |
-| Fedora and compatible RPM desktops with WebKitGTK 4.1 | `.rpm` | `sudo dnf install ./Promptify-1.2.0-1.x86_64.rpm` |
+| Ubuntu 22.04+, Debian 12+, Linux Mint 21+ | `.deb` | `sudo apt install ./Promptify_1.2.1_amd64.deb` |
+| Fedora and compatible RPM desktops with WebKitGTK 4.1 | `.rpm` | `sudo dnf install ./Promptify-1.2.1-1.x86_64.rpm` |
 | Bazzite / Fedora Atomic, Arch, and other modern glibc desktops | `.AppImage` | Make executable, then run as your normal user |
 
 For the AppImage:
 
 ```bash
-chmod +x Promptify_1.2.0_amd64.AppImage
-./Promptify_1.2.0_amd64.AppImage
+chmod +x Promptify_1.2.1_amd64.AppImage
+./Promptify_1.2.1_amd64.AppImage
 ```
 
 If FUSE 2 is unavailable (common on immutable desktops), use
-`./Promptify_1.2.0_amd64.AppImage --appimage-extract-and-run` instead. The AppImage avoids
+`./Promptify_1.2.1_amd64.AppImage --appimage-extract-and-run` instead. The AppImage avoids
 layering application packages on Bazzite; it is not a Flatpak. Your graphics driver's Vulkan
 loader and desktop audio services must be available. CPU inference is supported, but the binary
 still needs the Vulkan loader. Native `.deb`/`.rpm` installers declare their runtime dependencies.
