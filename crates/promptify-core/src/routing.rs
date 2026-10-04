@@ -11,6 +11,7 @@ use crate::profiles::{NewlinePolicy, Profile, ProfileKind, ProfileSet};
 use crate::structure::validate_graph;
 
 pub const CATALOG_VERSION: u32 = 1;
+const UNCONFIRMED_INPUT_WARNING: &str = "The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request.";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -429,6 +430,13 @@ pub struct ResolvedPromptPolicy {
 }
 
 impl ResolvedPromptPolicy {
+    pub fn confirm_destination(&mut self) {
+        if self.surface.can_reply() {
+            self.auto_paste = true;
+            self.warnings.retain(|warning| warning != UNCONFIRMED_INPUT_WARNING);
+        }
+    }
+
     pub fn tasks(&self) -> impl Iterator<Item = &TaskDefinition> {
         std::iter::once(&self.task_type)
             .chain(&self.secondary_tasks)
@@ -649,7 +657,7 @@ pub fn resolve(ctx: &ActiveContext, profile: &Profile, transcript: &str, options
         warnings.push("This generator/query field cannot be assumed to execute the required graph and check loop. Review the workflow and use a conversational AI with the appropriate tools; it will not be pasted automatically.".into());
     }
     if !auto_paste {
-        warnings.push("The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request.".into());
+        warnings.push(UNCONFIRMED_INPUT_WARNING.into());
     }
     let newlines = if !surface.can_reply() || profile.newlines == NewlinePolicy::Collapse {
         NewlinePolicy::Collapse

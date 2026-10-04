@@ -82,18 +82,6 @@ function ModifierHold({ info, onChange }: { info: AppInfo; onChange: () => void 
       setBusy(false);
     }
   };
-  const selectKeyboard = async (path: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.setModifierKeyboard(path);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-      onChange();
-    }
-  };
   return (
     <div className="stack">
       <label className="inline">
@@ -106,17 +94,7 @@ function ModifierHold({ info, onChange }: { info: AppInfo; onChange: () => void 
         Also start a prompt by holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> on their own
       </label>
       <div className="hint desc indent-check">Shortcuts like Ctrl+Shift+T and the quick Ctrl+Shift layout switch are ignored.</div>
-      <div className="hint desc indent-check">macOS requires Input Monitoring permission. Linux Wayland requires explicit read access to physical keyboards; keyboard access can expose all keystrokes. Promptify never saves typed text or blocks keys.</div>
-      {info.modifier_keyboard_devices.length > 0 && <label>
-        Ctrl+Shift keyboard
-        <select value={info.modifier_keyboard ?? ""} disabled={busy} onChange={(event) => void selectKeyboard(event.target.value)}>
-          <option value="" disabled>Select a physical keyboard</option>
-          {info.modifier_keyboard && !info.modifier_keyboard_devices.some((device) => device.path === info.modifier_keyboard) &&
-            <option value={info.modifier_keyboard} disabled>Selected keyboard disconnected</option>}
-          {info.modifier_keyboard_devices.map((device) => <option key={device.path} value={device.path}>{device.name} ({device.path})</option>)}
-        </select>
-        <span className="hint desc">Only this keyboard is monitored on Wayland. Grant read-only access to its device if needed.</span>
-      </label>}
+      <div className="hint desc indent-check">This optional gesture requires supported system input monitoring. If it is unavailable, use the configured Prompt shortcut through desktop integration. Promptify never requires selecting a physical keyboard or granting raw keyboard-device access.</div>
       {(error || monitorError) && <div className="error" role="alert">{error || monitorError}</div>}
       {monitorError && <button disabled={busy} onClick={() => void setEnabled(true)}>Retry Ctrl+Shift monitoring</button>}
     </div>
@@ -160,6 +138,11 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
         </dd>
         </>}
       </dl>
+      {!!info.activation_bindings?.length && <div aria-label="Active desktop shortcuts">
+        <p className="hint">Your system assigned these active shortcuts:</p>
+        <ul>{info.activation_bindings.map((binding) => <li key={binding.id}>{binding.id}: <kbd>{binding.trigger_description}</kbd></li>)}</ul>
+        <p className="hint">The system may reserve these shortcuts while desktop integration is enabled.</p>
+      </div>}
       {!guided && <>
       <h3>Behaviour</h3>
       <label className="inline">
@@ -169,17 +152,7 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
       <p className="hint indent">Start with “prompt:” or “dictate:” to choose yourself.</p>
       </>}
       <h3>This computer</h3>
-      {!guided && <>
-        <label className="inline">
-          <input type="checkbox" checked={info.code_chat_paste}
-            onChange={(event) => {
-              setError(null);
-              void api.setCodeChatPaste(event.target.checked).then(onChange, (reason) => setError(String(reason)));
-            }} />
-          Allow automatic prompt paste in VS Code and Cursor AI chat
-        </label>
-        <p className="hint">Remembered on this computer. With task-aware adaptation, these mixed-purpose apps otherwise require review. Only use the Prompt hotkey while the AI chat input is focused: Promptify cannot distinguish it from an editor or terminal field. Focus-change checks still apply. Disable this to restore per-request confirmation.</p>
-      </>}
+      {!guided && <p className="hint">Automatic input inspection is independent of the app or site. With task-aware adaptation, a confirmed writable input can receive your prompt without an app-specific setting. Keep that input focused. Unconfirmed inputs require review; protected inputs are never pasted into.</p>}
       {!guided && <DesktopIntegration info={info} onChange={onChange} />}
       <dl>
         <dt>Microphone</dt>

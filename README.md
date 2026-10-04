@@ -87,9 +87,10 @@ loader and desktop audio services must be available. CPU inference is supported,
 still needs the Vulkan loader. Native `.deb`/`.rpm` installers declare their runtime dependencies.
 AppImage portability does not imply that every distribution or compositor has been tested.
 
-Use an X11 session, or KDE Plasma 6 Wayland with its RemoteDesktop portal backend.
-On KDE Wayland, grant paste permission during setup. GNOME Wayland additionally needs the
-`x-win` window-tracking extension; other Wayland compositors remain unsupported.
+The published v1.1.1 packages support X11 or KDE Plasma 6 Wayland with its RemoteDesktop
+portal backend; GNOME Wayland additionally needs the `x-win` window-tracking extension.
+The in-development integration below removes manual extension dependence when accessibility
+metadata is available, but has not been certified on Linux or Steam Deck.
 GNOME users may need an AppIndicator extension to see the tray. The packages do not grant
 keyboard-device access, install input permission rules, or run the app as root.
 See [Wayland integration and keyboard permissions](#fedora--bazzite) below.
@@ -215,21 +216,42 @@ In VS Code, **Terminal > Run Task > Promptify: Run desktop app** supplies this e
 
 Wayland desktop integration:
 
-- **KDE Plasma 6**: Promptify queries KWin with a short-lived script for a fresh focused-window
-  snapshot at recording start and before pasting. Scripts are unloaded after each query; only
-  KWin's authenticated D-Bus connection can return a snapshot. No GNOME extension is needed.
-- **GNOME**: the `x-win` window-tracking extension is required.
-- **Automatic paste**: choose **Grant paste permission** in setup or General Settings and allow
-  keyboard control in the desktop's RemoteDesktop portal dialog. No screen capture is requested.
-  The portal may remember the grant; its restore token is saved privately as `remote-desktop-token`
-  in the data folder and restored on launch. A saved token alone is not treated as an active grant.
-  If permission is denied, revoked, or disconnected, grant it again in Settings. Quit Promptify
-  and remove that token to stop restoring the grant; revoke permission in your desktop's portal
-  permission controls if available.
+- **One control**: choose **Enable desktop integration** in setup or General Settings.
+  On Wayland this requests keyboard control through RemoteDesktop and activation through
+  GlobalShortcuts. Follow the desktop's permission dialogs; no screen capture is requested.
+  Actual system-assigned shortcuts appear in Settings. A backend that lacks these capabilities
+  reports an explicit error instead of requesting raw keyboard-device access.
+- **Focus evidence**: bounded AT-SPI metadata inspection can establish the active accessible
+  window and writable field without reading its contents or requiring a manual extension.
+  Providers do not expose every application. Existing native window tracking is a reduced-assurance
+  fallback, not proof of a writable input. KDE's KWin snapshot uses a short-lived script,
+  unloaded after each query, accepting replies only from KWin's authenticated D-Bus connection.
+- **Permission lifecycle**: a private `remote-desktop-token` can reduce repeated permission
+  prompts. Sessions are acquired together by the explicit Enable action, not restored partially
+  at startup. Re-enable after a new launch or permission loss. **Disable desktop integration**
+  persists across launches, blocks insertion, invalidates old jobs even after re-enabling,
+  and closes active Wayland input/shortcut sessions. Desktop-wide stored permission can also
+  be revoked through the system's permission controls.
 - Paste never opens a permission dialog or retries an ambiguous keystroke delivery. It checks
   focus immediately before injection, releases held modifiers on failure, and retains the
   generated result in the overlay for copying if insertion is blocked.
-- Other Wayland compositors are not supported yet; use an X11 session there.
+- Clipboard access/conversion failures are not treated as an empty clipboard. Staged text is
+  checked before dispatch, and cancellation/integration changes are checked again after
+  staging and native focus inspection. Generated text stays on the clipboard until an explicit
+  **Restore previous clipboard** action in the overlay or General settings. The previous supported
+  snapshot is memory-only and is lost when Promptify exits. Restoration-check failures are reported explicitly.
+  Text equality is not an OS clipboard ownership token or proof the destination consumed it.
+  On Windows, clipboard change counters also prevent restoring over a newer copy with identical
+  text and reject snapshots that changed while being read.
+- Windows restores saved content through an owned clipboard window, so plain text,
+  HTML/text alternatives, file lists, images, and an empty clipboard retain their
+  native formats without relying on an ownerless clipboard handle.
+- This implementation is not certification of GNOME, KDE, other Wayland compositors, or
+  Steam Deck Gaming Mode. Native desktop, clipboard, controller and suspend/resume tests remain
+  required. Clipboard restoration supports plain text, HTML with its text alternative,
+  copied-file lists, or images. Unsupported combinations of these types block staging instead
+  of knowingly losing a component; arbitrary application formats are not preserved.
+  keystroke dispatch is reported as unverified rather than claiming destination receipt.
 
 On Wayland, the taskbar and titlebar icons are resolved through a desktop entry, not the window's embedded PNG.
 For an unbundled development build, a user-local `promptify.desktop` entry must match `StartupWMClass=promptify`
@@ -248,50 +270,75 @@ The ordinary Prompt shortcut remains available if the monitor is disabled or per
   Synthetic paste keystrokes are ignored.
 - **Linux X11:** XInput2 raw keyboard events. No root permission or device-access changes are needed;
   XTest-generated paste events are ignored.
-- **Linux Wayland:** select one physical keyboard in General Settings and grant read access to that
-  keyboard only. Promptify uses its stable by-id path when available and does not monitor other
-  keyboards or auxiliary consumer-control devices. The paste portal's
-  keyboard-control grant does **not** authorize observing your keyboard. Promptify does not run as
-  root, install permission rules, or add you to the broad `input` group automatically.
+- **Linux Wayland:** modifier-only monitoring through raw physical-keyboard access is retired.
+  Use the configured Prompt shortcut through desktop integration instead. The portal's
+  keyboard-control grant is not permission to monitor every keystroke. Promptify no longer
+  exposes a physical keyboard selector or instructs users to change device ACLs.
+  Enabling an unsupported gesture reports an explicit error rather than opening raw devices.
 
-Keyboard-device access can expose all keystrokes to a process with that access, even though Promptify
-only classifies Ctrl, Shift, and other-key interference and never saves or logs typed text.
-The monitor does not grab, block, or consume keys. Wayland monitoring stops arming while the logind
-desktop session is locked or inactive.
-
-On Fedora/Bazzite Wayland, choose **Ctrl+Shift keyboard** first. Enabling the option without permission reports the exact keyboard name
-and device path. If you choose to grant access, use a **read-only ACL on that specific keyboard**:
-
-```bash
-# Replace eventN with the exact keyboard event device reported in Settings.
-sudo setfacl -m u:$(id -un):r /dev/input/eventN
-```
-
-Then choose **Retry Ctrl+Shift monitoring**. Do not grant access to every input device or use `chmod 666`.
-ACLs on event devices are normally temporary and must be re-established after reconnecting or rebooting.
-To revoke one, disable the gesture and run:
-
-```bash
-sudo setfacl -x u:$(id -un) /dev/input/eventN
-```
-
-If the selected keyboard is removed or access is lost, monitoring stops with a visible error and releases
-any active hold; retry in Settings after checking device access. Your saved preference is preserved.
+The monitor does not grab, block, or consume keys. Permission or runtime failures remain
+visible and the optional gesture can be disabled without changing the main shortcut.
 
 ### Verify native automatic paste on Windows and macOS
 
 Automatic insertion uses the clipboard plus native Ctrl+V on Windows and Cmd+V on macOS.
 Copy-only results are a fallback when focus changes, insertion fails, or an experimental routing
 policy requires review; they are not the normal Windows/macOS insertion path. Task-aware adaptation deliberately requires surface confirmation in
-VS Code/Cursor because these apps also contain editors. In General Settings, explicitly enable
-**Allow automatic prompt paste in VS Code and Cursor AI chat** to remember that choice across
-recordings and restarts on any platform, including KDE Wayland. This does not detect the specific
-control: only use the Prompt hotkey in the AI chat input, not an editor or integrated terminal.
-The option is off by default and does not bypass window/site focus checks or an explicit
-per-request input-surface override. Other unconfirmed apps still require review.
+mixed-purpose apps because they also contain editors. Native accessibility inspection can
+confirm a writable, non-protected field independently of its app or site. The exact confirmed
+field is checked again before insertion; changing fields inside the same window blocks it.
+This reads metadata, not surrounding text. Unconfirmed inputs still require review or an
+explicit per-request input-surface selection. Generator-only fields retain review semantics.
+The software-specific paste checkbox is retired. Old settings remain readable, are omitted
+on the next settings save, and do not authorize insertion. Deprecated IPC reports retirement
+instead of silently enabling a brand exception.
 Keep the destination text field focused while generating. macOS requires **Accessibility** permission for input
 simulation (separate from **Input Monitoring** for Ctrl+Shift). Windows UIPI can block a
 non-elevated app from injecting into an elevated destination.
+
+Job reports include additive `delivery: "sent_unverified"` metadata for dispatched native
+pastes. The historical `inserted` outcome and history flag indicate dispatch, not proof of
+receipt. The overlay says **Paste sent** and preserves a Copy recovery action. Onboarding
+still requires the actual matching field receipt before completing setup. Clipboard
+transactions are serialized, and restoration failures are surfaced explicitly. Original
+clipboard preservation supports plain text, HTML with its text alternative, copied files, or images.
+Combinations that cannot be restored together block staging; custom application formats are not
+preserved. There is no timed automatic restoration or automatic retry of an ambiguous paste.
+Windows staging requests exclusion from clipboard history, cloud synchronization, and monitoring;
+this does not change system-wide clipboard settings or establish proof of delivery.
+
+For repeated native selection-replacement checks (single-line, multiline and Unicode):
+
+```bash
+npm run test:native-paste -- /path/to/promptify-cli --acceptance
+node scripts/test-generated-paste.mjs /path/to/promptify-cli
+```
+
+The second command uses the configured local model and the real adaptive pipeline, then
+checks exact generated field contents. Neither test records history or submits the field.
+It is not a microphone/global-shortcut test.
+The harness retains the generated clipboard until it observes exact field contents, then explicitly
+acknowledges restoration to the CLI. Set `PROMPTIFY_TEST_BROWSER` to an installed Chromium-based
+browser executable to test a real installed browser instead of bundled test Chromium. This is a
+test-only choice, not a source-specific application setting. The test field is served from a
+temporary loopback HTTP origin (not an opaque data URL), and the test server is closed afterwards.
+
+On Windows, test the installed VS Code editor in a temporary isolated profile:
+
+```powershell
+node scripts\test-native-vscode.mjs C:\ptb\release\promptify-cli.exe 'C:\Users\you\AppData\Local\Programs\Microsoft VS Code\Code.exe' --acceptance
+node scripts\test-native-vscode.mjs C:\ptb\release\promptify-cli.exe 'C:\Users\you\AppData\Local\Programs\Microsoft VS Code\Code.exe' --generated
+```
+
+The first command checks 60 native selected-text replacements; the second checks real adaptive
+local-model output. Neither uses your workspace, enables extensions, submits prompts, or certifies
+authenticated chat fields. Unknown Windows accessibility patterns receive up to three 50 ms
+metadata rechecks while a provider initializes. This never infers writability or retries delivery.
+
+Cross-platform destination adapters and native test results are tracked in
+[the universal insertion plan](./UNIVERSAL-INSERTION-PLAN.md) and
+[Linux/Steam Deck research](./LINUX-INSERTION-RESEARCH.md). This development work is not
+certification of every distro or Steam Deck Gaming Mode.
 
 Run the native smoke test in an interactive Windows or macOS desktop session:
 
@@ -312,6 +359,18 @@ before injection so an unrelated window cannot intentionally receive the test te
 user settings, or history are changed. Passing this test verifies the native paste backend, not
 every target application or the complete speech/model/hotkey flow. Shared tests run on Linux are
 not a substitute for these native Windows and macOS runs.
+On Windows the test harness attempts native activation of its own uniquely identified browser
+window and fails explicitly if Windows refuses. This is test setup only; production insertion
+never brings an old destination back to the foreground. The acceptance variant runs 20 selected-text
+replacements each for single-line, multiline and Unicode payloads:
+
+```bash
+node scripts/test-native-paste.mjs <built-promptify-cli> --acceptance
+node scripts/test-generated-paste.mjs <built-promptify-cli>
+```
+
+The second test requires configured local models and observes real adaptive model output in the
+native textarea. It does not verify speech recording or global shortcut activation.
 
 The same harness also runs on Linux X11 and supported Wayland desktops. On Wayland, grant paste
 permission in the app first; the CLI restores that grant in its own session before the test.

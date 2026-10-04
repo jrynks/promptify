@@ -11,7 +11,7 @@ use crate::settings::AppSettings;
 const DEFAULT_PROMPT: &str = "CommandOrControl+Alt+Space";
 const DEFAULT_DICTATION: &str = "CommandOrControl+Alt+Shift+Space";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HotkeyConfig {
     pub prompt: String,
     pub dictation: String,
@@ -98,6 +98,11 @@ fn unavailable(label: &str, accelerator: &str, e: impl std::fmt::Display) -> Str
 
 /// Registers the always-on mode hotkeys, recording which could not be claimed.
 pub fn register_mode_hotkeys<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState) {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        portal_errors(state);
+        return;
+    }
     if let Err(e) = app.global_shortcut().register(state.hotkeys.prompt) {
         log::warn!("could not register prompt hotkey: {e}");
         state.prompt_error = Some(unavailable("prompt", &state.config.prompt, e));
@@ -126,6 +131,16 @@ pub fn rebind<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, mode: Mod
         .any(|other| other.id() == shortcut.id());
     if taken {
         return Err("that hotkey is already used by Promptify".into());
+    }
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        crate::portal_shortcuts::preferred_trigger(shortcut)?;
+        if current.is_none_or(|current| current.id() != shortcut.id()) {
+            crate::portal_shortcuts::stop();
+        }
+        apply_binding(state, mode, shortcut, accelerator);
+        portal_errors(state);
+        return Ok(());
     }
     if state.paused {
         // Claimed when hotkeys resume.
@@ -173,6 +188,17 @@ fn apply_binding(state: &mut HotkeyState, mode: Mode, shortcut: Shortcut, accele
 
 pub fn restore_config<R: Runtime>(app: &AppHandle<R>, state: &mut HotkeyState, config: HotkeyConfig) -> Result<(), String> {
     let hotkeys = Hotkeys::parse(&config)?;
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        crate::portal_shortcuts::validate_config(&config)?;
+        if state.config != config {
+            crate::portal_shortcuts::stop();
+        }
+        state.config = config;
+        state.hotkeys = hotkeys;
+        portal_errors(state);
+        return Ok(());
+    }
     let shortcuts = app.global_shortcut();
     if !state.paused {
         for shortcut in state.hotkeys.mode_shortcuts() {
@@ -202,6 +228,15 @@ pub fn set_paused<R: Runtime>(app: &AppHandle<R>, paused: bool) {
         return;
     }
     hotkeys.paused = paused;
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        crate::portal_shortcuts::stop();
+        portal_errors(&mut hotkeys);
+        drop(hotkeys);
+        state.controller.send(Command::Cancel);
+        crate::onboarding::notify(app);
+        return;
+    }
     let shortcuts = app.global_shortcut();
     if paused {
         for shortcut in hotkeys.hotkeys.mode_shortcuts() {
@@ -221,6 +256,11 @@ pub fn set_paused<R: Runtime>(app: &AppHandle<R>, paused: bool) {
 
 /// Escape is only claimed while a job is active so it keeps working in other apps.
 pub fn set_cancel_registered<R: Runtime>(app: &AppHandle<R>, cancel: Shortcut, active: bool) {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        crate::portal_shortcuts::set_cancel(active);
+        return;
+    }
     let shortcuts = app.global_shortcut();
     let result = if active {
         if shortcuts.is_registered(cancel) { Ok(()) } else { shortcuts.register(cancel) }
@@ -235,6 +275,10 @@ pub fn set_cancel_registered<R: Runtime>(app: &AppHandle<R>, cancel: Shortcut, a
 }
 
 pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, event: ShortcutEvent) {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_paste::applies() {
+        return;
+    }
     let Some(state) = app.try_state::<AppState>() else { return };
     let (hotkeys, paused) = {
         let guard = state.hotkeys.read().unwrap();
@@ -262,4 +306,12 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut, even
         if pressed { Command::Press(mode) } else { Command::Release(mode) }
     };
     state.controller.send(command);
+}
+
+#[cfg(target_os = "linux")]
+fn portal_errors(state: &mut HotkeyState) {
+    let error = crate::portal_shortcuts::error();
+    state.prompt_error = error.clone();
+    state.dictation_error = error.clone();
+    state.answer_error = state.config.answer.as_ref().and(error);
 }

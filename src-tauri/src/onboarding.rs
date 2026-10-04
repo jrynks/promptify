@@ -260,6 +260,9 @@ fn require_models(state: &AppState) -> Result<(), String> {
 
 fn configuration(state: &AppState) -> Result<Configuration, String> {
     require_models(state)?;
+    if !state.settings.read().unwrap().desktop_integration_enabled {
+        return Err("Enable desktop integration before continuing.".into());
+    }
     #[cfg(target_os = "linux")]
     crate::wayland_paste::require_ready()?;
     use promptify_core::pipeline::ContextProvider;
@@ -613,7 +616,7 @@ mod tests {
 
     fn finished(job_id: u64, outcome: Outcome) -> OverlayEvent {
         OverlayEvent::Finished {
-            report: JobReport { job_id, profile_id: "generic".into(), outcome, elapsed_ms: 1, history_saved: false, structure: None, routing: None },
+            report: JobReport { job_id, profile_id: "generic".into(), outcome, elapsed_ms: 1, history_saved: false, structure: None, routing: None, delivery: None },
             capped: false,
         }
     }

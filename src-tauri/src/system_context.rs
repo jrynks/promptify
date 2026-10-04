@@ -48,7 +48,22 @@ fn kde() -> Option<Result<ActiveContext, BackendError>> {
 }
 
 impl ContextProvider for SystemContext {
+    fn destination(&self, window: &WindowIdentity) -> Result<promptify_core::delivery::Destination, BackendError> {
+        #[cfg(windows)]
+        return crate::destination_windows::inspect(window);
+        #[cfg(target_os = "linux")]
+        return crate::destination_linux::inspect(window);
+        #[cfg(target_os = "macos")]
+        return crate::destination_macos::inspect(window);
+    }
     fn identify(&self) -> Result<ActiveContext, BackendError> {
+        #[cfg(target_os = "linux")]
+        if crate::wayland_paste::applies() {
+            match crate::destination_linux::active_context() {
+                Ok(context) => return Ok(context),
+                Err(error) => log::warn!("Accessibility focus tracking unavailable; trying native window metadata: {error}"),
+            }
+        }
         if let Some(result) = kde() {
             return result;
         }
@@ -65,6 +80,10 @@ impl ContextProvider for SystemContext {
     }
 
     fn foreground(&self) -> Result<WindowIdentity, BackendError> {
+        #[cfg(target_os = "linux")]
+        if crate::wayland_paste::applies() {
+            return self.identify().map(|context| context.window);
+        }
         if let Some(result) = kde() {
             return result.map(|context| context.window);
         }

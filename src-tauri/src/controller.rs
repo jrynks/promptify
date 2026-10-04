@@ -390,7 +390,7 @@ impl Worker {
                 if let Outcome::Blocked { reason, detail, .. } = &report.outcome {
                     log::warn!("job {} insertion blocked: reason={reason:?} detail={detail:?}", report.job_id);
                 }
-                if let Outcome::Blocked { text, .. } | Outcome::Answered { text } = &report.outcome {
+                if let Outcome::Blocked { text, .. } | Outcome::Answered { text } | Outcome::Inserted { text } = &report.outcome {
                     *last_result.lock().unwrap() = Some(text.clone());
                 }
                 if report.history_saved {

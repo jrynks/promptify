@@ -17,10 +17,6 @@ pub struct KeyboardDevice {
 }
 
 pub fn keyboards() -> Result<Vec<KeyboardDevice>, String> {
-    #[cfg(target_os = "linux")]
-    if crate::wayland_paste::applies() {
-        return platform::available_keyboards();
-    }
     Ok(Vec::new())
 }
 
@@ -240,6 +236,13 @@ mod tests {
 /// Installs or removes the hook to match the setting.
 pub fn apply(app: &AppHandle, slot: &std::sync::Mutex<Option<Hook>>, enabled: bool) -> Result<(), String> {
     let mut slot = slot.lock().unwrap();
+    #[cfg(target_os = "linux")]
+    if enabled && crate::wayland_paste::applies() {
+        *slot = None;
+        let message = "This session does not expose permissioned modifier-only monitoring. Use the configured Prompt shortcut through desktop integration; raw keyboard-device access is not required.".to_owned();
+        *STARTUP_ERROR.lock().unwrap() = Some(message.clone());
+        return Err(message);
+    }
     if slot.as_ref().is_some_and(|hook| hook.error().is_some()) {
         *slot = None;
     }

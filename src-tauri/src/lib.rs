@@ -5,6 +5,16 @@ pub mod download;
 mod hotkeys;
 mod hardware;
 pub mod insert;
+#[cfg(windows)]
+mod clipboard_restore_windows;
+#[cfg(windows)]
+mod destination_windows;
+#[cfg(target_os = "linux")]
+mod destination_linux;
+#[cfg(target_os = "linux")]
+mod portal_shortcuts;
+#[cfg(target_os = "macos")]
+mod destination_macos;
 #[cfg(target_os = "linux")]
 mod kwin;
 pub mod llm_client;
@@ -148,6 +158,8 @@ pub fn run() {
             commands::set_hotkey,
             commands::set_use_gpu,
             commands::grant_paste_permission,
+            commands::disable_desktop_integration,
+            commands::restore_insertion_clipboard,
             onboarding::onboarding_status,
             onboarding::retry_onboarding_startup,
             onboarding::retry_model_loading,
@@ -238,27 +250,6 @@ pub fn run() {
                 remote: remote::RemoteState::default(),
                 modifier_hook: Default::default(),
             });
-            #[cfg(target_os = "linux")]
-            {
-                let permission_app = handle.clone();
-                std::thread::Builder::new().name("restore-paste-permission".into()).spawn(move || {
-                    let result = (|| {
-                        if wayland_paste::applies() && wayland_paste::has_saved_permission()? {
-                            let closed_app = permission_app.clone();
-                            wayland_paste::grant(move || {
-                                let state = closed_app.state::<AppState>();
-                                onboarding::invalidate(&state, Some("Automatic paste permission was closed. Grant permission and try practice again."));
-                                onboarding::notify(&closed_app);
-                            })?;
-                        }
-                        Ok::<_, String>(())
-                    })();
-                    if let Err(e) = result {
-                        log::warn!("could not restore paste permission: {e}");
-                    }
-                    onboarding::notify(&permission_app);
-                })?;
-            }
             if !onboarding::required(&app.state::<AppState>()) {
                 let _ = mcp::reload(&app.state::<AppState>());
             }
@@ -299,7 +290,10 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { code, .. } => log::info!("desktop exit requested: code={code:?}"),
             tauri::RunEvent::Exit => {
                 #[cfg(target_os = "linux")]
-                wayland_paste::shutdown();
+                {
+                    portal_shortcuts::stop();
+                    wayland_paste::shutdown();
+                }
                 system_context::shutdown();
                 log::info!("desktop event loop exited")
             }
