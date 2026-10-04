@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { AppInfo, ModelStatus, OnboardingStatus, OverlayEvent, PromptCatalog, Rendering } from "../src/api";
+import type { AppInfo, ModelStatus, OnboardingStatus, OverlayEvent, PromptCatalog, Rendering, UpdateInfo } from "../src/api";
 
 interface Fixture {
   info: AppInfo;
@@ -8,6 +8,7 @@ interface Fixture {
   failures: Record<string, string>;
   delays?: Record<string, number>;
   catalog: PromptCatalog;
+  updates: UpdateInfo;
 }
 
 interface TestBridge {
@@ -57,6 +58,11 @@ function fixture(ready = false): Fixture {
       { id: "qwen3.5-4b-q4km", kind: "llm", tier: "balanced", display_name: "Qwen3.5 4B", size_bytes: 3013027808, license: "apache-2.0", min_ram_gb: 8, compatibility: { supported: true, total_ram_bytes: 8_000_000_000, reason: null }, installed: ready, selected: ready, downloading: false, partial_bytes: 0 },
     ],
     failures: {},
+    updates: {
+      current_version: "1.1.1", check_on_startup: true, checking: false, checked: true,
+      release: { version: "1.1.1", url: "https://github.com/jrynks/promptify/releases/tag/v1.1.1", update_available: false, install_error: null },
+      error: null, installation: "idle", installation_error: null,
+    },
     catalog: {
       version: 1,
       tasks: [
@@ -165,6 +171,20 @@ async function launch(page: Page, state = fixture(), path = "/") {
             }
             case "plugin:event|unlisten": listeners.delete(Number(args.eventId)); return;
             case "app_info": return structuredClone(initial.info);
+            case "update_info": return structuredClone(initial.updates);
+            case "check_for_updates":
+              emit("updates-changed", null);
+              return structuredClone(initial.updates);
+            case "set_update_checks":
+              initial.updates.check_on_startup = args.enabled === true;
+              emit("updates-changed", null);
+              return structuredClone(initial.updates);
+            case "install_update":
+              initial.updates.installation = "installed";
+              emit("updates-changed", null);
+              return structuredClone(initial.updates);
+            case "open_update_release":
+            case "restart_after_update": return;
             case "grant_paste_permission":
               initial.info.paste_permission = "granted";
               initial.info.desktop_integration_enabled = true;
@@ -339,6 +359,105 @@ async function launchPractice(page: Page) {
   await page.getByRole("button", { name: "Prepare practice" }).click();
   await expect(page.locator("#setup-practice")).toBeFocused();
 }
+
+test("update indicator installs only after the user clicks and then offers restart", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.updates.release = { version: "1.2.0", url: "https://github.com/jrynks/promptify/releases/tag/v1.2.0", update_available: true, install_error: null };
+  await launch(page, state);
+  const notice = page.getByRole("complementary", { name: "Available update" });
+  await expect(notice).toContainText("Promptify 1.2.0 is available.");
+  expect(await page.evaluate(() => window.onboardingTest.calls.includes("install_update"))).toBe(false);
+  await notice.getByRole("button", { name: "Install update 1.2.0" }).click();
+  await expect(notice).toContainText("Update installed.");
+  await notice.getByRole("button", { name: "Restart Promptify" }).click();
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "install_update").length)).toBe(1);
+  expect(await page.evaluate(() => window.onboardingTest.calls.includes("restart_after_update"))).toBe(true);
+});
+
+test("manual update check and startup preference are available without automatic installs", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.updates.check_on_startup = false;
+  await launch(page, state);
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const section = page.getByRole("region", { name: "Update settings" });
+  await expect(section).toContainText("Installed version: 1.1.1");
+  await expect(section).toContainText("You are up to date.");
+  await section.getByRole("button", { name: "Check for updates", exact: true }).click();
+  expect(await page.evaluate(() => window.onboardingTest.calls.includes("check_for_updates"))).toBe(true);
+  await section.getByLabel("Check for new versions when Promptify starts").check();
+  expect(await page.evaluate(() => window.onboardingTest.state.updates.check_on_startup)).toBe(true);
+  expect(await page.evaluate(() => window.onboardingTest.calls.includes("install_update"))).toBe(false);
+});
+
+test("update API errors and no-release status are not reported as up to date", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.updates.release = null;
+  state.updates.checked = false;
+  state.updates.error = "GitHub refused the update check (access denied or rate limited). Try again later.";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const section = page.getByRole("region", { name: "Update settings" });
+  await expect(section.getByRole("alert")).toContainText("rate limited");
+  await expect(section).not.toContainText("You are up to date.");
+  await page.evaluate(() => {
+    window.onboardingTest.state.updates.error = null;
+    window.onboardingTest.state.updates.checked = true;
+    window.onboardingTest.emit("updates-changed", null);
+  });
+  await expect(section).toContainText("No published stable release is available.");
+});
+
+test("unsupported update installer remains visible but cannot be launched", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.updates.release = { version: "1.2.0", url: "https://github.com/jrynks/promptify/releases/tag/v1.2.0", update_available: true, install_error: "No installer is published for this operating system." };
+  await launch(page, state);
+  const notice = page.getByRole("complementary", { name: "Available update" });
+  await expect(notice.getByRole("button", { name: "Install update 1.2.0" })).toBeDisabled();
+  await expect(notice).toContainText("No installer is published");
+});
+
+test("update download integrity and installation errors are shown without claiming success", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.updates.release = { version: "1.2.0", url: "https://github.com/jrynks/promptify/releases/tag/v1.2.0", update_available: true, install_error: null };
+  state.failures.install_update = "Downloaded installer failed its SHA-256 integrity check; installation was blocked.";
+  await launch(page, state);
+  const notice = page.getByRole("complementary", { name: "Available update" });
+  await notice.getByRole("button", { name: "Install update 1.2.0" }).click();
+  await expect(notice.getByRole("alert")).toContainText("SHA-256");
+  await expect(notice.getByRole("button", { name: "Restart Promptify" })).toHaveCount(0);
+});
+
+test("in-progress updates block duplicate clicks and react to completion events", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.updates.release = { version: "1.2.0", url: "https://github.com/jrynks/promptify/releases/tag/v1.2.0", update_available: true, install_error: null };
+  state.updates.installation = "downloading";
+  await launch(page, state);
+  const notice = page.getByRole("complementary", { name: "Available update" });
+  await expect(notice.getByRole("button", { name: "Downloading update..." })).toBeDisabled();
+  await page.evaluate(() => {
+    window.onboardingTest.state.updates.installation = "installed";
+    window.onboardingTest.emit("updates-changed", null);
+  });
+  await expect(notice.getByRole("button", { name: "Restart Promptify" })).toBeEnabled();
+});
+
+test("failed update preference save preserves the selected value", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.failures.set_update_checks = "Could not save settings: permission denied";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const section = page.getByRole("region", { name: "Update settings" });
+  await section.getByLabel("Check for new versions when Promptify starts").click();
+  await expect(section.getByRole("alert")).toContainText("permission denied");
+  await expect(section.getByLabel("Check for new versions when Promptify starts")).toBeChecked();
+});
 
 test("models below minimum RAM are grayed out without hiding compatible models", async ({ page }) => {
   const state = fixture();

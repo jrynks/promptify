@@ -13,6 +13,8 @@ pub struct TrayHandles {
     prompt: MenuItem<tauri::Wry>,
     dictation: MenuItem<tauri::Wry>,
     pause: CheckMenuItem<tauri::Wry>,
+    updates: MenuItem<tauri::Wry>,
+    last_status: std::sync::Mutex<String>,
 }
 
 pub fn show_settings(app: &AppHandle) {
@@ -36,6 +38,7 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(app, "autostart", "Start at login", true, autostart_on, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings\u{2026}", true, None::<&str>)?;
+    let updates = MenuItem::with_id(app, "updates", "Check for updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Promptify", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -47,6 +50,7 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
             &pause,
             &autostart,
             &settings,
+            &updates,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -65,6 +69,23 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
         })
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "settings" => show_settings(app),
+            "updates" => {
+                show_settings(app);
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let info = crate::updates::update_info(handle.clone());
+                    let result = if info.installation == "installed" {
+                        crate::updates::restart_after_update(handle.clone()).map(|_| info)
+                    } else if info.release.as_ref().is_some_and(|release| release.update_available && release.install_error.is_none()) {
+                        crate::updates::install_update(handle.clone()).await
+                    } else {
+                        crate::updates::check_for_updates(handle.clone()).await
+                    };
+                    if let Err(error) = result {
+                        log::error!("Tray update action failed: {error}");
+                    }
+                });
+            }
             "quit" => app.exit(0),
             "pause" => {
                 let paused = app.state::<TrayHandles>().pause.is_checked().unwrap_or(false);
@@ -82,7 +103,7 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.manage(TrayHandles { status, prompt, dictation, pause });
+    app.manage(TrayHandles { status, prompt, dictation, pause, updates, last_status: std::sync::Mutex::new("ready".into()) });
     Ok(())
 }
 
@@ -90,19 +111,56 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
 pub fn set_status(app: &AppHandle, status: &str) {
     let paused = app.try_state::<crate::AppState>().is_some_and(|s| s.hotkeys.read().unwrap().paused);
     let setup = app.try_state::<crate::AppState>().is_some_and(|s| crate::onboarding::required(&s));
-    let text = if setup && status == "ready" {
+    let mut text = if setup && status == "ready" {
         "Promptify \u{2014} finish setup".to_owned()
     } else if paused && status == "ready" {
         "Promptify \u{2014} hotkeys paused".to_owned()
     } else {
         format!("Promptify \u{2014} {status}")
     };
+    if app.try_state::<crate::updates::Updates>().is_some() {
+        let info = crate::updates::update_info(app.clone());
+        if let Some(release) = info.release.filter(|release| release.update_available) {
+            text.push_str(&format!(" \u{2014} update {} available", release.version));
+        }
+    }
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(&text));
     }
     if let Some(handles) = app.try_state::<TrayHandles>() {
+        *handles.last_status.lock().unwrap() = status.into();
         let _ = handles.status.set_text(&text);
     }
+}
+
+pub fn refresh_updates(app: &AppHandle) {
+    let Some(handles) = app.try_state::<TrayHandles>() else { return };
+    let info = crate::updates::update_info(app.clone());
+    let text = if info.checking {
+        "Checking for updates...".into()
+    } else if info.installation == "installed" {
+        "Update installed - restart Promptify".into()
+    } else if matches!(info.installation, "downloading" | "installing") {
+        "Installing update...".into()
+    } else if let Some(release) = info.release.filter(|release| release.update_available) {
+        if release.install_error.is_some() {
+            format!("Update {} available - see Settings", release.version)
+        } else {
+            format!("Install update {}", release.version)
+        }
+    } else if info.error.is_some() {
+        "Update check failed - see Settings".into()
+    } else {
+        "Check for updates".into()
+    };
+    if let Err(error) = handles.updates.set_text(text) {
+        log::warn!("Could not update tray release indicator: {error}");
+    }
+    if let Err(error) = handles.updates.set_enabled(!info.checking && !matches!(info.installation, "downloading" | "installing")) {
+        log::warn!("Could not update tray release action: {error}");
+    }
+    let status = handles.last_status.lock().unwrap().clone();
+    set_status(app, &status);
 }
 
 /// Re-reads hotkeys and pause state after they change.

@@ -90,6 +90,15 @@ body { margin: 0; }
   font-weight: 600;
 }
 
+.update-notice {
+  border: 1px solid Highlight;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-top: 16px;
+}
+
+.update-notice p { margin: 0 0 8px; }
+
 main {
   max-width: 760px;
   padding: 8px 32px 48px;

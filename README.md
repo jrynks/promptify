@@ -131,6 +131,53 @@ See [Wayland integration and keyboard permissions](#fedora--bazzite) below.
 Linux settings and models live in `${XDG_DATA_HOME:-~/.local/share}/dev.promptify.app`.
 Installed and development builds share that location; do not run both at once.
 
+### Update availability and installation
+
+Promptify checks GitHub's published **latest stable release** when it starts.
+It compares the release tag's semantic version with the version embedded in the
+running app; drafts, prereleases, tags without releases, and installer workflow
+artifacts are not updates. A newer release adds an indicator in Settings and an
+**Install update** action in the system tray. It never installs automatically.
+
+Click **Install update** to download the matching installer and verify its size
+and SHA-256 against that release's `SHA256SUMS.txt` before installation:
+
+- **Windows x64:** opens the NSIS installer and exits Promptify to release its
+  executable files. Follow the installer and any Windows authorization prompts.
+  Starting the installer is not reported as proof that installation completed.
+- **Linux `.deb` / `.rpm`:** confirms package ownership of the running executable
+  and runs APT or DNF through `pkexec`. The system requests authorization; a
+  cancelled authorization or nonzero installer exit is shown as an error.
+  These paths require the matching package manager and a working Polkit agent.
+- **Linux AppImage:** replaces the running AppImage with a verified download
+  using a same-directory atomic rename. Its directory must be writable.
+  Click **Restart Promptify** after installation.
+- **Unsupported architectures, source/unmanaged Linux builds, or platforms
+  without a published matching installer:** the new-release indicator remains
+  visible, but installation is disabled with an explanation. macOS installer
+  publishing is not currently configured.
+
+Settings -> **Updates** also provides **Check for updates**, release notes, and
+an option to disable startup checks. Checks do not block model loading or prompt
+generation. Successful checks are cached for one hour per running session;
+failed checks may retry after one minute. Network failures, invalid release
+metadata, missing checksums, download corruption, and installation errors are
+displayed, not treated as successful updates. Windows installer downloads are
+retained under the application data directory's `updates` folder because the
+installer still needs them after Promptify exits.
+
+Update checks contact `api.github.com` without authentication, so GitHub's public
+API rate limits apply. Downloads follow HTTPS redirects only to GitHub's release
+hosts. The request identifies Promptify's version; it sends no prompts, history,
+window titles, or application context. Published SHA-256 checksums protect
+download integrity, but are not an independent publisher signature: the trust
+boundary is the GitHub repository/release account and HTTPS.
+
+For each new version, publish a stable release tagged `v<version>` with the
+existing canonical installer names and `SHA256SUMS.txt` containing exactly one
+SHA-256 entry for each downloadable installer. Publishing only CI artifacts or
+a Git tag does not make an update available.
+
 On first launch, Promptify opens a required guided tour in Settings:
 
 1. **Models:** download and select a speech model and a prompt-writing model. The recommended balanced pair is

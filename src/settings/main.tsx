@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type McpInfo, type ModelStatus, type OfferInfo, type OnboardingStatus, type OnboardingStep, type PreviewOutput, type ProfileSummary, type RemoteInfo, type PromptCatalog, type RoutingOptions } from "../api";
 import { OnboardingTour } from "./OnboardingTour";
 import { DesktopIntegration } from "./DesktopIntegration";
+import { UpdateIndicator, UpdatesSettings, useUpdates } from "./Updates";
 import { PromptRoutingSettings, RoutingControls, RoutingSummary, automaticRouting } from "./PromptRouting";
 import "./settings.css";
 
@@ -777,7 +778,7 @@ function Remote() {
   );
 }
 
-type Pane = "general" | "models" | "prompts" | "words" | "history" | "phones" | "tools" | "advanced";
+type Pane = "general" | "models" | "prompts" | "words" | "history" | "phones" | "tools" | "advanced" | "updates";
 
 const PANES: { id: Pane; label: string }[] = [
   { id: "general", label: "General" },
@@ -788,11 +789,13 @@ const PANES: { id: Pane; label: string }[] = [
   { id: "phones", label: "Desktop API" },
   { id: "tools", label: "Tools (MCP)" },
   { id: "advanced", label: "Advanced" },
+  { id: "updates", label: "Updates" },
 ];
 
 const PANE_KEY = "promptify.settings.pane";
 
 function Settings() {
+  const updates = useUpdates();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -872,6 +875,7 @@ function Settings() {
     tools: <Tools />,
     prompts: <PromptRoutingSettings onSaved={() => setRoutingRevision((value) => value + 1)} />,
     advanced: <Playground profiles={profiles} routingRevision={routingRevision} />,
+    updates: <UpdatesSettings updates={updates} />,
   };
 
   return (
@@ -887,6 +891,7 @@ function Settings() {
         <p className="sidebar-foot hint">Keeps running in the system tray.</p>
       </nav>
       <main>
+        <UpdateIndicator updates={updates} />
         {guided && <OnboardingTour status={onboarding} info={info} onChange={refreshInfo} />}
         {!onboarding.startup_error && visiblePanes.map((p) => (
           <div key={p.id} hidden={visiblePane !== p.id}>
