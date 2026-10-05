@@ -9,16 +9,25 @@ Download a Windows x64 installer or Linux `.deb`, `.rpm`, or AppImage, with SHA-
 Models download separately during guided setup. See [Download and install](#download-and-install)
 for hardware requirements and platform limitations.
 
+The feature overview below describes the current source. Quality review and styled dictation are
+unreleased development changes; the v1.2.1 installers do not include them.
+
 - **Prompt mode** (`Ctrl+Alt+Space`): turns what you said into a prompt that fits the target app (ChatGPT, Claude,
   Gemini, Grok, Copilot, Perplexity, Cursor, VS Code, Claude Code, Codex CLI, terminals, image generators...).
   AI requests become a **task graph**, sized to their complexity: numbered steps, explicit dependencies (`after 1, 2`),
   bounded check-and-revise loops (`max N rounds`) and `Done when:` completion checks. **Every final prompt retains this
   structure**, including media, writing, tutoring, and role-play requests. The finished output is validated and,
-  if needed, repaired up to twice within the original deadline; an invalid draft is never returned as a usable prompt.
+  if needed, repaired up to twice within the original deadline, then receives a local semantic quality review under
+  either rendering policy. One targeted correction and a second review are allowed. If review finds unresolved issues
+  or cannot finish, the structurally valid text is offered for review/copy only and is never pasted automatically.
 - **Task-aware adaptation** (experimental, off by default): Settings -> **Prompt types** adapts the content to the
   identified tool/site, confirmed input surface, and requested task without removing the graph/loop mandate.
-- **Dictation mode** (`Ctrl+Alt+Shift+Space`): pastes what you said with filler words removed. Say "new line",
-  "new paragraph" or "scratch that" as their own sentence to edit as you speak.
+- **Dictation mode** (`Ctrl+Alt+Shift+Space`): defaults to **Natural** tone, polishing grammar and flow while retaining
+  your voice. General settings also offers Casual, Formal, Concise, Unhinged, and **Clean transcript**. Rewrite tones
+  use the selected local model and a fidelity review, so they may take longer; unapproved or unavailable rewrites
+  remain review/copy-only. Clean transcript keeps deterministic filler removal and spoken editing commands without
+  model inference. Say "new line", "new paragraph" or "scratch that" as their own sentence. Dictation never answers
+  questions or executes instructions in the dictated text.
 - **Copy results**: the final prompt dialog expands to show the full text. It scrolls only
   when the content exceeds the current monitor's available height; Copy and Dismiss stay visible.
 - Hold the hotkey while speaking, or tap it once to start and again to stop. `Esc` cancels. All are rebindable.
@@ -66,6 +75,29 @@ checks still use HTTPS; speech and prompt generation run locally through a child
 
 If automatic insertion is blocked, the result stays available to copy and dismiss.
 Promptify does not retry ambiguous paste delivery or silently reset your configuration.
+
+## Unreleased: quality review and styled dictation
+
+Semantic review is a same-model safety check, not independent proof of correctness. Prompt generation keeps the
+existing 60-second desktop and 120-second CLI deadlines shared across generation, review, and the single targeted
+correction/re-review cycle. An incomplete quality check is visible and cannot authorize automatic insertion.
+Three initial synthetic evaluation rounds at the 120-second CLI deadline were followed by six expanded runs at the
+60-second desktop deadline using the same already-selected Qwen 3.5 9B model. Batch 6 produced 223/228 usable results
+(97.8%) and 74 auto-paste-eligible results. Independent grades averaged 8.22/10 (legacy) and 7.89 (adaptive) on
+original prompts, and 8.64 and 8.16 on held-out prompts. Unhinged Dictation averaged 4.61; two reviewer-approved
+outputs scored below 7, including one critical fidelity failure. The complete quality gates therefore remain unmet
+despite meeting the usability threshold. The reviewer is not independent proof of correctness; see the
+[synthetic evaluation and per-sample grades](./eval/quality-review-grades.md) for all runs, grading, and limitations.
+These finite synthetic results are not a guarantee of production quality.
+The additional compact-instruction experiment is retained in
+[`quality-review-batch-7.json`](./eval/quality-review-batch-7.json), with its earlier snapshot in
+[`quality-review-batch-7-intermediate.json`](./eval/quality-review-batch-7-intermediate.json).
+Independent grading of that experiment was interrupted; it is not evidence of a passing quality gate.
+The saved source includes the instruction refinements, but no new installer release has been published.
+
+The developer CLI accepts `--dictation-tone clean_transcript|natural|casual|formal|concise|unhinged` on `run` and
+`rewrite`; omitting it uses the saved Natural default. Invalid or duplicate values are errors. Evaluation rewrites
+use synthetic context, no personal history, and the print-only inserter.
 
 ## Download and install
 
@@ -610,6 +642,7 @@ C++ and OpenMP redistributable DLLs into the application and creates an unsigned
 | `route "<text>" [--process NAME] [--url URL] [--surface SURFACE] [--prompt-type ID]` | inspect adaptive task/surface selection without generation or user-history access |
 | `eval-routing eval\adaptive.toml` | deterministic task/form regression benchmark, with per-case failures and macro-F1 |
 | `eval-adaptive eval\adaptive.toml [--model ID]` | generate with the selected installed model; validate graphs, numeric preservation, and required user details |
+| `eval-quality eval/quality-review.toml [--samples 3] [--heldout-samples 3] [--dictation-samples 3] [--deadline-seconds 60\|120] [--fresh-heldout PATH] [--output PATH]` | repeated synthetic quality review using only the already-selected `qwen3.5-9b-q4km`; no history access or paste |
 
 Set `PROMPTIFY_LOG=1` for diagnostics on stderr. `PROMPTIFY_LLM_NO_PREFIX_CACHE=1` turns off the language model's
 prompt-prefix cache for comparison.
@@ -622,12 +655,20 @@ Retired `mcp`, `serve`, and `remote` commands, `--mcp`/network options, and Answ
 
 ### Task graphs and check loops
 
-- Complexity guidance asks the model for 2 steps and a short check loop for simple requests, 3-4 steps for moderate
-  requests, and 4-8 steps for complex requests, with independent work marked for parallel execution. Terminal prompts
-  keep the graph in one paragraph.
-- Every graph needs numbered steps, a loop that returns to an existing step with a limit of 1-8 rounds, and a
-  non-empty `Done when:` section. Dependencies may refer only to earlier steps. The model is instructed to check the
-  completion criteria, stop when they pass, and report unmet criteria when the round limit is reached.
+- Complexity guidance asks for 2 steps for simple requests, 3-4 for moderate requests and 4-8 for complex requests
+  (absolute maximum: 12). Every step has a non-empty body. At least one explicit dependency connects work to
+  verification. Parallelism is optional, never forced. Terminal prompts retain the same contract in one paragraph.
+- Dependency syntax is `(after 1, 2)` with optional `; parallel with 3`. Only existing earlier steps can be
+  dependencies; malformed, self, forward and duplicate references are rejected. Parallel references may point
+  forward, but must exist and cannot conflict with direct or transitive dependencies.
+- Every prompt has a correction **and** repeat-verification loop, for example:
+  `Loop: if Step 2 fails the factual-support checks, return to Step 1 to correct unsupported claims; then recheck Step 2 (max 2 rounds).`
+  Name the failed checks and correction action. The failed-check and recheck step must be the same existing step,
+  dependent on the earlier work/correction step. Returning only to the checker is not a correction loop.
+- A non-empty `Done when:` section states task-specific success criteria. Stop when checks pass; at the limit of
+  1-8 rounds, report unmet criteria instead of claiming success. These rounds describe the **destination AI's
+  workflow**, not Promptify's internal rewrite repairs. Tutoring and role-play verify the current turn and wait
+  for the user; the loop does not impose a total number of questions.
 - Graph prompts must open with the goal, not persona boilerplate such as `Act as...` or `You are an expert...`.
   Such openers trigger a repair and fail evaluation. If no valid goal-first repair is produced, the draft is rejected
   with an explicit error rather than pasted or returned as a usable prompt; relevant perspectives inside steps remain allowed.
@@ -640,6 +681,63 @@ Retired `mcp`, `serve`, and `remote` commands, `--mcp`/network options, and Answ
 - Image/video and other generator requests keep their descriptions **inside the graph's creation step**.
   Generator-only fields cannot be assumed to execute a graph or check loop, so these workflows are review-only.
   Use a conversational AI with the appropriate tools, or use Dictation to enter literal content yourself.
+
+#### Local-model verification
+
+The [synthetic corpus](eval/graph-quality.toml) and [captured comparison](eval/graph-quality-results.json) cover
+simple facts, writing with an exclusion, coding, research, tutoring, media and terminal input. Each request ran
+through both rendering policies using the installed `qwen3.5-9b-q4km`, unchanged sampling/settings, 768 output
+tokens, two permitted repairs and the CLI's original 120-second deadline. The baseline was captured before
+edits at `f67694b`; refinement stopped after three rounds. Typed rewrites use `NoHistory`, synthetic context
+and `PrintInserter`: no personal history, screen text, audio or native paste was used, and the running app
+was not stopped.
+
+| Observation (14 runs per phase) | Before | Final |
+| --- | ---: | ---: |
+| Returned prompts under that phase's contract | 13/14 | 13/14 |
+| Returned prompts passing the **new combined contract** | 0/14 | 13/14 |
+| Returned prompts covering all checked request details | 13/13 | 13/13 |
+| Successfully repaired outputs (not individual attempts) | 1 | 5 |
+| Median returned prompt length | 887 characters | 1,092 characters |
+| Median job latency, excluding model preload | 7.72 s | 10.98 s |
+| Median wall time, including preload | 8.81 s | 12.06 s |
+
+The new outputs explicitly connect failed checks, earlier corrective work and repeat verification. The default
+coding case that previously exhausted repairs now succeeds; the final default email case instead exhausts
+repairs and is withheld. Stronger enforcement costs output length and repair latency.
+
+These are **structural scores and keyword-coverage checks, not semantic-quality guarantees**. Manual review
+still found unsupported context, placeholder instructions, and a parallel declaration inconsistent with its
+step's prose. The validator checks declared edges, not dependencies inferred from prose; it cannot prove factual
+fidelity, correction quality or recipient capability. This small single-pass sample is not a general model
+benchmark or proof of native insertion reliability. Review remains important.
+
+Reproduce default-policy generation with `promptify-cli eval eval/graph-quality.toml --model qwen3.5-9b-q4km`.
+For either policy, use each captured case's request, process and optional URL with
+`promptify-cli rewrite "<request>" --process "<process>" --rendering adaptive --model qwen3.5-9b-q4km`.
+Add `--url "<url>"` when provided; substitute `legacy` for the default policy.
+`PROMPTIFY_EVAL_SHOW=1` includes rejected repair text. The saved-output core test rechecks the comparison with the
+production validator; it does not regenerate model output.
+
+`eval-quality` preserves per-sample outputs, outcomes, review status, repairs, eligibility and latency in
+`eval/quality-review-results.json` (it refuses to overwrite existing evidence). Defaults run the nine original
+requests three times under each rendering policy, each held-out case three times per policy, and each of the six
+dictation tones three times on each of three synthetic transcripts. `--fresh-heldout` appends new held-out
+`[[heldout_prompt]]` cases from another TOML file; case IDs must be unique. Use `--deadline-seconds 60` to match
+the desktop job deadline or `120` for the CLI deadline. It requires `qwen3.5-9b-q4km` to already be selected and
+installed; it never changes or downloads a model. It uses synthetic context, `NoHistory` and `PrintInserter`, so
+it does not read history, screen text or audio and cannot paste into an application. Its machine-readable summary
+measures usable and auto-paste-eligible yield, review status/calls, repairs, deadlines and per-stage latency; those
+operational metrics are not quality grades. Independent human grading belongs in a separate report.
+
+An additional [actual-output grading report](eval/graph-quality-grades.md) runs nine varied synthetic
+text requests under both policies, including independent branches, retracted intent, negative constraints,
+inline output and creative/media workflows. It retains every request and generated prompt and grades
+intent, dependency coherence, correction/recheck, completion and proportionality from 0-5, with an overall
+/10. Results are **17/18 usable**, eight successfully repaired outputs, and a **7.27/10** mean including
+the failed job (7.69/10 for returned prompts). The report explicitly documents weak outputs rather than
+treating structural validity as proof of quality; its raw evidence is
+[graph-quality-graded-results.json](eval/graph-quality-graded-results.json).
 
 ### Prompt types and adaptive routing
 
@@ -689,7 +787,9 @@ general graph and an explicit uncertainty warning. Mixed requests retain recogni
 If only a prohibition is supplied and no task can be recognized, Promptify asks for the intended task explicitly
 rather than inventing a goal or copying a generic example.
 
-Validation checks sanitized output, including graph dependencies, loop bounds, completion criteria, surface
+Both default and adaptive rendering use the same graph and correction/recheck contract. Validation checks
+sanitized output, including dependency syntax, parallel conflicts, correction/recheck wiring, loop bounds,
+non-empty completion criteria, surface
 length limits, internal-template leakage, invented numeric constraints, omitted stated numbers, and obvious
 final-artifact substitution. It is not a proof of semantic correctness: review the result, especially for
 high-stakes uses or when source context is incomplete. Recognition rules currently have English examples;
@@ -697,8 +797,9 @@ unrecognized languages fall back to a general graph rather than pretending a con
 
 Adaptive preferences use versioned `routing-settings.json`, separate from legacy settings. Optional routing
 history metadata uses `history.routing.jsonl`, keyed by existing history IDs without duplicating transcript or
-output. History disabling, deletion, clearing, and retention apply to both. Only compatible graph examples
-are reused; explicit same-app follow-ups can still refer to the previous prompt. No usage telemetry is uploaded.
+output. History disabling, deletion, clearing, and retention apply to both. Only examples passing the current
+graph contract are reused; older records are not deleted, and explicit same-app follow-ups can still refer to
+the previous prompt even if it predates that contract. No usage telemetry is uploaded.
 Unreadable or newer routing settings are reported instead of overwritten; existing-profile behavior remains
 available. **Restore default routing** is an explicit repair command: it first saves the exact existing
 bytes to a new `routing-settings.json.backup-N`, never replaces older backups, and only then writes

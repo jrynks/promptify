@@ -123,7 +123,7 @@ export function PromptRoutingSettings() {
           onChange={(event) => void save(event.target.checked ? "adaptive" : "legacy")} />
         Use task-aware prompt adaptation
       </label>
-      <p className="hint">Experimental and off by default. Every final prompt still requires numbered steps, a bounded check loop, and Done when criteria. This switch adapts the task content, not that mandate. Single-line fields use inline graphs; generator-only and unconfirmed inputs require review instead of automatic pasting.</p>
+      <p className="hint">Experimental and off by default. Both policies require work and verification steps with explicit dependencies, a bounded loop that corrects failed work and repeats verification, and task-specific Done when criteria. Parallel work is optional. Loop rounds belong to the destination workflow, not Promptify&apos;s rewrite repairs. Single-line fields keep the same graph; generator-only and unconfirmed inputs require review instead of automatic pasting. Dictation is unchanged.</p>
       <details>
         <summary>Choose a type or surface for the next prompt</summary>
         <p className="hint">Only confirm the actual AI input. A spreadsheet cell, SQL editor, lyrics field, or speech script is literal content: use Dictation there.</p>

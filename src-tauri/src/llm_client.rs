@@ -180,8 +180,7 @@ impl Generator for LlmWorker {
 
 impl LlmWorker {
     fn run(&self, slot: &mut Option<Worker>, request: &GenerationRequest<'_>, cancel: &CancelToken, on_token: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
-        let load_deadline = request.deadline.max(Instant::now() + LOAD_TIMEOUT);
-        let worker = self.ready(slot, load_deadline)?;
+        let worker = self.ready(slot, request.deadline)?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (prompt, prefix) = chatml_prompt_with_prefix(request.messages, request.stable_prefix);
         let prefix_bytes = (prefix > 0).then_some(prefix);

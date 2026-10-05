@@ -1,0 +1,13 @@
+[[heldout_prompt]]
+id = "b1_h09"
+category = "separate_evidence_and_final_recommendation"
+said = "Review the supplied notes and spreadsheet separately, list any disagreement without resolving it, then recommend what we should verify next. Do not claim to have seen a file unless its contents are provided."
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[heldout_prompt]]
+id = "b1_h10"
+category = "date_and_commitment_exclusion"
+said = "Draft a short update saying the migration is planned for May 8 and the team will confirm the schedule after testing. Do not say the migration is guaranteed or that testing has passed."
+process = "chrome"
+url = "https://chatgpt.com"

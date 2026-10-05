@@ -1,0 +1,653 @@
+{
+  "captured_at": "2026-10-05T04:05:01.068144+00:00",
+  "methodology": {
+    "model": "qwen3.5-9b-q4km",
+    "baseline_revision": "f67694b",
+    "updated_revision": "uncommitted worktree",
+    "refinement_rounds": 3,
+    "max_new_tokens": 768,
+    "max_structure_repairs": 2,
+    "cli_generation_timeout_seconds": 120,
+    "max_output_characters": 6000,
+    "sampler": {
+      "temperature": 0.3,
+      "top_k": 40,
+      "top_p": 0.9,
+      "min_p": 0.05,
+      "seed": "worker request ID"
+    },
+    "command_template": "PROMPTIFY_EVAL_SHOW=1 promptify-cli rewrite <said> --process <process> [--url <url>] --rendering <legacy|adaptive> --model qwen3.5-9b-q4km",
+    "history": "NoHistory; no personal history read or written",
+    "context": "Synthetic FixedContext; no screen or audio access",
+    "paste": "PrintInserter only; no native paste and no user app shutdown",
+    "latency": "Single pass per phase: job elapsed excludes model preload; wall time includes preload. Shared machine, no repeated-run confidence intervals.",
+    "repair_frequency": "Counts successful repaired outputs, not individual attempts; failed jobs may also consume repair attempts.",
+    "scoring": "Strict graph validation is rechecked by the core test using the production evaluator. Detail patterns measure keyword coverage only, not semantic faithfulness or correctness."
+  },
+  "cases": [
+    {
+      "id": "c01",
+      "category": "simple",
+      "said": "What time zone is Tokyo in?",
+      "process": "chrome",
+      "url": "https://chatgpt.com",
+      "required_detail_patterns": [
+        "\\bTokyo\\b",
+        "time ?zone"
+      ]
+    },
+    {
+      "id": "c02",
+      "category": "writing",
+      "said": "Draft a polite email asking for the meeting notes; do not apologize.",
+      "process": "chrome",
+      "url": "https://chatgpt.com",
+      "required_detail_patterns": [
+        "meeting notes",
+        "polite",
+        "(?:no|without|avoid|never|do not|zero)[^.\\n]{0,50}(?:apolog|sorry)"
+      ]
+    },
+    {
+      "id": "c03",
+      "category": "code",
+      "said": "Debug the checkout crash and add regression tests, then run the suite.",
+      "process": "code",
+      "url": null,
+      "required_detail_patterns": [
+        "checkout",
+        "crash",
+        "regression test",
+        "(?:run|execute)[^.\\n]{0,60}(?:suite|tests)"
+      ]
+    },
+    {
+      "id": "c04",
+      "category": "research",
+      "said": "Compare three task tracking tools for our volunteer team; keep costs low and cite sources.",
+      "process": "chrome",
+      "url": "https://chatgpt.com",
+      "required_detail_patterns": [
+        "(?:three|3)[^.\\n]{0,35}tools",
+        "volunteer",
+        "low[- ]cost|costs? low|lower total cost",
+        "cit(?:e|ation)|sources?"
+      ]
+    },
+    {
+      "id": "c05",
+      "category": "interactive",
+      "said": "Tutor me in fractions one question at a time and wait for my answer.",
+      "process": "chrome",
+      "url": "https://chatgpt.com",
+      "required_detail_patterns": [
+        "fractions?",
+        "(?:one|single)[^.\\n]{0,25}(?:question|problem)",
+        "wait|until[^.\\n]{0,40}(?:reply|answer|respond)"
+      ]
+    },
+    {
+      "id": "c06",
+      "category": "media",
+      "said": "Create an image of a fox in a forest at night with glowing mushrooms.",
+      "process": "chrome",
+      "url": "https://midjourney.com",
+      "required_detail_patterns": [
+        "fox",
+        "forest",
+        "night",
+        "glowing mushrooms"
+      ]
+    },
+    {
+      "id": "c07",
+      "category": "inline",
+      "said": "Fix the flaky API tests and then run the suite until it passes.",
+      "process": "gnome-terminal",
+      "url": null,
+      "required_detail_patterns": [
+        "API",
+        "flak|unstable|intermittent",
+        "suite"
+      ]
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "total": 14,
+      "returned_prompts": 13,
+      "strict_contract_passed": 0,
+      "successful_repaired_outputs": 1,
+      "returned_prompts_with_all_detail_patterns": 13,
+      "median_output_characters": 887,
+      "median_job_elapsed_ms": 7720.5,
+      "median_wall_seconds": 8.814
+    },
+    "updated": {
+      "total": 14,
+      "returned_prompts": 13,
+      "strict_contract_passed": 13,
+      "successful_repaired_outputs": 5,
+      "returned_prompts_with_all_detail_patterns": 13,
+      "median_output_characters": 1092,
+      "median_job_elapsed_ms": 10977.5,
+      "median_wall_seconds": 12.056
+    }
+  },
+  "refinement_summaries": [
+    {
+      "round": 1,
+      "total": 14,
+      "returned_prompts": 12,
+      "strict_contract_passed": 12,
+      "successful_repaired_outputs": 5,
+      "returned_prompts_with_all_detail_patterns": 12,
+      "median_output_characters": 1001.0,
+      "median_job_elapsed_ms": 11583.5,
+      "median_wall_seconds": 12.617
+    },
+    {
+      "round": 2,
+      "total": 14,
+      "returned_prompts": 10,
+      "strict_contract_passed": 10,
+      "successful_repaired_outputs": 4,
+      "returned_prompts_with_all_detail_patterns": 10,
+      "median_output_characters": 1001.0,
+      "median_job_elapsed_ms": 14838.0,
+      "median_wall_seconds": 15.951
+    },
+    {
+      "round": 3,
+      "total": 14,
+      "returned_prompts": 13,
+      "strict_contract_passed": 13,
+      "successful_repaired_outputs": 5,
+      "returned_prompts_with_all_detail_patterns": 13,
+      "median_output_characters": 1092,
+      "median_job_elapsed_ms": 10977.5,
+      "median_wall_seconds": 12.056
+    }
+  ],
+  "qualitative_observations": [
+    "Baseline accepted checker-only loops and an inline graph with decorative parallel metadata and no explicit dependency edges. No returned baseline prompt meets the new combined contract.",
+    "Final returned prompts explicitly name a failed-check step, an earlier correction step, repeat verification and a round bound. The formerly rejected default coding request now returns a connected graph.",
+    "The final default email request exhausted repairs: its loop used finds rather than the documented fails grammar. That draft was withheld, not made usable or pasted.",
+    "Semantic quality remains mixed: the returned default research prompt invents that no tools have been tried; the adaptive email instructs using placeholders; the adaptive inline prompt analyzes Step 4 results while declaring Step 5 parallel with Step 4.",
+    "Declared-edge validation cannot infer dependencies from prose or prove correction quality, factual fidelity, interaction intent or capability. Review remains necessary; generator fields stay review-only.",
+    "This small synthetic local-model run demonstrates contract enforcement and its overhead, not a general semantic quality improvement or native insertion reliability."
+  ],
+  "baseline": [
+    {
+      "case_id": "c01",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 5725,
+      "wall_seconds": 7.485,
+      "text": "I need to find the time zone for Tokyo.\n\nStep 1: Identify the standard and current daylight saving time (if applicable) time zone for Tokyo, Japan.\nStep 2 (after 1): State the current UTC offset and the local time equivalent for a specific reference date (e.g., today).\nLoop: if the information is outdated or ambiguous, return to Step 1 (max 1 round).\nDone when: the time zone name and current UTC offset are clearly stated.\n\nFormat: A concise paragraph with the time zone name and current offset.",
+      "output_characters": 498,
+      "detail_pattern_matches": [
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c02",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 10598,
+      "wall_seconds": 11.652,
+      "text": "I need to draft a polite email requesting the meeting notes without including any apologies.\n\nContext: This is for a professional setting where I need to follow up on a discussion that has concluded. I want to ensure the tone is collaborative and efficient, avoiding any language that sounds like I am sorry for asking or for the delay.\n\nConstraints: The email must be concise, professional, and strictly avoid phrases like \"sorry,\" \"apologize,\" \"my bad,\" or \"if this is too late.\" It should assume the notes are available and simply request them.\n\nStep 1: Outline the email structure including a clear subject line, a brief reference to the meeting topic, a direct request for the notes, and a standard sign-off.\nStep 2 (after 1): Draft the full email based on the outline, ensuring the tone is polite but direct and strictly adhering to the \"no apology\" constraint.\nStep 3 (after 2): Review the draft as a skeptical editor to verify that no subtle apologetic language remains and that the request is clear.\nLoop: if the review finds any apologetic language or unclear phrasing, return to Step 2 (max 2 rounds).\nDone when: the email is complete, free of apologies, and clearly requests the meeting notes.\n\nOutput format: Provide only the final email text in a code block for easy copying.",
+      "output_characters": 1289,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c03",
+      "rendering": "legacy",
+      "outcome": "failed",
+      "structure": null,
+      "elapsed_ms": 59011,
+      "wall_seconds": 60.065,
+      "text": null,
+      "output_characters": null,
+      "detail_pattern_matches": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "all_detail_patterns_present": false,
+      "reason": "invalid_prompt",
+      "error_detail": "Your prompt has a problem: a loop has no round limit. Rewrite the complete prompt as a valid task graph, preserving the user's intent and details. Number the steps 1, 2, 3 in order and let each step depend only on earlier steps. Include at least one loop with a failure condition, an existing step to return to and a limit of 1 to 8 rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" Include a non-empty \"Done when:\" section with verifiable success criteria for the loop to check. Stop when the checks pass; if the round "
+    },
+    {
+      "case_id": "c04",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 13247,
+      "wall_seconds": 14.332,
+      "text": "I need to compare three task tracking tools for our volunteer team, prioritizing low cost and citing sources.\n\nContext: This is for a volunteer team where budget is a primary constraint. I need specific tool names, current pricing, and evidence to support the comparison.\n\nConstraints:\n- Prioritize lower total cost and show current prices.\n- Cite sources for all facts and prices.\n- Flag any uncertainty regarding pricing changes or feature availability.\n\nStep 1: Identify three task tracking tools suitable for volunteer teams that balance cost and ease of use.\nStep 2 (after 1): For each tool, gather current pricing details, free tier limits, and any volunteer-specific discounts.\nStep 3 (after 1; parallel with 2): For each tool, list key features relevant to volunteer coordination (e.g., permission levels, communication channels, reporting) and note any gaps.\nStep 4 (after 2, 3): Create a comparison table summarizing cost, key features, and pros/cons for each tool.\nStep 5 (after 4): Recommend the best option based on the low-cost constraint and volunteer needs, explaining the trade-offs.\nLoop: if the recommended option lacks a cited source for its pricing or features, return to Step 2 (max 3 rounds).\nDone when: three tools are compared in a table with cited sources, a clear recommendation is made, and all pricing claims are backed by links or specific references.\n\nOutput format:\n- A numbered list of the three tools with brief descriptions.\n- A comparison table with columns for Tool Name, Current Price (with source link), Free Tier Details, Key Volunteer Features, and Pros/Cons.\n- A final paragraph with the recommendation and rationale.\n- Ensure all factual claims about prices and features include citations.",
+      "output_characters": 1732,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c05",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 7652,
+      "wall_seconds": 8.687,
+      "text": "I want to get a personalized tutoring session on fractions where you ask me one question at a time and wait for my response.\n\nBefore we begin, ask me one question about my current grade level or specific struggles with fractions if you don't already know them.\n\nStep 1: Assess my starting point by asking one diagnostic question about fractions and wait for my answer.\nStep 2 (after 1): Based on my answer, generate one specific practice problem and wait for my solution.\nStep 3 (after 2): Evaluate my solution, provide feedback, and generate the next problem.\nLoop: if my answer is incorrect or I ask for a hint, return to Step 3 (max 3 rounds).\nDone when: I have successfully solved three problems in a row without needing a hint.\n\nFormat: Keep the conversation flowing naturally; do not output a summary or table.",
+      "output_characters": 816,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c06",
+      "rendering": "legacy",
+      "outcome": "blocked",
+      "structure": "valid",
+      "elapsed_ms": 9310,
+      "wall_seconds": 10.371,
+      "text": "Create an image of a fox in a forest at night with glowing mushrooms using midjourney.com in Chrome.; Step 1: Formulate a single-line prompt incorporating the subject (fox), setting (forest at night), and specific visual elements (glowing mushrooms) while leaving unspecified details like lighting intensity or camera angle open for the tool to interpret.; Step 2 (after 1): Execute the prompt in the midjourney.com interface and capture the generated image URL or preview.; Step 3 (after 2): Analyze the generated image to verify the presence of the fox, the nighttime forest setting, and the glowing mushrooms, noting any deviations from the core request.; Step 4 (after 3): If the image fails to clearly depict the glowing mushrooms or the night setting, refine the prompt to emphasize these elements and regenerate; if the image is satisfactory, proceed to final output.; Loop: if the verification in Step 3 fails to confirm all core elements, return to Step 4 (max 3 rounds).; Done when: The generated image clearly depicts a fox in a forest at night with glowing mushrooms, or the maximum number of refinement rounds is reached with a report of the specific elements that could not be rendered.",
+      "output_characters": 1200,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "graph_unsupported"
+    },
+    {
+      "case_id": "c07",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 5697,
+      "wall_seconds": 6.735,
+      "text": "Fix the flaky API tests and run the suite until it passes. Step 1: execute the API test suite multiple times to identify tests that fail intermittently; Step 2 (parallel to 1): analyze the logs of the failing tests to determine the root cause of the flakiness; Step 3 (parallel to 2): implement code changes to resolve the identified issues; Step 4 (after 3): run the full test suite again to verify the fixes; Loop: if any test fails, return to Step 2 (max 3 rounds); Done when: the full suite passes on every run.",
+      "output_characters": 515,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c01",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 4279,
+      "wall_seconds": 5.354,
+      "text": "What time zone is Tokyo in?\nStep 1: Identify the current time zone for Tokyo.\nStep 2 (after 1): Verify the result against known facts and present the time zone clearly.\nLoop: if the verification fails or the result is ambiguous, return to Step 1 (max 2 rounds).\nDone when: the specific time zone for Tokyo is confirmed and stated.",
+      "output_characters": 330,
+      "detail_pattern_matches": [
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c02",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 6920,
+      "wall_seconds": 7.978,
+      "text": "Draft a polite email asking for the meeting notes; do not apologize.\nStep 1: Determine the recipient and context. If the recipient name or meeting topic is missing and essential to the request, ask exactly one clarifying question; otherwise, proceed with a generic but polite salutation and context.\nStep 2 (after 1): Draft the email body. Ensure the tone is polite and direct, explicitly avoiding any apologies.\nStep 3 (after 2): Review the draft to confirm the \"no apology\" constraint is met and the tone remains professional.\nLoop: if the review in Step 3 reveals an apology or inappropriate tone, return to Step 2 (max 3 rounds).\nDone when: The email draft is complete, polite, contains no apologies, and either specifies the recipient or has asked the single necessary question.",
+      "output_characters": 783,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c03",
+      "rendering": "adaptive",
+      "outcome": "blocked",
+      "structure": "repaired",
+      "elapsed_ms": 16258,
+      "wall_seconds": 17.297,
+      "text": "Debug the checkout crash and add regression tests, then run the suite.\n\nStep 1: Reproduce the checkout crash in the current environment and capture the exact error logs and stack trace.\nStep 2 (after 1): Analyze the captured logs to identify the root cause of the crash.\nStep 3 (after 1; parallel with 2): Draft a scoped fix for the identified root cause.\nStep 4 (after 2; parallel with 3): Write regression tests specifically for the checkout crash scenario.\nStep 5 (after 3): Implement the fix in the codebase.\nStep 6 (after 4; parallel with 5): Integrate the regression tests into the test suite.\nStep 7 (after 5, 6): Run the full test suite including the new regression tests.\nLoop: if the test suite fails or the crash is reproduced, return to Step 2 (max 3 rounds).\nDone when: the checkout crash is resolved, the regression tests pass, and the full test suite runs successfully without errors.",
+      "output_characters": 899,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "surface_unconfirmed"
+    },
+    {
+      "case_id": "c04",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 7712,
+      "wall_seconds": 8.853,
+      "text": "Compare three task tracking tools for our volunteer team, keeping costs low and citing sources.\nStep 1: Identify the volunteer team's specific needs and budget constraints from the provided context.\nStep 2 (after 1; parallel with 3): Research and list three task tracking tools that fit the identified needs and budget.\nStep 3 (after 1; parallel with 2): Gather cost details and source citations for each of the three tools.\nStep 4 (after 2, 3): Compare the three tools based on features, cost, and source reliability.\nLoop: if the comparison lacks sufficient detail or missing critical budget constraints are found, ask up to 3 clarifying questions about the team's needs or budget, then return to Step 2 (max 3 rounds).\nDone when: three tools are compared with low-cost focus, all claims are cited, and either the comparison is complete or necessary clarifications have been requested.",
+      "output_characters": 887,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c05",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 7625,
+      "wall_seconds": 8.692,
+      "text": "Tutor me in fractions using an interactive, one-question-at-a-time approach.\nStep 1: Assess my current level and identify the specific fraction concept to start with.\nStep 2 (after 1): Present exactly one question or problem related to that concept, then wait for my answer.\nStep 3 (after 2): Evaluate my response; if a detail that matters is missing, ask at most one clarifying question. If the detail is present, provide feedback and move to the next step.\nStep 4 (after 3): Continue the cycle of presenting one question, waiting for an answer, and providing feedback until the session concludes naturally.\nLoop: if the current question or feedback is not helpful or the concept is not understood, return to Step 2 (max 3 rounds).\nDone when: I demonstrate understanding of the current concept, choose to stop, or the maximum round limit is reached without success.",
+      "output_characters": 866,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c06",
+      "rendering": "adaptive",
+      "outcome": "blocked",
+      "structure": "valid",
+      "elapsed_ms": 7971,
+      "wall_seconds": 9.04,
+      "text": "Create an image of a fox in a forest at night with glowing mushrooms.; Step 1: Access the image generation tool (midjourney.com in chrome) and input the visual description of a fox in a forest at night with glowing mushrooms, preserving all named subjects, numbers, restrictions, and requested actions.; Step 2 (after 1): Render the image based on the provided prompt.; Step 3 (after 2): Review the generated image against the original request to ensure the fox, forest setting, night atmosphere, and glowing mushrooms are present.; Step 4 (after 3): If any element is missing or inaccurate, refine the prompt or regenerate; if all elements are present, finalize the output.; Loop: if the review in Step 3 fails to confirm all elements, return to Step 4 (max 3 rounds).; Done when: The image successfully depicts a fox in a forest at night with glowing mushrooms, or the maximum number of regeneration rounds is reached with a report of the remaining discrepancies.",
+      "output_characters": 965,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "graph_unsupported"
+    },
+    {
+      "case_id": "c07",
+      "rendering": "adaptive",
+      "outcome": "blocked",
+      "structure": "valid",
+      "elapsed_ms": 7729,
+      "wall_seconds": 8.775,
+      "text": "Fix the flaky API tests and then run the suite until it passes.; Step 1: Analyze the current API test suite to identify specific flaky tests and their failure patterns.; Step 2 (parallel): Investigate root causes for identified flaky tests, such as race conditions, timing issues, or external dependencies.; Step 3 (parallel): Implement fixes for the identified root causes in the test code or environment setup.; Step 4 (parallel): Update test configurations or mocks if necessary to stabilize the tests.; Step 5: Run the full API test suite to verify that all previously flaky tests now pass consistently.; Step 6: Monitor the test suite execution to ensure no new failures are introduced by the fixes.; Loop: if any test fails during verification, return to Step 2 to investigate and fix the specific failure (max 3 rounds).; Done when: the full API test suite passes consistently without flaky failures or the maximum number of investigation rounds is reached and remaining failures are reported.",
+      "output_characters": 1000,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "surface_unconfirmed"
+    }
+  ],
+  "updated": [
+    {
+      "case_id": "c01",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 6838,
+      "wall_seconds": 7.85,
+      "text": "I need to find the time zone for Tokyo.\n\nStep 1: Identify the standard and current daylight saving time rules for Tokyo, Japan, and state the current UTC offset.\nStep 2 (after 1): Verify the result against a reliable current source.\nLoop: if Step 2 fails the accuracy check, return to Step 1 to correct the offset; then recheck Step 2 (max 1 round). Stop when checks pass; at the limit report unmet criteria.\nDone when: the UTC offset is confirmed as accurate for the current date.\n\nFormat: a single sentence stating the time zone and current offset.",
+      "output_characters": 550,
+      "detail_pattern_matches": [
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c02",
+      "rendering": "legacy",
+      "outcome": "failed",
+      "structure": null,
+      "elapsed_ms": 34730,
+      "wall_seconds": 35.832,
+      "text": null,
+      "output_characters": null,
+      "detail_pattern_matches": [
+        false,
+        false,
+        false
+      ],
+      "all_detail_patterns_present": false,
+      "reason": "invalid_prompt",
+      "error_detail": "Fix this violation: use a meaningful bounded correction loop: \"Loop: if Step 2 fails the stated checks, return to Step 1 to correct the failed requirements; then recheck Step 2 (max 2 rounds).\" Name the failed checks, correction action, and verification step. Rewrite the complete prompt, preserving the user's final intent, supplied facts, requested actions and exclusions. Do not invent details or numeric constraints. Keep the target's required formatting. Output only the finished prompt.\n\nTask structure (required for every prompt, however small",
+      "rejected_repair": "Rejected repair:\nI need to draft a polite email requesting meeting notes without including any apologies.\n\nContext: I am writing to a colleague or participant from a recent meeting to ensure I have the necessary documentation. I do not know the specific recipient's name, the meeting topic, the date, or the preferred email address.\n\nConstraints: The tone must be professional and courteous. Crucially, the email must not contain any phrases of apology (e.g., \"sorry,\" \"apologize,\" \"my bad\") even if I am late or made a mistake. Do not invent specific names, dates, or meeting titles; use placeholders like [Recipient Name] and [Meeting Topic].\n\nOutput format: Provide the complete email draft in a single code block or clearly separated section, followed by a brief checklist confirming the constraints were met.\n\nStep 1: Compose the email body using a professional opening, a clear request for the meeting notes regarding [Meeting Topic] on [Date], and a standard closing. Ensure the language is direct yet polite, explicitly avoiding any language that suggests regret or apology.\n\nStep 2 (after 1): Review the draft as a skeptical editor to verify that no words or phrases indicating an apology are present, and that the request for notes is unambiguous.\n\nLoop: if Step 2 finds any instance of an apology or ambiguous phrasing, return to Step 1 to rewrite the offending sentences with a more neutral tone; then recheck Step 2 (max 2 rounds).\n\nDone when: The email draft is complete, contains no apologies, clearly requests the meeting notes, and the verification loop confirms zero instances of apologetic language.\n---\n"
+    },
+    {
+      "case_id": "c03",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 10607,
+      "wall_seconds": 11.664,
+      "text": "I need to debug a checkout crash in my application and add regression tests to prevent it from happening again, then run the full test suite to verify the fix.\n\nStep 1: Analyze the checkout crash by reviewing the relevant code, stack traces, and logs to identify the root cause of the failure.\nStep 2 (after 1): Implement a fix for the identified crash, ensuring the logic handles the edge case that triggered the error.\nStep 3 (after 2): Write regression tests specifically for the scenario that caused the crash, including unit tests and integration tests if applicable.\nStep 4 (after 3): Run the full test suite to ensure the new tests pass and no existing tests are broken by the changes.\nStep 5 (after 4): Verify that the checkout flow works correctly in the local environment by simulating the transaction that previously failed.\nStep 6 (after 5): Review the code changes and tests as a skeptical security auditor to ensure no vulnerabilities were introduced.\nLoop: if Step 5 fails the stated accuracy checks (checkout flow works correctly), return to Step 2 to correct the inaccurate content; then recheck Step 5 (max 2 rounds).\nDone when: The checkout crash is resolved, regression tests are added and passing, the full test suite passes without errors, and the local checkout simulation succeeds.",
+      "output_characters": 1305,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c04",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "repaired",
+      "elapsed_ms": 27895,
+      "wall_seconds": 28.955,
+      "text": "I need to compare three task tracking tools suitable for a volunteer team, prioritizing low cost and requiring cited sources.\n\nContext:\nThis is for a volunteer team. I have not specified a specific budget amount, the number of volunteers, or any existing software stack. I have not tried any tools yet.\n\nConstraints:\n- Prioritize lower total cost; explicitly show prices or pricing tiers for each tool.\n- Cite sources for all facts and prices.\n- Flag any uncertainty regarding pricing or features.\n- Do not invent specific names, dates, or budget numbers; leave them open.\n\nTask Graph:\nStep 1: Identify three distinct task tracking tools that are suitable for volunteer teams and have transparent pricing models.\nStep 2 (after 1): Gather current pricing details, key features relevant to volunteers (e.g., ease of use, free tiers), and limitations for each of the three tools.\nStep 3 (after 2): Evaluate the trade-offs between the three tools based on cost, volunteer usability, and feature fit.\nStep 4 (after 3): Summarize the risks of choosing each tool (e.g., hidden costs, steep learning curve) and recommend the best option based on the low-cost constraint.\nStep 5 (after 4): Draft a concise comparison table including tool name, estimated cost, key volunteer benefits, and source links.\nStep 6 (after 5): Review the draft as a skeptical security auditor to ensure no sensitive data assumptions were made and that all claims are backed by the cited sources.\nLoop: if Step 6 fails the stated accuracy checks (missing citations, unverified prices, or unsupported claims), return to Step 2 to correct the inaccurate content; then recheck Step 6 (max 2 rounds).\nDone when: The output includes a comparison table with three tools, explicit prices or pricing tiers, cited sources for all facts, a clear recommendation based on low cost, and a verification that no invented details exist.",
+      "output_characters": 1886,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c05",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 11235,
+      "wall_seconds": 12.295,
+      "text": "I want to tutor myself in fractions, one question at a time, waiting for my answer before moving on.\n\nAsk only one clarifying question if you need to know my current math level or specific fraction topics to start. Otherwise, state your assumptions about my starting point.\n\nStep 1: Explain the core concept of fractions using a simple, real-world example relevant to my assumed level.\nStep 2 (after 1): Present one specific practice problem based on that concept and wait for my answer.\nStep 3 (after 2): Evaluate my answer, provide feedback, and explain any errors before generating the next question.\nStep 4 (after 3): Verify that I have answered the current question and that my understanding has improved before proceeding to the next step.\nLoop: if Step 4 fails the verification check (e.g., I haven't answered or the answer was fundamentally misunderstood), return to Step 2 to re-explain the concept or rephrase the question; then recheck Step 4 (max 2 rounds). Stop when checks pass; at the limit report unmet criteria.\nDone when: I have successfully answered the current question and demonstrated understanding, and we are ready for the next step.\n\nFormat: Present the explanation and question clearly, then stop and wait for my response. Do not generate the next question until I reply.",
+      "output_characters": 1297,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c06",
+      "rendering": "legacy",
+      "outcome": "blocked",
+      "structure": "repaired",
+      "elapsed_ms": 23347,
+      "wall_seconds": 24.454,
+      "text": "I need to generate an image of a fox in a forest at night with glowing mushrooms using Midjourney in Chrome. Goal: Create a high-quality image matching the specific subject and setting described. Context: The request is for a single image generation task using the Midjourney tool in a Chrome browser. No additional background details, specific file names, or prior attempts were provided. Constraints: The image must feature a fox, a forest setting, nighttime lighting, and glowing mushrooms. Do not invent specific locations, dates, or numerical counts for elements unless implied by the visual description. Task graph: Step 1: Construct a detailed image generation prompt that includes the subject (fox), setting (forest), time (night), and key visual elements (glowing mushrooms), ensuring the description is specific enough for an AI image generator to interpret correctly; Step 2 (after 1): Verify that the constructed prompt explicitly contains all required elements (fox, forest, night, glowing mushrooms) and adheres to the visual style implied by the description; Loop: if Step 2 fails the stated accuracy checks (missing required elements or incorrect interpretation), return to Step 1 to correct the prompt wording; then recheck Step 2 (max 2 rounds); Done when: the final prompt clearly describes a fox in a forest at night with glowing mushrooms and passes the verification check without missing any required elements. Output format: Provide the final image generation prompt as a single line of text suitable for copying into Midjourney. Quality bars: Ensure the prompt uses descriptive language for lighting and atmosphere to enhance the \"glowing\" and \"night\" aspects, and report any capability limits of the target tool regarding specific visual effects if they arise during verification.",
+      "output_characters": 1805,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "graph_unsupported"
+    },
+    {
+      "case_id": "c07",
+      "rendering": "legacy",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 7989,
+      "wall_seconds": 9.141,
+      "text": "I need to identify and fix the flaky API tests in my project, then run the suite until it passes. Step 1: run the test suite to capture the specific failing tests and their error logs; Step 2 (after 1): analyze the logs to determine if failures are due to timing, environment, or code issues; Step 3 (after 2): implement fixes for the identified causes and add necessary delays or mocks; Step 4 (after 3): re-run the full suite to verify all tests pass consistently; Loop: if Step 4 fails the consistency check, return to Step 2 to re-analyze and correct the remaining flakiness; then recheck Step 4 (max 3 rounds); Done when: the full test suite passes without errors and the previously failing tests remain stable across multiple runs.",
+      "output_characters": 737,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c01",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 5640,
+      "wall_seconds": 6.72,
+      "text": "What time zone is Tokyo in?\nStep 1: Identify the current time zone for Tokyo, Japan.\nStep 2 (after 1): Verify the identified time zone against known geographical data for Tokyo.\nLoop: if Step 2 fails the verification check, return to Step 1 to correct the identification; then recheck Step 2 (max 2 rounds).\nDone when: the time zone for Tokyo is correctly identified and verified. Stop on passing checks; at the round limit report unmet criteria.",
+      "output_characters": 446,
+      "detail_pattern_matches": [
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c02",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 8918,
+      "wall_seconds": 10.01,
+      "text": "Draft a polite email asking for the meeting notes without apologizing.\nStep 1: Identify the recipient, meeting context, and specific notes needed; if the meeting date, topic, or recipient name is missing, ask exactly one clarifying question to proceed.\nStep 2 (after 1): Compose the email draft ensuring a polite tone, no apologies, and inclusion of the identified details or placeholders for missing ones.\nStep 3 (after 2): Review the draft to confirm the tone is polite, no apologies are present, and no facts were invented.\nStep 4 (after 3): Finalize the email text ready for the user to send.\nLoop: if Step 3 fails the tone or factual-fidelity checks, return to Step 2 to revise the draft and remove apologies or invented details; then recheck Step 3 (max 2 rounds).\nDone when: the email draft is polite, contains no apologies, asks for meeting notes, and includes no invented facts. Stop on passing checks; at the limit report issues.",
+      "output_characters": 939,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c03",
+      "rendering": "adaptive",
+      "outcome": "blocked",
+      "structure": "valid",
+      "elapsed_ms": 10720,
+      "wall_seconds": 11.817,
+      "text": "Debug the checkout crash, add regression tests, and run the full suite.\nStep 1: Reproduce the checkout crash and identify the root cause from available code and logs.\nStep 2 (after 1): Implement a scoped fix for the identified issue.\nStep 3 (after 1; parallel with 2): Design and implement regression tests specifically for the checkout crash scenario.\nStep 4 (after 2, 3): Integrate the fix and the new regression tests into the existing test suite.\nStep 5 (after 4): Execute the full test suite to verify overall system stability.\nStep 6 (after 5): Analyze test results to confirm the checkout crash is resolved and no regressions were introduced.\nLoop: if Step 6 fails the verification that the crash is resolved and the suite passes, return to Step 2 to correct the fix or Step 3 to adjust tests based on failure evidence; then recheck Step 6 (max 3 rounds).\nDone when: the checkout crash is resolved, specific regression tests pass, and the full test suite completes without errors. Stop on passing checks; if the loop limit is reached, report unmet criteria and limitations.\nClarification needed: If the specific checkout flow, environment, or error logs are not provided, ask for them before proceeding to Step 1.",
+      "output_characters": 1220,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "surface_unconfirmed"
+    },
+    {
+      "case_id": "c04",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "repaired",
+      "elapsed_ms": 20263,
+      "wall_seconds": 21.312,
+      "text": "Compare three task tracking tools for a volunteer team, prioritizing low cost and requiring cited sources.\n\nStep 1: Identify three distinct task tracking tools suitable for volunteer teams that offer free or low-cost tiers.\nStep 2 (after 1): Gather specific details for each tool, including pricing, key features relevant to volunteer management, and the source of the information.\nStep 3 (after 2): Analyze the gathered details to determine which tools best meet the low-cost constraint for a volunteer team.\nStep 4 (after 3): Synthesize the analysis into a comparison highlighting the pros, cons, and final recommendation based on cost and volunteer needs.\nStep 5 (after 4): Verify that every claim regarding pricing and features is accompanied by a specific citation.\nLoop: if Step 5 fails the stated accuracy checks, return to Step 2 to correct the inaccurate content; then recheck Step 5 (max 2 rounds).\nDone when: The output lists exactly three tools, each with a clear citation for cost and features, and includes a final recommendation based on the low-cost constraint for volunteers.",
+      "output_characters": 1092,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c05",
+      "rendering": "adaptive",
+      "outcome": "inserted",
+      "structure": "valid",
+      "elapsed_ms": 9880,
+      "wall_seconds": 10.963,
+      "text": "Tutor me in fractions one question at a time and wait for my answer.\nStep 1: Identify the user's current level or specific fraction topic if not stated, asking at most one clarifying question only if a detail that matters is missing; otherwise proceed with a fraction problem or hint.\nStep 2 (after 1): Present a single fraction question or hint, wait for the user's answer, and do not provide the solution immediately.\nStep 3 (after 2): Evaluate the user's answer for mathematical correctness and conceptual understanding.\nStep 4 (after 3): Provide feedback, correct errors if present, and decide whether to move to the next fraction concept or re-explain the current one based on the user's performance.\nLoop: if Step 3 fails the mathematical correctness or conceptual understanding checks, return to Step 2 to present a simpler or differently phrased fraction question; then recheck Step 3 (max 2 rounds).\nDone when: the user has answered the current fraction question, the answer has been evaluated, and feedback has been provided. Stop correcting on passing checks; report remaining difficulty at the limit. Continue tutoring at the user's pace without a fixed total question count.",
+      "output_characters": 1187,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true
+    },
+    {
+      "case_id": "c06",
+      "rendering": "adaptive",
+      "outcome": "blocked",
+      "structure": "repaired",
+      "elapsed_ms": 14974,
+      "wall_seconds": 16.01,
+      "text": "Generate an image of a fox in a forest at night with glowing mushrooms; Step 1: Create the image using the available image generation tool with the visual description of a fox in a forest at night with glowing mushrooms; Step 2 (after 1): Verify that the result depicts a fox, a forest setting, nighttime lighting, and glowing mushrooms as specified; Loop: if Step 2 fails the stated accuracy checks regarding the fox, forest, night, or glowing mushrooms, return to Step 1 to correct the inaccurate content; then recheck Step 2 (max 2 rounds); Done when: the image clearly shows a fox in a forest at night with glowing mushrooms or the tool reports it cannot generate the specific elements requested.",
+      "output_characters": 700,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "graph_unsupported"
+    },
+    {
+      "case_id": "c07",
+      "rendering": "adaptive",
+      "outcome": "blocked",
+      "structure": "repaired",
+      "elapsed_ms": 17867,
+      "wall_seconds": 18.93,
+      "text": "Fix the flaky API tests and then run the suite until it passes; Step 1: Identify the specific API tests marked as flaky by analyzing recent test run logs or error messages to determine the root causes of instability; Step 2 (after 1): Implement code changes to address the identified root causes, ensuring fixes are isolated to the flaky tests without altering passing logic; Step 3 (after 2): Run the specific flaky API tests individually to verify the fixes resolve the instability; Step 4 (after 3; parallel with 5): Execute the full API test suite to ensure no regressions were introduced by the fixes; Step 5 (after 3; parallel with 4): Analyze the test results from Step 4 to confirm all tests pass consistently; Loop: if Step 5 fails the stated accuracy checks (all tests pass consistently), return to Step 2 to correct the inaccurate content or refine the fixes; then recheck Step 5 (max 2 rounds); Done when: the full API test suite runs successfully with zero failures and no tests marked as flaky in subsequent runs.",
+      "output_characters": 1027,
+      "detail_pattern_matches": [
+        true,
+        true,
+        true
+      ],
+      "all_detail_patterns_present": true,
+      "reason": "surface_unconfirmed"
+    }
+  ]
+}
