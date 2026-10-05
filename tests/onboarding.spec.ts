@@ -37,6 +37,7 @@ function fixture(ready = false): Fixture {
       hotkey_errors: [], prompt_hotkey_error: null, hotkeys_paused: false,
       engines_ready: ready, models_installed: ready, engine_error: null,
       history_enabled: true, data_dir: "isolated-test-data", use_gpu: true, gpu_device: null,
+      dictation_tone: "natural",
       modifier_hold: false, auto_mode: false, vocabulary: { words: [], replacements: [] }, screen_text_apps: [],
       code_chat_paste: false,
       modifier_hold_error: null,
@@ -350,7 +351,7 @@ async function finishPractice(page: Page, paste = true) {
   }
   await page.evaluate((text) => window.onboardingTest.practice({
     type: "finished",
-    report: { job_id: 7, profile_id: "generic", outcome: { kind: "inserted", text }, elapsed_ms: 1, history_saved: false, structure: null },
+    report: { job_id: 7, profile_id: "generic", outcome: { kind: "inserted", text }, elapsed_ms: 1, history_saved: false, structure: null, generation_elapsed_ms: 0, structure_repair_attempts: 0 },
     capped: false,
   }), output);
 }
@@ -870,7 +871,7 @@ test("focus loss and old events cannot verify a new attempt", async ({ page }) =
   await page.getByRole("button", { name: "Prepare practice" }).click();
   await page.evaluate(() => window.onboardingTest.practice({
     type: "finished",
-    report: { job_id: 2, profile_id: "generic", outcome: { kind: "inserted", text: "Stale result" }, elapsed_ms: 1, history_saved: false, structure: null },
+    report: { job_id: 2, profile_id: "generic", outcome: { kind: "inserted", text: "Stale result" }, elapsed_ms: 1, history_saved: false, structure: null, generation_elapsed_ms: 0, structure_repair_attempts: 0 },
     capped: false,
   }, 1));
   await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
@@ -1141,6 +1142,9 @@ test.describe("actionable recovery controls", () => {
     await launch(page, state);
     const general = page.getByRole("region", { name: "General settings", exact: true });
     const integration = general.getByLabel("Desktop integration", { exact: true });
+    const dictationTone = general.getByRole("combobox", { name: "Dictation tone" });
+    await expect(dictationTone).toHaveValue("natural");
+    await expect(dictationTone.locator("option")).toHaveCount(6);
     await expect(integration.getByRole("button", { name: "Enable desktop integration", exact: true })).toBeVisible();
     for (const width of [960, 640]) {
       await page.setViewportSize({ width, height: width === 640 ? 480 : 760 });
@@ -1150,6 +1154,10 @@ test.describe("actionable recovery controls", () => {
       })).toEqual({ gap: "8px", wrap: "wrap" });
       expect(await general.locator("dl").first().evaluate((element) => getComputedStyle(element).rowGap)).toBe(width === 640 ? "8px" : "24px");
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      const toneBounds = await dictationTone.boundingBox();
+      expect(toneBounds).not.toBeNull();
+      expect(toneBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(toneBounds!.x + toneBounds!.width).toBeLessThanOrEqual(width);
       const buttons = await integration.getByRole("button").evaluateAll((elements) => elements.map((element) => {
         const rect = element.getBoundingClientRect();
         return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
@@ -1325,13 +1333,38 @@ test.describe("native overlay sizing", () => {
     await openOverlay(page);
     await emitOverlay(page, {
       type: "finished", capped: false,
-      report: { job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: null,
+      report: { job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: null, generation_elapsed_ms: 0, structure_repair_attempts: 0,
         outcome: { kind: "failed", reason: "generation_failed", detail: "Model unavailable" } },
     });
     await expect(page.getByRole("button", { name: "Model settings", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Model settings", exact: true }).click();
     expect(await page.evaluate(() => window.onboardingTest.calls.includes("open_recovery_settings"))).toBe(true);
+  });
+
+  test("quality review hides reviewer output and preserves copy-only recovery", async ({ page }) => {
+    await openOverlay(page);
+    await emitOverlay(page, { type: "listening", mode: "prompt", profile: "ChatGPT", target: "chatgpt.com", latched: false });
+    await emitOverlay(page, { type: "stage", stage: "generating" });
+    await emitOverlay(page, { type: "token", text: "A valid draft." });
+    await expect(page.getByRole("region", { name: "Prompt preview" })).toContainText("A valid draft.");
+    await emitOverlay(page, { type: "stage", stage: "reviewing_quality" });
+    await expect(page.getByRole("status")).toHaveText("Reviewing wording quality…");
+    await expect(page.getByRole("region", { name: "Prompt preview" })).toHaveCount(0);
+    await emitOverlay(page, {
+      type: "finished",
+      capped: false,
+      report: {
+        job_id: 3, profile_id: "chatgpt", elapsed_ms: 100, history_saved: false, structure: "valid",
+        generation_elapsed_ms: 50, structure_repair_attempts: 0,
+        quality: { status: "rejected", review_calls: 2, rewrite_calls: 1, generation_elapsed_ms: 50, review_elapsed_ms: 20, rewrite_elapsed_ms: 10, deadline_exhausted: false },
+        outcome: { kind: "blocked", text: "Review-only wording", reason: "quality_review", detail: "It was not pasted." },
+      },
+    });
+    await expect(page.getByText("Quality review did not approve this text. Review and copy it; it was not pasted.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Review-only wording", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
   });
 
   test("overlay event connection failure offers a functional reconnect", async ({ page }) => {
@@ -1352,14 +1385,14 @@ test.describe("native overlay sizing", () => {
     "Step 1: Explain how a heat pump transfers heat, using a relatable example.",
     ...Array.from({ length: 20 }, () => "Preserve the user's stated context, constraints, and desired level of detail."),
     "Step 2 (after 1): Verify that the explanation is accurate and understandable.",
-    "Loop: if the explanation is unclear, return to Step 1 (max 2 rounds).",
+    "Loop: if Step 2 fails the accuracy or clarity checks, return to Step 1 to correct errors and unclear wording; then recheck Step 2 (max 2 rounds).",
     "Done when: the explanation is clear and accurate.",
   ].join("\n");
 
   const blocked: OverlayEvent = {
     type: "finished", capped: false,
     report: {
-      job_id: 1, profile_id: "grok", elapsed_ms: 1000, history_saved: true, structure: "valid",
+      job_id: 1, profile_id: "grok", elapsed_ms: 1000, history_saved: true, structure: "valid", generation_elapsed_ms: 0, structure_repair_attempts: 0,
       outcome: {
         kind: "blocked", text: longGraph, reason: "surface_unconfirmed",
         detail: "The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request.",
@@ -1440,7 +1473,7 @@ test.describe("native overlay sizing", () => {
     await emitOverlay(page, {
       type: "finished", capped: false,
       report: {
-        job_id: 1, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        job_id: 1, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid", generation_elapsed_ms: 0, structure_repair_attempts: 0,
         delivery: "sent_unverified", outcome: { kind: "inserted", text: longGraph },
       },
     });
@@ -1463,7 +1496,7 @@ test.describe("native overlay sizing", () => {
     await emitOverlay(page, {
       type: "finished", capped: false,
       report: {
-        job_id: 1, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        job_id: 1, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid", generation_elapsed_ms: 0, structure_repair_attempts: 0,
         delivery: "sent_unverified", outcome: { kind: "inserted", text: longGraph },
       },
     });
@@ -1473,7 +1506,7 @@ test.describe("native overlay sizing", () => {
     await emitOverlay(page, {
       type: "finished", capped: false,
       report: {
-        job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid", generation_elapsed_ms: 0, structure_repair_attempts: 0,
         outcome: { kind: "blocked", text: "New prompt", reason: "focus_changed", detail: null },
       },
     });

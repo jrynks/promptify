@@ -1,0 +1,48 @@
+# Synthetic requests used for the before/after local-model comparison.
+# No personal history, screen context, audio or native paste is used.
+[[case]]
+id = "c01"
+said = "What time zone is Tokyo in?"
+expect = "graph"
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[case]]
+id = "c02"
+said = "Draft a polite email asking for the meeting notes; do not apologize."
+expect = "graph"
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[case]]
+id = "c03"
+said = "Debug the checkout crash and add regression tests, then run the suite."
+expect = "graph"
+process = "code"
+
+[[case]]
+id = "c04"
+said = "Compare three task tracking tools for our volunteer team; keep costs low and cite sources."
+expect = "graph"
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[case]]
+id = "c05"
+said = "Tutor me in fractions one question at a time and wait for my answer."
+expect = "graph"
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[case]]
+id = "c06"
+said = "Create an image of a fox in a forest at night with glowing mushrooms."
+expect = "graph"
+process = "chrome"
+url = "https://midjourney.com"
+
+[[case]]
+id = "c07"
+said = "Fix the flaky API tests and then run the suite until it passes."
+expect = "graph"
+process = "gnome-terminal"

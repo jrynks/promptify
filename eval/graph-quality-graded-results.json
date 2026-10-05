@@ -1,0 +1,1102 @@
+{
+  "captured_at": "2026-10-05T05:11:46.018891+00:00",
+  "model": "qwen3.5-9b-q4km",
+  "configuration": {
+    "temperature": 0.3,
+    "top_k": 40,
+    "top_p": 0.9,
+    "min_p": 0.05,
+    "seed": "worker request ID",
+    "max_new_tokens": 768,
+    "max_structure_repairs": 2,
+    "max_output_characters": 6000,
+    "shared_cli_generation_deadline_seconds": 120
+  },
+  "privacy": {
+    "history": "NoHistory",
+    "context": "FixedContext synthetic process/url; no screen or microphone access",
+    "inserter": "PrintInserter; no native paste",
+    "running_app": "not stopped or modified"
+  },
+  "rubric": {
+    "dimensions": [
+      "intent_fidelity",
+      "dependency_coherence",
+      "correction_recheck",
+      "completion",
+      "proportionality_no_invented_details"
+    ],
+    "anchors": {
+      "0": "Absent or failed job without usable output",
+      "1": "Mostly ineffective or misleading",
+      "2": "Substantial weakness requiring editing",
+      "3": "Usable with noticeable omissions or ambiguity",
+      "4": "Minor weakness",
+      "5": "Fully satisfies dimension"
+    },
+    "overall": "2 * mean(five scores), rounded to one decimal",
+    "reviewer": "Copilot evidence-based manual review; not independent or blinded",
+    "failed_jobs": "All dimensions zero; rejected drafts receive no successful-output credit",
+    "blocked_jobs": "Review-only prompts graded normally; no native paste was performed"
+  },
+  "refinement_budget": {
+    "prior_implementation_refinement_rounds": 3,
+    "new_rounds": 0,
+    "reason": "Three-round cap already reached; this run grades final outcomes without resetting budget or cherry-picking."
+  },
+  "summary": [
+    {
+      "rendering": "legacy",
+      "total": 9,
+      "usable_returned": 8,
+      "failed": 1,
+      "successful_repairs": 4,
+      "review_only": 1,
+      "mean_overall_10": 6.67,
+      "mean_returned_overall_10": 7.5,
+      "median_job_elapsed_ms": 18260,
+      "median_wall_seconds": 20.743,
+      "dimension_means": {
+        "intent_fidelity": 3.89,
+        "dependency_coherence": 3.22,
+        "correction_recheck": 3.22,
+        "completion": 3.56,
+        "proportionality_no_invented_details": 2.78
+      }
+    },
+    {
+      "rendering": "adaptive",
+      "total": 9,
+      "usable_returned": 9,
+      "failed": 0,
+      "successful_repairs": 4,
+      "review_only": 3,
+      "mean_overall_10": 7.87,
+      "mean_returned_overall_10": 7.87,
+      "median_job_elapsed_ms": 13028,
+      "median_wall_seconds": 14.808,
+      "dimension_means": {
+        "intent_fidelity": 4.33,
+        "dependency_coherence": 4,
+        "correction_recheck": 3.67,
+        "completion": 3.67,
+        "proportionality_no_invented_details": 4
+      }
+    },
+    {
+      "rendering": "all",
+      "total": 18,
+      "usable_returned": 17,
+      "failed": 1,
+      "successful_repairs": 8,
+      "review_only": 4,
+      "mean_overall_10": 7.27,
+      "mean_returned_overall_10": 7.69,
+      "median_job_elapsed_ms": 17862.0,
+      "median_wall_seconds": 19.705,
+      "dimension_means": {
+        "intent_fidelity": 4.11,
+        "dependency_coherence": 3.61,
+        "correction_recheck": 3.44,
+        "completion": 3.61,
+        "proportionality_no_invented_details": 3.39
+      }
+    }
+  ],
+  "results": [
+    {
+      "case": {
+        "id": "explanation",
+        "category": "simple explanation",
+        "said": "Explain why the sky looks blue.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Explain why the sky looks blue.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 20.743,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "I need to explain why the sky looks blue.\n\nContext: This is a general science explanation request with no specific audience, location, or prior knowledge level stated.\n\nConstraints: Keep the explanation clear and accessible without inventing specific dates, names, or complex jargon unless necessary for accuracy.\n\nTask graph:\nStep 1: Explain the physical mechanism of Rayleigh scattering, detailing how shorter wavelengths (blue/violet) scatter more effectively than longer wavelengths when sunlight interacts with the atmosphere.\nStep 2 (after 1): Summarize why the human eye perceives the sky as blue rather than violet, considering both the scattering spectrum and human visual sensitivity.\nLoop: if Step 2 fails the stated accuracy checks regarding human visual perception, return to Step 1 to correct the inaccurate content; then recheck Step 2 (max 2 rounds).\nDone when: The explanation accurately describes Rayleigh scattering, correctly identifies the role of human eye sensitivity in perceiving blue over violet, and the verification loop confirms these points without factual errors."
+        },
+        "elapsed_ms": 18260,
+        "history_saved": false,
+        "structure": "repaired",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 4,
+        "dependency_coherence": 2,
+        "correction_recheck": 2,
+        "completion": 4,
+        "proportionality_no_invented_details": 3,
+        "overall_10": 6.0,
+        "evidence": "Keeps the blue-sky goal, but Step 2 explains blue versus violet rather than performing an explicit check. The loop labels it a verifier without making it one; accuracy criteria are relevant, while Context and Constraints add unnecessary scaffolding."
+      }
+    },
+    {
+      "case": {
+        "id": "coding",
+        "category": "coding fix and tests",
+        "said": "The login button sends two requests when clicked twice. Fix that and add a regression test, then run the relevant tests. Do not change the API.",
+        "process": "code"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "The login button sends two requests when clicked twice. Fix that and add a regression test, then run the relevant tests. Do not change the API.",
+        "--process",
+        "code",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km"
+      ],
+      "wall_seconds": 25.988,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "vscode",
+        "outcome": {
+          "kind": "inserted",
+          "text": "I need to fix a bug where the login button triggers two requests when clicked twice, add a regression test for this fix, and run the relevant tests without altering the API.\n\nStep 1: Analyze the login button's current event handling and network traffic to identify the root cause of the duplicate request generation upon double-clicking.\nStep 2 (after 1): Implement a fix that prevents the second request while ensuring the first request still executes correctly, strictly adhering to the constraint that the API definition and contract must not be changed.\nStep 3 (after 2): Write a regression test specifically designed to verify that clicking the login button twice results in exactly one successful request and no duplicate network calls.\nStep 4 (after 3): Execute the relevant test suite to confirm the regression test passes and no existing tests are broken by the changes.\nLoop: if Step 4 fails the stated accuracy checks (regression test passes, no duplicate requests, API unchanged), return to Step 2 to correct the implementation logic; then recheck Step 4 (max 2 rounds).\nDone when: The login button triggers exactly one request regardless of click speed, the new regression test exists and passes, the full relevant test suite passes, and the API contract remains identical to the original."
+        },
+        "elapsed_ms": 24395,
+        "history_saved": false,
+        "structure": "repaired",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 4,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 8.0,
+        "evidence": "Preserves the double-click bug, regression test, test execution and unchanged API. Sequential analysis/fix/test/run edges are coherent. The loop revisits implementation, but does not explicitly update a faulty regression test. 'Regardless of click speed' and 'one successful request' broaden the supplied behavior."
+      }
+    },
+    {
+      "case": {
+        "id": "research",
+        "category": "research",
+        "said": "Compare three task tracking tools for our volunteer team. Keep costs low, cite current sources, and flag uncertain prices.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Compare three task tracking tools for our volunteer team. Keep costs low, cite current sources, and flag uncertain prices.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 18.667,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "I need to compare three task tracking tools for our volunteer team, prioritizing low cost, citing current sources, and flagging any uncertain prices.\n\nBefore you start, ask only necessary questions about our team size, specific volunteer management needs, or required features if the answer depends on them.\n\nStep 1: Identify three distinct task tracking tools suitable for volunteer teams, focusing on those with lower total cost structures.\nStep 2 (after 1): Research and list the current pricing for each tool, citing specific sources and dates; flag any prices that are uncertain, estimated, or require contact for a quote.\nStep 3 (after 2): Analyze the trade-offs between the three options, weighing cost against features relevant to volunteer management.\nStep 4 (after 3): Evaluate potential risks or downsides for each option based on the analysis.\nStep 5 (after 4): Recommend the best option based on the low-cost constraint and feature fit, stating assumptions if details are missing.\nStep 6 (after 5): Verify that all cited prices are current, all uncertainties are flagged, and the recommendation logically follows the cost analysis.\nLoop: if Step 6 fails the verification checks (missing citations, unflagged uncertainties, or illogical recommendation), return to Step 2 to re-research pricing and Step 5 to re-evaluate the recommendation; then recheck Step 6 (max 2 rounds). Stop when checks pass; at the limit report unmet criteria.\nDone when: three tools are compared with current cited prices, uncertainties are flagged, risks are analyzed, and a single recommendation is made that adheres to the low-cost constraint.\n\nFormat: A comparison table for the three tools (Name, Current Price, Source/Citation, Uncertainty Flag), followed by a numbered list of risks, and a final paragraph with the recommendation."
+        },
+        "elapsed_ms": 17464,
+        "history_saved": false,
+        "structure": "valid",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 8.8,
+        "evidence": "Preserves three tools, volunteers, low cost, current citations and uncertain prices. Pricing research feeds comparison and checking. The bounded loop explicitly re-researches pricing and re-evaluates the recommendation. Six steps plus risk analysis/recommendation are somewhat more than the requested comparison."
+      }
+    },
+    {
+      "case": {
+        "id": "writing",
+        "category": "writing",
+        "said": "Draft a polite email asking for the meeting notes. Do not apologize or invent a deadline.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Draft a polite email asking for the meeting notes. Do not apologize or invent a deadline.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 49.011,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "I need to draft a polite email requesting meeting notes without apologizing or inventing a deadline.\n\nContext:\n- This is for a professional setting where I need to follow up on a meeting that has already occurred.\n- I do not have the specific meeting date, participants, or the name of the recipient.\n- I have not tried drafting this yet.\n\nConstraints:\n- The tone must be polite and professional.\n- Do not include any apologetic language (e.g., \"sorry for the late request\").\n- Do not invent or suggest a specific date or deadline for when the notes are due.\n- Do not use placeholders like \"[Name]\" or \"[Date]\" for facts I haven't provided; instead, write the email so the user can fill those in, or state the assumption clearly if a specific phrasing is required.\n\nTask graph:\nStep 1: Draft the email body focusing on a clear, direct request for the meeting notes while maintaining a professional and courteous tone.\nStep 2 (after 1): Review the draft as a skeptical editor to ensure no apologetic language is present and no artificial deadlines are invented.\nStep 3 (after 2): Finalize the email by adding a subject line and ensuring the placeholders for specific meeting details (like date, time, or attendee names) are clearly marked for the user to fill in.\nLoop: if Step 2 fails the stated accuracy checks (presence of apology or invented deadline), return to Step 1 to correct the tone and content; then recheck Step 2 (max 2 rounds).\n\nOutput format:\n- Provide the final email draft in a code block or clearly separated section.\n- Include a brief note below the draft listing the assumptions made about missing details (e.g., \"Assumed the user will insert the specific meeting date here\").\n\nDone when:\n- The email draft is complete with a subject line and body.\n- The draft contains zero instances of apologetic language.\n- The draft contains zero invented deadlines or specific dates for submission.\n- The loop has either passed the accuracy checks or reported the specific limitations after reaching the maximum rounds."
+        },
+        "elapsed_ms": 47286,
+        "history_saved": false,
+        "structure": "repaired",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 4,
+        "dependency_coherence": 3,
+        "correction_recheck": 3,
+        "completion": 2,
+        "proportionality_no_invented_details": 1,
+        "overall_10": 5.2,
+        "evidence": "Keeps polite notes request, no apologies and no invented deadline. Invents that the user has not drafted yet and lacks recipient/date details. Step 3 adds placeholders after Step 2 verification despite an earlier prohibition. Done when treats reaching the limit and reporting limitations as completion."
+      }
+    },
+    {
+      "case": {
+        "id": "branches",
+        "category": "multi-branch complex",
+        "said": "Compare the supplied support tickets and interview notes independently, then combine their findings into an onboarding improvement plan. Preserve disagreements, cite the supplied evidence, and do not invent customer quotes or dates.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Compare the supplied support tickets and interview notes independently, then combine their findings into an onboarding improvement plan. Preserve disagreements, cite the supplied evidence, and do not invent customer quotes or dates.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 33.765,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "I need to compare the supplied support tickets and interview notes independently, then combine their findings into an onboarding improvement plan while preserving disagreements and citing evidence without inventing quotes or dates.\n\nContext:\n- I have access to specific support tickets and interview notes regarding the onboarding process.\n- I do not have access to external data, customer names, specific dates, or internal metrics not present in the supplied documents.\n\nConstraints:\n- Do not invent customer quotes, dates, or specific customer names.\n- Do not hallucinate metrics or data not found in the supplied tickets and notes.\n- Explicitly preserve any disagreements between the support ticket data and the interview notes.\n- Cite the specific evidence (ticket ID, note reference, or excerpt) for every finding.\n\nTask structure:\nStep 1: Independently analyze the supplied support tickets to extract recurring pain points, failure modes, and specific user frustrations related to onboarding.\nStep 2 (after 1): Independently analyze the supplied interview notes to extract qualitative insights, user sentiments, and identified gaps in the onboarding experience.\nStep 3 (after 2): Synthesize the findings from Step 1 and Step 2 into a unified onboarding improvement plan, explicitly noting where the support data and interview data agree or disagree.\nStep 4 (after 3): Draft the final improvement plan, ensuring every recommendation is backed by a specific citation from the supplied tickets or notes.\nStep 5 (after 4): Review the draft as a skeptical auditor to verify that no invented quotes, dates, or metrics have been introduced and that all disagreements are preserved.\nStep 6 (after 5): Format the output as a structured report with clear sections for Findings, Disagreements, and the Improvement Plan.\n\nLoop: if Step 5 fails the stated accuracy checks (specifically finding invented quotes, dates, or missing citations for recommendations), return to Step 4 to correct the inaccurate content; then recheck Step 5 (max 3 rounds).\n\nDone when: The final output contains a structured improvement plan where every claim is cited to a specific ticket or note, all disagreements between sources are explicitly listed, and no external facts (dates, names, quotes) have been invented."
+        },
+        "elapsed_ms": 32471,
+        "history_saved": false,
+        "structure": "repaired",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 3,
+        "correction_recheck": 3,
+        "completion": 5,
+        "proportionality_no_invented_details": 3,
+        "overall_10": 7.6,
+        "evidence": "Preserves both evidence sources, disagreements, onboarding plan and no invented quotes/dates. Independent interview analysis unnecessarily depends on ticket analysis; synthesis names both sources but only lists after 2. The correction targets the draft, not missing analysis/disagreements, and formatting adds another step after verification. Strong source-specific completion checks."
+      }
+    },
+    {
+      "case": {
+        "id": "correction",
+        "category": "correction and negative constraint",
+        "said": "Write an email about the delay, no wait translate the supplied paragraph into French. Keep the names and numbers unchanged; do not summarize it.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Write an email about the delay, no wait translate the supplied paragraph into French. Keep the names and numbers unchanged; do not summarize it.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 14.521,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Translate the provided text into French, keeping all names and numbers exactly as they appear, without summarizing.\n\nBefore you start, ask only necessary questions about the specific text to translate if it is not clearly provided in the context.\n\nStep 1: Identify the source text to be translated and verify that no names or numbers are present in the prompt that need preservation.\nStep 2 (after 1): Translate the text into French, ensuring strict adherence to the constraint of leaving all names and numbers unchanged.\nStep 3 (after 2): Review the translation to confirm that no content was summarized and that the original names and numbers match the source exactly.\nStep 4 (after 3): Check that the French grammar and syntax are correct while maintaining the original structure and specific terms.\nLoop: if Step 3 fails the accuracy check regarding names, numbers, or summarization, return to Step 2 to correct the translation; then recheck Step 3 (max 2 rounds). Stop when checks pass; at the limit report unmet criteria.\nDone when: the output is a complete French translation with no summarization and all names and numbers identical to the source.\n\nFormat: Provide only the translated text."
+        },
+        "elapsed_ms": 13137,
+        "history_saved": false,
+        "structure": "valid",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 4,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality_no_invented_details": 3,
+        "overall_10": 7.6,
+        "evidence": "Correctly drops the retracted email task and requests French translation without summarizing, retaining names/numbers. Step 1 oddly asks to verify that no names/numbers are present instead of identify what must be preserved. Translation/review edges and bounded correction/recheck are coherent, but the four-step workflow is longer than needed."
+      }
+    },
+    {
+      "case": {
+        "id": "inline",
+        "category": "inline coding workflow",
+        "said": "Fix the flaky API tests and run the suite until it passes. Do not skip failing tests or invent timeouts.",
+        "process": "gnome-terminal"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Fix the flaky API tests and run the suite until it passes. Do not skip failing tests or invent timeouts.",
+        "--process",
+        "gnome-terminal",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km"
+      ],
+      "wall_seconds": 12.547,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "terminal",
+        "outcome": {
+          "kind": "inserted",
+          "text": "I need to identify and fix the flaky API tests in my project, run the full suite until it passes, and ensure no tests are skipped or artificially timed out. Step 1: run the full test suite to capture the current flaky failures and log the specific errors; Step 2 (after 1): analyze the logs to determine if failures are due to race conditions, environment instability, or transient network issues; Step 3 (after 2): implement fixes for the identified root causes and add necessary retry logic or synchronization without introducing artificial timeouts; Step 4 (after 3): re-run the complete suite including the previously failing tests to verify stability; Loop: if Step 4 fails the stability checks or reveals new failures, return to Step 3 to correct the remaining issues; then recheck Step 4 (max 3 rounds); Done when: the full suite passes consistently without skipping any tests and the original flaky failures no longer occur."
+        },
+        "elapsed_ms": 11127,
+        "history_saved": false,
+        "structure": "valid",
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 4,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality_no_invented_details": 3,
+        "overall_10": 7.2,
+        "evidence": "Single-line graph preserves flaky API tests, suite execution, no skips and no artificial timeouts. Diagnosis feeds fixes and suite checks; bounded loop corrects failures. Suggesting retries before diagnosis risks masking flakiness, and 'passes consistently' has no stated evidence standard. Exhaustion reporting is absent."
+      }
+    },
+    {
+      "case": {
+        "id": "creative",
+        "category": "creative writing",
+        "said": "Write a gentle bedtime story about a lighthouse and a lost bird. No scary scenes, and do not impose a word count.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Write a gentle bedtime story about a lighthouse and a lost bird. No scary scenes, and do not impose a word count.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 44.726,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "failed",
+          "reason": "invalid_prompt",
+          "detail": "Fix this violation: use a meaningful bounded correction loop: \"Loop: if Step 2 fails the stated checks, return to Step 1 to correct the failed requirements; then recheck Step 2 (max 2 rounds).\" Name the failed checks, correction action, and verification step. Rewrite the complete prompt, preserving the user's final intent, supplied facts, requested actions and exclusions. Do not invent details or numeric constraints. Keep the target's required formatting. Output only the finished prompt.\n\nTask structure (required for every prompt, however small):\n- Use at least 2 non-empty numbered steps and at most 12, sized by the complexity line. Do the requested work, then explicitly verify the result against task-specific Done when criteria. Do not add decorative steps that merely restate the goal.\n- Number steps consecutively. Write \"Step 1: ...\" with no dependency parentheses, never \"after none\". Show actual prerequisite edges: \"Step 2 (after 1): ...\" or \"Step 4 (after 2, 3): ...\". Use only comma-separated existing earlier step numbers: no missing, self, forward or duplicate dependencies.\n- Every task heading must include the literal word Step, starting with Step 1. Bare \"1. ...\" list items are not graph steps. Do not add a second task list or omit Step 1 while referring to it.\n- Optional parallelism only for truly independent work: \"Step 2 (after 1; parallel with 3): ...\". Parallel references may point forward, but neither step may depend directly or indirectly on the other. Never force parallelism.\n- Include a bounded correction-and-verification loop using this exact syntax: \"Loop: if Step 2 fails the stated accuracy checks, return to Step 1 to correct the inaccurate content; then recheck Step 2 (max 2 rounds).\" Replace the checks and correction with specific ones for this request. The failed-check and recheck step must be the SAME existing verification step; it must depend on the earlier correction/work step. Return to work to correct it, not just back to checking.\n- Stop when checks pass. If the limit is reached, report unmet criteria and limitations instead of claiming success. Use 1-8 rounds. This is the destination AI's workflow, not Promptify's internal rewrite repairs.\n- End with non-empty \"Done when: ...\" task-specific, verifiable success criteria, not generic \"request fulfilled\" boilerplate. The verification step and loop must check these criteria. Capability limits are reported honestly, not treated as successful completion.\n- Keep the user's goal, context, constraints, any allowed clarification and desired output format around the steps. Interactive tutoring/roleplay must proceed one turn at a time and wait; verify and correct the current turn without inventing a total interaction count. Non-chat media inputs are review-only workflows for a capable assistant, not promises that a raw generator can execute checks."
+        },
+        "elapsed_ms": 43274,
+        "history_saved": false,
+        "structure": null
+      },
+      "stderr": "Rejected repair:\nI need to write a gentle bedtime story about a lighthouse and a lost bird.\n\nContext: This is for a bedtime setting, so the tone must be calming and soothing. I have no specific details about the bird's species, the lighthouse's location, or the time of day, so I will establish these within the story to fit the gentle theme.\n\nConstraints: The story must contain absolutely no scary scenes, suspense, or frightening imagery. Do not impose a specific word count; let the story flow naturally to a satisfying conclusion.\n\nTask structure:\nStep 1: Draft the narrative focusing on the lighthouse keeper noticing the lost bird and the gradual process of guiding it back to safety using only warm, comforting imagery.\nStep 2 (after 1): Refine the story to ensure the pacing is slow and rhythmic, suitable for reading aloud before sleep, while confirming the absence of any threatening elements.\nStep 3 (after 2): Review the final draft as a skeptical parent checking for any hidden tension or abrupt endings that might disturb a child.\nLoop: if Step 3 identifies any scary scenes, abrupt endings, or tense moments, return to Step 2 to rewrite those specific sections with softer language; then recheck Step 3 (max 2 rounds).\nDone when: The story is complete, contains zero scary scenes, has a gentle and resolved ending, and the verification in Step 3 confirms no tension remains.\n---\n",
+      "grade": {
+        "intent_fidelity": 0,
+        "dependency_coherence": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality_no_invented_details": 0,
+        "overall_10": 0.0,
+        "evidence": "No usable prompt: repairs exhausted because the loop used 'if Step 3 identifies' rather than the required 'fails' grammar. The rejected draft is retained but receives no quality credit; nothing was returned as insertable or copyable output."
+      }
+    },
+    {
+      "case": {
+        "id": "media",
+        "category": "media review-only",
+        "said": "Create an image of a fox in a forest at night with glowing mushrooms. No text in the image.",
+        "process": "chrome",
+        "url": "https://midjourney.com"
+      },
+      "rendering": "legacy",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Create an image of a fox in a forest at night with glowing mushrooms. No text in the image.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "legacy",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://midjourney.com"
+      ],
+      "wall_seconds": 12.304,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "image_gen",
+        "outcome": {
+          "kind": "blocked",
+          "text": "Generate an image of a fox in a forest at night with glowing mushrooms, ensuring no text appears in the final output.; Step 1: Use the Midjourney tool in Chrome to generate an image based on the subject (fox), setting (forest at night), and details (glowing mushrooms) while explicitly excluding text.; Step 2 (after 1): Inspect the generated image to verify the presence of the fox, the forest night setting, glowing mushrooms, and the complete absence of any text.; Loop: if Step 2 fails the subject, setting, detail, or text-exclusion checks, return to Step 1 to refine the prompt and regenerate; then recheck Step 2 (max 2 rounds).; Done when: the image clearly depicts a fox in a forest at night with glowing mushrooms and contains absolutely no text. Stop on passing checks; report tool limitations or unverified criteria rather than claiming success at the limit.",
+          "reason": "graph_unsupported",
+          "detail": "This generator cannot be assumed to execute the mandatory task graph and check loop. Review the workflow and use a conversational AI with the appropriate tools."
+        },
+        "elapsed_ms": 10867,
+        "history_saved": false,
+        "structure": "valid"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 9.6,
+        "evidence": "Keeps fox, nighttime forest, glowing mushrooms and no text. Creation feeds explicit visual inspection; failures refine and regenerate, then recheck with two rounds and honest limits. Completion names every requested visual property. Selecting Midjourney from the synthetic destination assumes tool availability, but review-only delivery correctly blocks paste."
+      }
+    },
+    {
+      "case": {
+        "id": "explanation",
+        "category": "simple explanation",
+        "said": "Explain why the sky looks blue.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Explain why the sky looks blue.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 9.316,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Explain why the sky looks blue.\nStep 1: Explain the physical mechanism causing the sky's blue appearance, defining necessary terms and using a practical example.\nStep 2 (after 1): Check the explanation for technical accuracy and consistency between the mechanism and example.\nLoop: if Step 2 fails the accuracy or consistency checks, return to Step 1 to correct the mechanism and example; then recheck Step 2 (max 2 rounds).\nDone when: the scattering mechanism is explained accurately, terms are defined, and the example matches the mechanism. Stop on passing checks; at the limit report uncertainty."
+        },
+        "elapsed_ms": 7893,
+        "history_saved": false,
+        "structure": "valid",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "chatgpt",
+          "target_name": "ChatGPT",
+          "surface": "chat",
+          "task_type": "info.explain",
+          "task_label": "Explain a heat pump to a beginner",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "matched",
+          "auto_paste": true,
+          "warnings": [],
+          "max_chars": null,
+          "newlines": "keep"
+        },
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality_no_invented_details": 5,
+        "overall_10": 9.6,
+        "evidence": "Compact two-step work/verification graph preserves the science question without answering it locally. Accuracy/consistency failures correct mechanism/example and recheck with two rounds and uncertainty reporting. Completion is topic-specific, although technical accuracy still requires recipient judgment."
+      }
+    },
+    {
+      "case": {
+        "id": "coding",
+        "category": "coding fix and tests",
+        "said": "The login button sends two requests when clicked twice. Fix that and add a regression test, then run the relevant tests. Do not change the API.",
+        "process": "code"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "The login button sends two requests when clicked twice. Fix that and add a regression test, then run the relevant tests. Do not change the API.",
+        "--process",
+        "code",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km"
+      ],
+      "wall_seconds": 37.777,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "vscode",
+        "outcome": {
+          "kind": "blocked",
+          "text": "Fix the double-request bug in the login button and add a regression test, then run the relevant tests without changing the API.\n\nStep 1: Analyze the login button click handler to identify the logic causing two API requests when the button is clicked twice.\nStep 2 (after 1): Implement a fix to ensure only one request is sent per click, strictly without altering the API endpoints or their payloads.\nStep 3 (after 2): Write a regression test specifically designed to verify that the login button sends exactly one request upon a single click and does not send extra requests on subsequent rapid clicks.\nStep 4 (after 3): Run the relevant existing tests and the new regression test to confirm the fix works and no regressions were introduced.\nLoop: if Step 4 fails any tests or Step 3 does not accurately verify the single-request behavior, return to Step 2 to correct the implementation; then recheck Step 4 (max 2 rounds).\nDone when: Step 4 passes all relevant tests including the new regression test, and the API endpoints remain unchanged.",
+          "reason": "surface_unconfirmed",
+          "detail": "The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request."
+        },
+        "elapsed_ms": 36330,
+        "history_saved": false,
+        "structure": "repaired",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "vscode",
+          "target_name": "VS Code (Copilot Chat)",
+          "surface": "code_chat",
+          "task_type": "code.implement",
+          "task_label": "Implement a feature without unrelated changes",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "matched",
+          "auto_paste": false,
+          "warnings": [
+            "The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request."
+          ],
+          "max_chars": null,
+          "newlines": "keep"
+        }
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 3,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 7.2,
+        "evidence": "Preserves API immutability and tests, but Step 2's 'one request per click' conflicts with suppressing the second rapid click; Step 3 is clearer. Dependencies are ordered and failed tests trigger bounded correction/recheck. Done when tests pass without explicitly requiring the double-click scenario, weakening fidelity. Unconfirmed code input correctly returns review-only."
+      }
+    },
+    {
+      "case": {
+        "id": "research",
+        "category": "research",
+        "said": "Compare three task tracking tools for our volunteer team. Keep costs low, cite current sources, and flag uncertain prices.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Compare three task tracking tools for our volunteer team. Keep costs low, cite current sources, and flag uncertain prices.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 39.372,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Compare three task tracking tools for a volunteer team, prioritizing low cost, citing current sources and flagging any uncertain prices.\n\nStep 1: Identify three distinct task tracking tools suitable for volunteer teams, ensuring each option is evaluated against low-cost criteria.\nStep 2 (after 1): Research current pricing, features, and availability for each of the three tools, citing specific sources.\nStep 3 (after 2): Summarize the findings for each tool, explicitly noting any price uncertainties or missing information.\nStep 4 (after 3): Present a concise comparison highlighting the most cost-effective option while maintaining transparency about uncertainties.\nLoop: if Step 3 fails to clearly flag uncertain prices or lacks current source citations, return to Step 2 to re-research and correct the inaccurate content; then recheck Step 3 (max 2 rounds).\nDone when: The comparison includes three tools, all prices are current and sourced, uncertainties are explicitly flagged, and the output is concise."
+        },
+        "elapsed_ms": 38145,
+        "history_saved": false,
+        "structure": "repaired",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "chatgpt",
+          "target_name": "ChatGPT",
+          "surface": "chat",
+          "task_type": "general.request",
+          "task_label": "General request",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "uncertain",
+          "auto_paste": true,
+          "warnings": [
+            "No enabled task rule matched; using a general task graph without inventing a task type."
+          ],
+          "max_chars": null,
+          "newlines": "keep"
+        },
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 3,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 7.6,
+        "evidence": "Preserves three tools, low cost, current citations and price uncertainty. Step 3 summarizes rather than explicitly verifies, yet serves as the loop checker; the later comparison in Step 4 is not rechecked. Completion covers prices/sources but 'all prices are current' conflicts with permitted uncertain prices. Four steps are proportionate."
+      }
+    },
+    {
+      "case": {
+        "id": "writing",
+        "category": "writing",
+        "said": "Draft a polite email asking for the meeting notes. Do not apologize or invent a deadline.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Draft a polite email asking for the meeting notes. Do not apologize or invent a deadline.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 14.48,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Draft a polite email asking for the meeting notes without apologizing or inventing a deadline.\nStep 1: Draft a polite, direct request for the meeting notes ensuring no apologies are included and no specific deadline is invented.\nStep 2 (after 1): Check if the meeting date, participants, or context are missing; if so, ask at most one clarifying question about the most critical missing detail.\nStep 3 (after 2): If clarification is provided, refine the draft to include the necessary context while maintaining the no-apology and no-deadline constraints.\nStep 4 (after 3): Verify the final draft is polite, contains no apologies, no invented deadlines, and includes all provided context.\nLoop: if Step 4 fails the politeness, constraint (no apology/deadline), or context-completeness checks, return to Step 1 to revise the draft; then recheck Step 4 (max 2 rounds).\nDone when: the email draft is polite, free of apologies and invented deadlines, and either includes all necessary context or clearly requests it via one question. Stop on passing checks; at the limit report unmet criteria."
+        },
+        "elapsed_ms": 12841,
+        "history_saved": false,
+        "structure": "valid",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "chatgpt",
+          "target_name": "ChatGPT",
+          "surface": "chat",
+          "task_type": "communication.email",
+          "task_label": "Draft an email with a clear purpose and call to action",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "matched",
+          "auto_paste": true,
+          "warnings": [],
+          "max_chars": null,
+          "newlines": "keep"
+        },
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality_no_invented_details": 3,
+        "overall_10": 7.6,
+        "evidence": "Preserves polite request, no apology and no invented deadline, with no invented personal context. Four steps defer missing-context clarification until after drafting. Final verification and correction are connected, but Done when allows merely asking a question instead of delivering the requested draft."
+      }
+    },
+    {
+      "case": {
+        "id": "branches",
+        "category": "multi-branch complex",
+        "said": "Compare the supplied support tickets and interview notes independently, then combine their findings into an onboarding improvement plan. Preserve disagreements, cite the supplied evidence, and do not invent customer quotes or dates.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Compare the supplied support tickets and interview notes independently, then combine their findings into an onboarding improvement plan. Preserve disagreements, cite the supplied evidence, and do not invent customer quotes or dates.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 31.12,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Compare independently the supplied support tickets and interview notes, then synthesize their findings into an onboarding improvement plan while preserving disagreements, citing supplied evidence, and avoiding invented customer quotes or dates.\n\nStep 1: Read and extract all factual claims, dates, and customer quotes from the supplied support tickets and interview notes.\nStep 2 (after 1): Independently analyze the support tickets to identify onboarding friction points, then independently analyze the interview notes to identify onboarding friction points.\nStep 3 (after 2): Cross-reference findings between the two sources to identify areas of agreement and areas of disagreement.\nStep 4 (after 3): Draft the onboarding improvement plan, integrating agreed findings and explicitly listing disagreements with their respective evidence citations.\nStep 5 (after 4): Verify that no customer quotes or dates were invented and that all claims are cited to supplied evidence.\nLoop: if Step 5 fails the stated accuracy checks, return to Step 4 to correct the inaccurate content; then recheck Step 5 (max 2 rounds).\nDone when: The plan integrates agreed findings, explicitly lists disagreements with evidence citations, contains no invented quotes or dates, and all claims are sourced to supplied evidence."
+        },
+        "elapsed_ms": 29465,
+        "history_saved": false,
+        "structure": "repaired",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "chatgpt",
+          "target_name": "ChatGPT",
+          "surface": "chat",
+          "task_type": "general.request",
+          "task_label": "General request",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "uncertain",
+          "auto_paste": true,
+          "warnings": [
+            "No enabled task rule matched; using a general task graph without inventing a task type."
+          ],
+          "max_chars": null,
+          "newlines": "keep"
+        },
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 4,
+        "correction_recheck": 3,
+        "completion": 5,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 8.4,
+        "evidence": "Retains independent analysis of both sources, cross-reference, disagreements, evidence citations and no invented quotes/dates. The sequential chain is coherent; parallelism is optional, though both analyses share one step. Verification checks quotes/dates and claims but not explicitly preservation of disagreements; the loop's 'accuracy checks' correction is generic."
+      }
+    },
+    {
+      "case": {
+        "id": "correction",
+        "category": "correction and negative constraint",
+        "said": "Write an email about the delay, no wait translate the supplied paragraph into French. Keep the names and numbers unchanged; do not summarize it.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Write an email about the delay, no wait translate the supplied paragraph into French. Keep the names and numbers unchanged; do not summarize it.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 13.257,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Translate the supplied paragraph into French, keeping names and numbers unchanged and without summarizing.\nStep 1: Identify the paragraph to translate and verify if the specific text content is provided; if the text is missing, ask the user to supply it.\nStep 2 (after 1): Translate the paragraph into French, ensuring all proper names and numerical values remain exactly as in the original and no content is summarized or omitted.\nStep 3 (after 2): Review the translation to confirm that the meaning is preserved, names are unchanged, numbers are unchanged, and the text is not summarized.\nLoop: if Step 3 fails the fidelity checks (names, numbers, no summary), return to Step 2 to correct the translation; then recheck Step 3 (max 2 rounds).\nDone when: the French output is a direct translation of the provided paragraph with all names and numbers intact, no summarization, and meaning preserved. Stop when checks pass; if the text was missing, the goal is to have obtained it."
+        },
+        "elapsed_ms": 11706,
+        "history_saved": false,
+        "structure": "valid",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "chatgpt",
+          "target_name": "ChatGPT",
+          "surface": "chat",
+          "task_type": "language.translate",
+          "task_label": "Translate while preserving names, numbers, and meaning",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "matched",
+          "auto_paste": true,
+          "warnings": [],
+          "max_chars": null,
+          "newlines": "keep"
+        },
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 8.0,
+        "evidence": "Correctly replaces the cancelled email with French translation and retains names/numbers and no summarizing. Missing input is requested instead of invented; translation feeds fidelity checking and correction/recheck. The final sentence treats obtaining missing text as the goal, weakening translation completion; round-limit reporting is absent."
+      }
+    },
+    {
+      "case": {
+        "id": "inline",
+        "category": "inline coding workflow",
+        "said": "Fix the flaky API tests and run the suite until it passes. Do not skip failing tests or invent timeouts.",
+        "process": "gnome-terminal"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Fix the flaky API tests and run the suite until it passes. Do not skip failing tests or invent timeouts.",
+        "--process",
+        "gnome-terminal",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km"
+      ],
+      "wall_seconds": 14.808,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "terminal",
+        "outcome": {
+          "kind": "blocked",
+          "text": "Fix the flaky API tests and run the suite until it passes without skipping failing tests or inventing timeouts.; Step 1: Identify the specific flaky API tests and their failure patterns based on the provided context.; Step 2 (after 1): Propose or implement fixes for the identified flaky tests without inventing timeouts or skipping failures.; Step 3 (after 1; parallel with 2): Prepare the test suite configuration to run the full suite including the fixed tests.; Step 4 (after 2, 3): Execute the full test suite and monitor results for passing status.; Step 5 (after 4): Verify that all tests pass and no failures were skipped or artificially timed out.; Loop: if Step 5 fails the verification that all tests pass without skipped failures or invented timeouts, return to Step 2 to refine fixes or Step 4 to re-run with adjusted parameters; then recheck Step 5 (max 2 rounds).; Done when: the full API test suite passes with no skipped failures, no invented timeouts, and all fixes verified; if the limit is reached, report the remaining unmet criteria and limitations.",
+          "reason": "surface_unconfirmed",
+          "detail": "No enabled task rule matched; using a general task graph without inventing a task type. The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request."
+        },
+        "elapsed_ms": 13028,
+        "history_saved": false,
+        "structure": "valid",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "terminal",
+          "target_name": "Terminal",
+          "surface": "code_chat",
+          "task_type": "general.request",
+          "task_label": "General request",
+          "secondary_tasks": [],
+          "form": "inline_graph",
+          "conversational": false,
+          "reason": "uncertain",
+          "auto_paste": false,
+          "warnings": [
+            "No enabled task rule matched; using a general task graph without inventing a task type.",
+            "The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request."
+          ],
+          "max_chars": null,
+          "newlines": "collapse"
+        }
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 4,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 8.4,
+        "evidence": "Preserves no skipped failures/timeouts and full-suite verification in one line. Independent configuration preparation joins fixes before execution. 'Propose or implement' permits stopping short of the requested fix; loop permits alternate correction targets and adjusted parameters without clear limits. Completion and exhaustion reporting are concrete; unconfirmed terminal input correctly blocks paste."
+      }
+    },
+    {
+      "case": {
+        "id": "creative",
+        "category": "creative writing",
+        "said": "Write a gentle bedtime story about a lighthouse and a lost bird. No scary scenes, and do not impose a word count.",
+        "process": "chrome",
+        "url": "https://chatgpt.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Write a gentle bedtime story about a lighthouse and a lost bird. No scary scenes, and do not impose a word count.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://chatgpt.com"
+      ],
+      "wall_seconds": 12.756,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "chatgpt",
+        "outcome": {
+          "kind": "inserted",
+          "text": "Write a gentle bedtime story about a lighthouse and a lost bird, ensuring no scary scenes appear and avoiding any imposed word count.\nStep 1: Draft a gentle bedtime story featuring a lighthouse and a lost bird, maintaining a soothing tone and avoiding any frightening imagery.\nStep 2 (after 1): Verify the story contains no scary scenes and that the lighthouse and lost bird are central to the narrative.\nStep 3 (after 2): Check the story's pacing and tone to ensure it fits a gentle bedtime atmosphere.\nLoop: if Step 2 fails the check for scary scenes or missing central characters, return to Step 1 to revise the content; then recheck Step 2 (max 2 rounds).\nDone when: the story is gentle, features the lighthouse and lost bird, contains no scary scenes, and has no imposed word count. Stop on passing checks; at the limit report unresolved issues."
+        },
+        "elapsed_ms": 11157,
+        "history_saved": false,
+        "structure": "valid",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "chatgpt",
+          "target_name": "ChatGPT",
+          "surface": "chat",
+          "task_type": "creative.story",
+          "task_label": "Request an original story",
+          "secondary_tasks": [],
+          "form": "graph",
+          "conversational": false,
+          "reason": "matched",
+          "auto_paste": true,
+          "warnings": [],
+          "max_chars": null,
+          "newlines": "keep"
+        },
+        "delivery": "sent_unverified"
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 5,
+        "dependency_coherence": 4,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 8.8,
+        "evidence": "Keeps lighthouse, lost bird, gentle bedtime mood, no scary scenes and no imposed word count. Draft feeds content verification and tone/pacing checks. The loop corrects content then rechecks Step 2 but omits the later tone check. Task-specific completion and honest exhaustion are present; three steps are proportionate."
+      }
+    },
+    {
+      "case": {
+        "id": "media",
+        "category": "media review-only",
+        "said": "Create an image of a fox in a forest at night with glowing mushrooms. No text in the image.",
+        "process": "chrome",
+        "url": "https://midjourney.com"
+      },
+      "rendering": "adaptive",
+      "command": [
+        "/home/jrynx/.cache/promptify-target/debug/promptify-cli",
+        "rewrite",
+        "Create an image of a fox in a forest at night with glowing mushrooms. No text in the image.",
+        "--process",
+        "chrome",
+        "--rendering",
+        "adaptive",
+        "--model",
+        "qwen3.5-9b-q4km",
+        "--url",
+        "https://midjourney.com"
+      ],
+      "wall_seconds": 21.608,
+      "exit_code": 0,
+      "report": {
+        "job_id": 1,
+        "profile_id": "image_gen",
+        "outcome": {
+          "kind": "blocked",
+          "text": "Generate an image of a fox in a forest at night with glowing mushrooms containing no text; Step 1: Draft the image prompt describing a fox in a forest at night with glowing mushrooms and explicitly excluding text; Step 2 (after 1): Verify the prompt meets the requirements of a fox, forest, night, glowing mushrooms, and no text; Loop: if Step 2 fails the stated requirements, return to Step 1 to correct the mismatches; then recheck Step 2 (max 2 rounds); Done when: the final image prompt describes a fox in a forest at night with glowing mushrooms and explicitly excludes text.",
+          "reason": "graph_unsupported",
+          "detail": "This generator/query field cannot be assumed to execute the required graph and check loop. Review the workflow and use a conversational AI with the appropriate tools; it will not be pasted automatically. The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request."
+        },
+        "elapsed_ms": 19924,
+        "history_saved": false,
+        "structure": "repaired",
+        "routing": {
+          "version": 1,
+          "target_profile_id": "image_gen",
+          "target_name": "Image generator",
+          "surface": "image_prompt",
+          "task_type": "visual.image_generate",
+          "task_label": "Describe an image to generate",
+          "secondary_tasks": [],
+          "form": "inline_graph",
+          "conversational": false,
+          "reason": "matched",
+          "auto_paste": false,
+          "warnings": [
+            "This generator/query field cannot be assumed to execute the required graph and check loop. Review the workflow and use a conversational AI with the appropriate tools; it will not be pasted automatically.",
+            "The focused AI input is not confirmed. Review and copy the result, or explicitly select the input surface for this request."
+          ],
+          "max_chars": null,
+          "newlines": "collapse"
+        }
+      },
+      "stderr": "",
+      "grade": {
+        "intent_fidelity": 2,
+        "dependency_coherence": 4,
+        "correction_recheck": 2,
+        "completion": 1,
+        "proportionality_no_invented_details": 4,
+        "overall_10": 5.2,
+        "evidence": "Retains every visual detail and no text, but replaces creating an image with drafting an image prompt. Dependencies and a bounded text correction/recheck are present; no image-generation or image-inspection step exists. Done when verifies only the prompt, not the requested image. Review-only blocking is correct but does not repair the intent substitution."
+      }
+    }
+  ]
+}

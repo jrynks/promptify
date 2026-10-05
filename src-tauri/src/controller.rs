@@ -99,8 +99,10 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
     let status = match &event {
         OverlayEvent::Listening { .. } => Some("listening\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Transcribing } => Some("transcribing\u{2026}"),
-        OverlayEvent::Stage { stage: Stage::Generating } => Some("writing prompt\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::Generating } => Some("writing draft\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Revising } => Some("revising prompt\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::ReviewingQuality } => Some("reviewing quality\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::ImprovingWording } => Some("improving wording\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
         OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),
         OverlayEvent::Level { .. } | OverlayEvent::Partial { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } | OverlayEvent::Routing { .. } => None,
@@ -453,11 +455,19 @@ impl Worker {
                     emit_for(&app, practice, payload);
                 });
                 log::info!(
-                    "job {} profile={} outcome={} elapsed_ms={} history_saved={}",
+                    "job {} profile={} outcome={} elapsed_ms={} generation_ms={} structure_repairs={} quality_status={:?} quality_reviews={} quality_review_ms={} quality_rewrites={} quality_rewrite_ms={} quality_deadline_exhausted={} history_saved={}",
                     report.job_id,
                     report.profile_id,
                     report.outcome.kind(),
                     report.elapsed_ms,
+                    report.generation_elapsed_ms,
+                    report.structure_repair_attempts,
+                    report.quality.map(|quality| quality.status),
+                    report.quality.map_or(0, |quality| quality.review_calls),
+                    report.quality.map_or(0, |quality| quality.review_elapsed_ms),
+                    report.quality.map_or(0, |quality| quality.rewrite_calls),
+                    report.quality.map_or(0, |quality| quality.rewrite_elapsed_ms),
+                    report.quality.is_some_and(|quality| quality.deadline_exhausted),
                     report.history_saved
                 );
                 if let Outcome::Blocked { reason, detail, .. } = &report.outcome {
