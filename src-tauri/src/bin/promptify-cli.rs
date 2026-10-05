@@ -249,7 +249,6 @@ impl QualityEvalSummary {
         if let Some(quality) = sample.quality {
             self.rejected_count += usize::from(quality.status == promptify_core::quality::QualityStatus::Rejected);
             self.unavailable_count += usize::from(quality.status == promptify_core::quality::QualityStatus::Unavailable);
-            self.deadline_exhausted_count += usize::from(quality.deadline_exhausted);
             self.rewrite_calls += u64::from(quality.rewrite_calls);
             self.review_calls += u64::from(quality.review_calls);
             self.total_review_elapsed_ms += quality.review_elapsed_ms;
@@ -1076,6 +1075,32 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_deadline_is_counted_once_per_sample() {
+        let mut sample = QualityEvalSample {
+            suite: "test", case_id: "deadline".into(), category: "test".into(),
+            sample: 1, mode: "prompt", policy: None, tone: None,
+            request: "test".into(), output: None, outcome: "failed",
+            block_reason: None, failure_reason: Some("TimedOut".into()),
+            failure_detail: None, structure: None,
+            quality: Some(promptify_core::quality::QualityReport {
+                deadline_exhausted: true, ..Default::default()
+            }),
+            structure_repair_attempts: 0, usable: false, auto_paste_eligible: false,
+            output_chars: 0, generation_elapsed_ms: 0, wall_elapsed_ms: 0,
+            reported_elapsed_ms: 0, history_saved: false,
+        };
+        let mut summary = QualityEvalSummary::default();
+        summary.add(&sample);
+        assert_eq!(summary.deadline_exhausted_count, 1);
+        sample.quality = None;
+        summary.add(&sample);
+        assert_eq!(summary.deadline_exhausted_count, 2);
+        sample.failure_reason = None;
+        summary.add(&sample);
+        assert_eq!(summary.deadline_exhausted_count, 2);
+    }
 
     #[test]
     fn retired_features_fail_before_model_loading() {
