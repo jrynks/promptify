@@ -12,20 +12,13 @@ style = """
 The prompt goes to ChatGPT. Put the goal first. Include supplied context and constraints, and preserve the requested output format without inventing one.
 """
 [[profile.examples]]
-said = "okay help me think through pricing for the team plan um come up with three options figure out what could go wrong with each and how we'd test them then recommend one"
+said = "draft a short announcement about the new help center without inventing a launch date"
 prompt = """
-I need to choose pricing for our team plan. Compare three options, their risks and how to test them, then recommend one.
-
-Before you start, ask only necessary questions about our product, customers and competitors if the answer depends on them.
-
-Step 1: Propose 3 distinct pricing options, with how each is priced and who it suits best.
-Step 2 (after 1): Explain each option's risks and how to test them without inventing results or a testing budget.
-Step 3 (after 2): Recommend an option based on the comparison and risks, stating uncertainty.
-Step 4 (after 3): Check that all three options have risks and ways to test them, and that the recommendation follows from the comparison.
-Loop: if Step 4 fails the risk coverage or recommendation checks, return to Step 2 to repair missing risk tests and revise the recommendation; then recheck Step 4 (max 2 rounds). Stop when checks pass; at the limit report unmet criteria.
-Done when: every option has a risk and an experiment, and the recommendation follows from them.
-
-Format: a comparison table of the 3 options, then the recommendation in a short paragraph."""
+Draft a short announcement about the new help center without inventing a launch date.
+Step 1: Draft the announcement using the supplied details, leaving the launch date unspecified.
+Step 2 (after 1): Check that the announcement is short, describes the new help center, and contains no invented launch date.
+Loop: if Step 2 fails help-center coverage or no-invented-date checks, return to Step 1 to correct the announcement; then recheck Step 2 (max 2 rounds).
+Done when: the short announcement describes the new help center without an invented launch date. Report unmet checks at the limit."""
 [[profile.match]]
 hosts = ["chatgpt.com", "chat.openai.com"]
 [[profile.match]]
@@ -55,7 +48,7 @@ Step 4 (after 3): Check that each goal has relevant questions and that the synth
 Loop: if Step 4 fails the goal coverage or synthesis checks, return to Step 2 to revise the questions and synthesis method; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report gaps.
 Done when: goals, questions and a synthesis method are provided, with each goal traceable through the questions to the synthesis.
 
-Format: a heading for each part, with the guide in the order I would run the call."""
+Return the interview plan."""
 [[profile.match]]
 hosts = ["claude.ai"]
 [[profile.match]]
@@ -102,7 +95,7 @@ Step 4 (after 3): Verify that the comparison supports the choice without assumin
 Loop: if Step 4 fails the safety evidence or affordability checks, return to Step 2 to correct unsupported claims and revise the choice; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report missing evidence.
 Done when: suitable options have sourced safety and price evidence and the choice follows from my priorities.
 
-Use current listings and safety ratings, cite your sources, and present the shortlist as a comparison table."""
+Use current listings and safety ratings and cite your sources."""
 [[profile.match]]
 hosts = ["grok.com"]
 [[profile.match]]
@@ -208,8 +201,8 @@ The build fails after the dependency update. Find the cause and fix it.
 
 Step 1: Identify which dependency change breaks the build.
 Step 2 (after 1): Apply a scoped fix consistent with the diagnosis, without assuming whether code, configuration or the dependency needs changing.
-Step 3 (after 2): Run the build and the full test suite.
-Step 4 (after 3): Verify that the original dependency-related failure is resolved and the build and test results are successful.
+Step 3 (after 2): Update regression coverage for the dependency-related failure.
+Step 4 (after 2, 3): Run the build and full test suite on the final edits, including the original failure.
 Loop: if Step 4 fails the build or test checks, return to Step 2 to correct the cause using the new errors; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report what still fails.
 Done when: the build succeeds and all tests pass."""
 [[profile.match]]
@@ -243,7 +236,7 @@ State the task, the relevant files or commands the speaker named, and how to ver
 """
 [[profile.examples]]
 said = "the api tests are flaky figure out which ones fail fix them and then run the suite until it passes"
-prompt = "Fix the flaky API tests. Step 1: reproduce the flaky failures and identify their causes; Step 2 (after 1): fix the causes and add relevant regression coverage; Step 3 (after 2): run the suite and check the original flaky behavior; Step 4 (after 3): verify the results demonstrate the failures are resolved without hiding tests; Loop: if Step 4 fails the regression or suite checks, return to Step 2 to correct the remaining failures; then recheck Step 4 (max 2 rounds); Done when: the suite passes and the original flaky failures no longer reproduce. Stop on passing checks; at the limit report remaining failures."
+prompt = "Fix the flaky API tests. Step 1: reproduce the flaky failures and identify their causes; Step 2 (after 1): fix the causes; Step 3 (after 2): add relevant regression coverage; Step 4 (after 2, 3): run the suite and check the original flaky behavior on the final edits without hiding tests; Loop: if Step 4 fails the regression or suite checks, return to Step 2 to correct the remaining failures and affected regression coverage; then recheck Step 4 (max 2 rounds); Done when: the suite passes and the original flaky failures no longer reproduce. Stop on passing checks; at the limit report remaining failures."
 [[profile.match]]
 processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
 
@@ -301,4 +294,4 @@ Step 4 (after 3): Verify age appropriateness, activity safety and consistency of
 Loop: if Step 4 fails the age suitability or safety checks, return to Step 1 to replace unsafe activities and update the plan and supplies; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report concerns.
 Done when: the science-themed plan suits my daughter turning 8, identifies supervision and supplies, and does not assume unstated party details.
 
-Keep it practical and kid-safe, and format each part under its own heading."""
+Keep it practical and kid-safe."""

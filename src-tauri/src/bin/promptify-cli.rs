@@ -37,7 +37,7 @@ const USAGE: &str = "usage:
   promptify-cli eval <cases.toml>
   promptify-cli eval-adaptive <cases.toml> [--model ID]   (local model output contracts)
   promptify-cli eval-routing <cases.toml>   (classification only; no model needed)
-  promptify-cli eval-quality <cases.toml> [--samples 3] [--heldout-samples 3] [--dictation-samples 3] [--deadline-seconds 60|120] [--fresh-heldout PATH] [--output PATH]
+  promptify-cli eval-quality <cases.toml> [--samples 3] [--heldout-samples 3] [--dictation-samples 3] [--prompt-only] [--deadline-seconds 60|120] [--fresh-heldout PATH] [--output PATH]
       (synthetic local quality benchmark; requires the already-selected qwen3.5-9b-q4km; never reads history or pastes)
   promptify-cli prompt-types   (list the bundled taxonomy and activation status)
   promptify-cli route <text> [--process NAME] [--url URL] [--surface SURFACE] [--prompt-type ID]
@@ -84,11 +84,14 @@ impl Transcriber for TextTranscriber {
 }
 
 /// Evaluation and typed rewrites must neither read nor write the user's history.
-struct NoHistory;
+#[derive(Default)]
+struct NoHistory {
+    previous: Option<promptify_core::history::PreviousPrompt>,
+}
 
 impl History for NoHistory {
     fn context(&self, _: &str, _: &str) -> HistoryContext {
-        HistoryContext::default()
+        HistoryContext { previous: self.previous.clone(), ..HistoryContext::default() }
     }
     fn record(&self, _: NewHistoryEntry) -> Result<bool, BackendError> {
         Ok(false)
@@ -138,6 +141,20 @@ fn rewrite_with_deadline(
     routing: RoutingOptions,
     deadline: Duration,
 ) -> Result<promptify_core::pipeline::JobReport, String> {
+    rewrite_with_fixture(llm, ctx, text, mode, auto_mode, dictation_tone, routing, deadline, None)
+}
+
+fn rewrite_with_fixture(
+    llm: &Arc<LlmWorker>,
+    ctx: ActiveContext,
+    text: &str,
+    mode: Mode,
+    auto_mode: bool,
+    dictation_tone: DictationTone,
+    routing: RoutingOptions,
+    deadline: Duration,
+    previous_prompt: Option<&str>,
+) -> Result<promptify_core::pipeline::JobReport, String> {
     if mode != Mode::Prompt && (routing.task_type.is_some() || routing.surface.is_some()) {
         return Err("Task and surface overrides apply only to Prompt mode.".into());
     }
@@ -146,7 +163,9 @@ fn rewrite_with_deadline(
         transcriber: Arc::new(TextTranscriber(text.to_owned())),
         generator: llm.clone(),
         inserter: Arc::new(PrintInserter),
-        history: Arc::new(NoHistory),
+        history: Arc::new(NoHistory {
+            previous: previous_prompt.map(|text| promptify_core::history::PreviousPrompt { text: text.to_owned(), minutes_ago: 1 }),
+        }),
     };
     let limits = Limits { generation_timeout: deadline, ..Limits::default() };
     let orchestrator = Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), limits);
@@ -184,6 +203,7 @@ struct QualityEvalSample {
     policy: Option<&'static str>,
     tone: Option<&'static str>,
     request: String,
+    synthetic_previous_prompt: Option<String>,
     output: Option<String>,
     outcome: &'static str,
     block_reason: Option<String>,
@@ -286,6 +306,7 @@ fn append_quality_sample(
     policy: Option<Rendering>,
     tone: Option<DictationTone>,
     request: &str,
+    previous_prompt: Option<&str>,
     report: promptify_core::pipeline::JobReport,
     wall_elapsed_ms: u64,
 ) {
@@ -327,6 +348,7 @@ fn append_quality_sample(
         policy: policy_name,
         tone: tone_name,
         request: request.to_owned(),
+        synthetic_previous_prompt: previous_prompt.map(str::to_owned),
         output_chars: output.as_deref().map_or(0, |text| text.chars().count()),
         output,
         outcome: report.outcome.kind(),
@@ -344,6 +366,11 @@ fn append_quality_sample(
         history_saved: report.history_saved,
     };
     summaries.entry(group_key).or_default().add(&sample);
+    if std::env::var_os("PROMPTIFY_EVAL_SHOW").is_some() {
+        if let Ok(record) = serde_json::to_string(&sample) {
+            eprintln!("sample-json: {record}");
+        }
+    }
     samples.push(sample);
 }
 
@@ -408,6 +435,10 @@ fn run_quality_eval(
     let original_samples = quality_eval_count(args.get(2..).unwrap_or_default(), "--samples", 3)?;
     let heldout_samples = quality_eval_count(args.get(2..).unwrap_or_default(), "--heldout-samples", 3)?;
     let dictation_samples = quality_eval_count(args.get(2..).unwrap_or_default(), "--dictation-samples", 3)?;
+    let prompt_only = args.iter().any(|arg| arg == "--prompt-only");
+    if args.iter().filter(|arg| arg.as_str() == "--prompt-only").count() > 1 {
+        return Err("--prompt-only may only be specified once".into());
+    }
     let deadline_seconds = quality_eval_deadline(args.get(2..).unwrap_or_default())?;
     let deadline = Duration::from_secs(deadline_seconds);
 
@@ -428,7 +459,7 @@ fn run_quality_eval(
             for policy in policies {
                 for sample_index in 1..=sample_count {
                     let started = Instant::now();
-                    let report = rewrite_with_deadline(
+                    let report = rewrite_with_fixture(
                         &llm,
                         context.clone(),
                         &case.said,
@@ -437,6 +468,7 @@ fn run_quality_eval(
                         DictationTone::Natural,
                         RoutingOptions { rendering: policy, ..RoutingOptions::default() },
                         deadline,
+                        case.previous_prompt.as_deref(),
                     )?;
                     append_quality_sample(
                         &mut samples,
@@ -449,6 +481,7 @@ fn run_quality_eval(
                         Some(policy),
                         None,
                         &case.said,
+                        case.previous_prompt.as_deref(),
                         report,
                         started.elapsed().as_millis() as u64,
                     );
@@ -475,7 +508,7 @@ fn run_quality_eval(
         DictationTone::Concise,
         DictationTone::Unhinged,
     ];
-    for case in &suite.dictation {
+    for case in suite.dictation.iter().filter(|_| !prompt_only) {
         let context = text_context("notepad.exe".into(), None, String::new());
         for tone in rewrite_tones {
             for sample_index in 1..=dictation_samples {
@@ -501,6 +534,7 @@ fn run_quality_eval(
                     None,
                     Some(tone),
                     &case.said,
+                    None,
                     report,
                     started.elapsed().as_millis() as u64,
                 );
@@ -532,6 +566,9 @@ fn run_quality_eval(
             "original_samples_per_request": original_samples,
             "heldout_samples_per_request": heldout_samples,
             "dictation_samples_per_input_and_tone": dictation_samples,
+            "prompt_only": prompt_only,
+            "synthetic_previous_context_case_count": suite.prompt.iter().chain(&suite.heldout_prompt)
+                .filter(|case| case.previous_prompt.is_some()).count(),
             "original_case_count": suite.prompt.len(),
             "heldout_case_count": suite.heldout_prompt.len(),
             "fresh_heldout_case_count": fresh_heldout_count,
@@ -731,7 +768,7 @@ fn run() -> Result<(), String> {
             transcriber: Arc::new(TextTranscriber(args[2].clone())),
             generator: worker,
             inserter: Arc::new(promptify_lib::insert::ClipboardPaste),
-            history: Arc::new(NoHistory),
+            history: Arc::new(NoHistory::default()),
         }, ProfileSet::bundled(), ContextPolicy::default(), Limits::default());
         orchestrator.set_rendering(Rendering::Adaptive);
         let job = orchestrator.begin(Mode::Prompt).map_err(|error| error.to_string())?;
@@ -847,7 +884,7 @@ fn run() -> Result<(), String> {
             let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
             stt.preload().map_err(|e| e.0)?;
             let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
-            let service = TransformService::new(stt.clone(), llm, Arc::new(NoHistory), ProfileSet::bundled(), Limits::default());
+            let service = TransformService::new(stt.clone(), llm, Arc::new(NoHistory::default()), ProfileSet::bundled(), Limits::default());
             let cancel = CancelToken::default();
             let policy = ChunkPolicy::default();
             let mut live = LiveTranscript::default();
@@ -1077,11 +1114,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn no_history_only_returns_explicit_synthetic_reference() {
+        assert!(NoHistory::default().context("unused", "unused").previous.is_none());
+        let fixture = NoHistory {
+            previous: Some(promptify_core::history::PreviousPrompt { text: "synthetic reference".into(), minutes_ago: 1 }),
+        };
+        let context = fixture.context("unused", "unused");
+        assert!(context.examples.is_empty());
+        assert_eq!(context.previous.unwrap().text, "synthetic reference");
+    }
+
+    #[test]
     fn quality_deadline_is_counted_once_per_sample() {
         let mut sample = QualityEvalSample {
             suite: "test", case_id: "deadline".into(), category: "test".into(),
             sample: 1, mode: "prompt", policy: None, tone: None,
-            request: "test".into(), output: None, outcome: "failed",
+            request: "test".into(), synthetic_previous_prompt: None, output: None, outcome: "failed",
             block_reason: None, failure_reason: Some("TimedOut".into()),
             failure_detail: None, structure: None,
             quality: Some(promptify_core::quality::QualityReport {

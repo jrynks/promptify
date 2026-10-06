@@ -978,7 +978,7 @@ mod tests {
         assert_eq!(report.routing.unwrap().task_type.as_str(), "communication.email");
         let calls = h.generator.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].len(), 4);
+        assert_eq!(calls[0].len(), 8);
         assert!(calls[0][0].content.contains("Required task graph:"));
         assert!(calls[0].last().unwrap().content.contains("Complexity: simple."));
     }

@@ -92,7 +92,15 @@ These finite synthetic results are not a guarantee of production quality.
 The additional compact-instruction experiment is retained in
 [`quality-review-batch-7.json`](./eval/quality-review-batch-7.json), with its earlier snapshot in
 [`quality-review-batch-7-intermediate.json`](./eval/quality-review-batch-7-intermediate.json).
-Independent grading of that experiment was interrupted; it is not evidence of a passing quality gate.
+That experiment has now been independently regraded for Prompt: original means are 7.08/10
+(default) and 8.50 (adaptive), and held-out means are 8.24 and 7.79. Its 175/186 usable Prompt
+outputs (94.1%), 13 approved sub-7 outputs, and one observed approved critical fidelity failure
+do not meet the unchanged gates. The [bounded Prompt continuation workflow](./eval/prompt-continuation-quality-grades.md)
+retains the raw baseline, per-sample five-dimensional grades, synthetic context boundary, and all three permitted
+measured refinement rounds. None passes: round-3 means are 7.64/7.07 (original default/adaptive) and 7.84/7.76
+(held-out), 182/210 outputs (86.7%) are usable, and six reviewer-approved critical fidelity failures remain. Two
+consecutive passing batches were therefore not achieved. These instruction changes are unreleased experiments, not
+a demonstrated quality improvement.
 The saved source includes the instruction refinements, but no new installer release has been published.
 
 The developer CLI accepts `--dictation-tone clean_transcript|natural|casual|formal|concise|unhinged` on `run` and
@@ -642,7 +650,7 @@ C++ and OpenMP redistributable DLLs into the application and creates an unsigned
 | `route "<text>" [--process NAME] [--url URL] [--surface SURFACE] [--prompt-type ID]` | inspect adaptive task/surface selection without generation or user-history access |
 | `eval-routing eval\adaptive.toml` | deterministic task/form regression benchmark, with per-case failures and macro-F1 |
 | `eval-adaptive eval\adaptive.toml [--model ID]` | generate with the selected installed model; validate graphs, numeric preservation, and required user details |
-| `eval-quality eval/quality-review.toml [--samples 3] [--heldout-samples 3] [--dictation-samples 3] [--deadline-seconds 60\|120] [--fresh-heldout PATH] [--output PATH]` | repeated synthetic quality review using only the already-selected `qwen3.5-9b-q4km`; no history access or paste |
+| `eval-quality eval/quality-review.toml [--samples 3] [--heldout-samples 3] [--dictation-samples 3] [--prompt-only] [--deadline-seconds 60\|120] [--fresh-heldout PATH] [--output PATH]` | repeated synthetic quality review using only the already-selected `qwen3.5-9b-q4km`; no user history access or native paste; `--prompt-only` skips Dictation; an optional case `previous_prompt` is explicit synthetic reference only |
 
 Set `PROMPTIFY_LOG=1` for diagnostics on stderr. `PROMPTIFY_LLM_NO_PREFIX_CACHE=1` turns off the language model's
 prompt-prefix cache for comparison.

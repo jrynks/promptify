@@ -1,0 +1,28 @@
+# Add to the cumulative batch-7 corpus; identical throughout this bounded workflow.
+[[heldout_prompt]]
+id = "c01"
+category = "resume_without_reference"
+said = "resume iterating on prompt quality now"
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[heldout_prompt]]
+id = "c02"
+category = "resume_with_synthetic_reference"
+said = "resume iterating on prompt quality now"
+previous_prompt = "Improve the generated prompts for our support assistant. Review the latest synthetic evaluations, preserve the existing acceptance criteria, and refine generation instructions without case-specific logic. Generate actual outputs for the same requests and new held-out requests, grade fidelity, dependencies, correction and rechecking, completion, and proportionality independently of the runtime reviewer. Require at least 8.5/10 for each prompt policy on originals and held-outs with three samples per request, no approved output below 7/10, no approved critical fidelity failures, at least 95% complete usable output including review-only results, and two consecutive full passing batches. Use the already-selected local model, at most three refinement rounds, and report remaining failures at the limit."
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[heldout_prompt]]
+id = "c03"
+category = "explicit_parallel_independence"
+said = "Analyze the supplied usability recordings and crash logs independently in parallel, then combine the evidence into a prioritized fix list. Keep disagreements and source references; do not use one analysis to steer the other."
+process = "chrome"
+url = "https://chatgpt.com"
+
+[[heldout_prompt]]
+id = "c04"
+category = "correct_recheck_both_checks"
+said = "Fix the export bug, add a regression test for an empty selection, and run both the regression test and lint after the final edit. If either fails, correct the cause and rerun both; do not substitute an ordinary populated export for the empty-selection test."
+process = "code"

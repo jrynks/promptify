@@ -66,6 +66,9 @@ pub struct QualityPromptCase {
     pub url: Option<String>,
     #[serde(default)]
     pub title: String,
+    /// Explicit synthetic reference only; never loaded from the user's history.
+    #[serde(default)]
+    pub previous_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -419,9 +422,23 @@ mod tests {
             let incomplete = format!("Step 1: a\nLoop: if a fails, return to Step 1 (max 2 rounds).{checks}");
             assert_eq!(score(Expect::Graph, Some(&incomplete)), CaseScore { valid: false, structured: true, pass: false });
         }
+
         let dup = "[[case]]\nid = \"c01\"\nsaid = \"x\"\nexpect = \"flat\"\n[[case]]\nid = \"c01\"\nsaid = \"y\"\nexpect = \"flat\"\n";
         assert!(load_cases(dup).is_err());
         assert!(load_cases("case = []").is_err());
+    }
+
+    #[test]
+    fn continuation_fixture_is_explicit_and_not_implicit_history() {
+        let source = format!("{}\n{}", include_str!("../../../eval/quality-review.toml"),
+            include_str!("../../../eval/quality-review-heldout-continuation.toml"));
+        let suite = load_quality_suite(&source).unwrap();
+        let absent = suite.heldout_prompt.iter().find(|case| case.id == "c01").unwrap();
+        let present = suite.heldout_prompt.iter().find(|case| case.id == "c02").unwrap();
+        assert_eq!(absent.said, present.said);
+        assert!(absent.previous_prompt.is_none());
+        assert!(present.previous_prompt.as_deref().unwrap().contains("two consecutive"));
+        assert!(suite.prompt.iter().all(|case| case.previous_prompt.is_none()));
     }
 
     #[test]
