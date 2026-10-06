@@ -343,7 +343,7 @@ pub fn validate_rewrite_with_context(policy: &ResolvedPromptPolicy, original: &s
     }
     static NUMBERS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d+(?:[.,]\d+)*\b").unwrap());
     static STRUCTURAL: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)\bStep\s+\d+|\(\s*(?:after\s+[\d,\s]+(?:;\s*parallel with\s+[\d,\s]+)?|parallel with\s+[\d,\s]+)\)|\bmax\s+\d+\s+rounds\b").unwrap());
+        LazyLock::new(|| Regex::new(r"(?i)\bStep\s+\d+|\(\s*after\s+[\d,\s]+(?:;\s*parallel with\s+[\d,\s]+)?\)|\bmax\s+\d+\s+rounds\b").unwrap());
     let facts = if matches!(policy.form, PromptForm::Graph | PromptForm::InlineGraph) {
         STRUCTURAL.replace_all(text, "")
     } else {
@@ -385,11 +385,10 @@ pub fn validate_rewrite_with_context(policy: &ResolvedPromptPolicy, original: &s
             return Err(format!("the prompt introduces the number {number}, which the user did not supply; remove invented numeric facts and constraints, and use only valid numeric dependency clauses"));
         }
     }
-    let user_content = crate::structure::without_graph_metadata(text);
-    let facts_lower = user_content.to_lowercase();
-    let content_numbers: BTreeSet<_> = NUMBERS.find_iter(&user_content).map(|value| value.as_str().replace(',', "")).collect();
+    let facts_lower = text.to_lowercase();
+    let all_result_numbers: BTreeSet<_> = NUMBERS.find_iter(text).map(|value| value.as_str().replace(',', "")).collect();
     for number in &source_numbers {
-        if !content_numbers.contains(number) && !has_alias(&facts_lower, number) {
+        if !all_result_numbers.contains(number) && !has_alias(&facts_lower, number) {
             return Err("a stated number is missing; preserve the user's numeric constraints and facts".into());
         }
     }
@@ -962,7 +961,7 @@ mod tests {
         policy.form = PromptForm::InlineGraph;
         policy.newlines = NewlinePolicy::Collapse;
         policy.max_chars = Some(450);
-        let graph = "Make a sound. Step 1: Create it; Step 2 (after 1): Check its source and texture; Loop: if Step 2 fails the source or texture checks, return to Step 1 to correct and regenerate it; then recheck Step 2 (max 2 rounds); Done when: the sound matches the stated source and texture. ";
+        let graph = "Make a sound. Step 1: Create it.; Step 2 (after 1): Check it.; Loop: if it misses a requirement, return to Step 1 (max 2 rounds).; Done when: the sound meets the request. ";
         let exact = format!("{graph}{}", "a".repeat(450 - graph.chars().count()));
         assert_eq!(exact.chars().count(), 450);
         assert!(validate_output(&policy, &exact).is_ok());
@@ -975,7 +974,7 @@ mod tests {
         let policy = route("Draft an article about our library");
         let graph = |body: &str| {
             format!(
-                "Draft an article about our library.\nStep 1: {body}\nStep 2 (after 1): Check the facts.\nLoop: if Step 2 fails the factual support checks, return to Step 1 to correct unsupported facts; then recheck Step 2 (max 2 rounds).\nDone when: all stated facts are supported."
+                "Draft an article about our library.\nStep 1: {body}\nStep 2 (after 1): Check the facts.\nLoop: if any fact is unsupported, return to Step 1 (max 2 rounds).\nDone when: all stated facts are supported."
             )
         };
         let invented = graph("Say the library is at 123 Main Street.");
@@ -983,34 +982,5 @@ mod tests {
         assert!(validate_rewrite_with_context(&policy, "Draft an article about our library", "The library is at 123 Main Street.", &invented).is_ok());
         let missing = graph("Write the draft concisely.");
         assert!(validate_rewrite(&policy, "Draft a 100 word article about our library", &missing).is_err());
-        assert!(validate_rewrite(&policy, "Draft 2 articles about our library", &missing).is_err(), "a Step 2 label does not preserve two requested articles");
-        let original = "Explain Step 2 of the installation guide";
-        let explanation = "Explain Step 2 of the installation guide.\nStep 1: Explain the named guide step using the supplied guide.\nStep 2 (after 1): Verify the explanation against the guide.\nLoop: if Step 2 fails the explanation fidelity checks, return to Step 1 to correct the explanation; then recheck Step 2 (max 2 rounds).\nDone when: the explanation matches the named installation guide step.";
-        assert!(validate_rewrite(&route(original), original, explanation).is_ok(), "a step reference in the user's goal is a supplied fact, not graph metadata");
-    }
-
-    #[test]
-    fn parallel_and_loop_numbers_are_workflow_not_invented_facts() {
-        let original = "Compare the supplied options";
-        let policy = route(original);
-        let graph = "Compare the supplied options.\nStep 1 (parallel with 2): Research the first supplied option.\nStep 2 (parallel with 1): Research the other supplied option.\nStep 3 (after 1, 2): Compare evidence.\nStep 4 (after 3): Verify the evidence and comparison.\nLoop: if Step 4 fails the evidence checks, return to Step 1 to repair evidence and update the comparison; then recheck Step 4 (max 2 rounds).\nDone when: the comparison is supported by evidence for the supplied options.";
-        assert!(validate_rewrite(&policy, original, graph).is_ok());
-    }
-
-    #[test]
-    fn enabled_examples_have_specific_checks_and_no_invented_numeric_facts() {
-        for task in catalog().all().iter().filter(|task| task.status == RecipeStatus::Enabled) {
-            let policy = route(&task.examples[0]);
-            validate_rewrite(&policy, &task.examples[0], &task.rewrite).unwrap_or_else(|error| panic!("{}: {error}", task.id.as_str()));
-            let summary = validate_graph(&task.rewrite).unwrap();
-            let range = match crate::structure::complexity(&task.examples[0]) {
-                crate::structure::Complexity::Simple => 2..=2,
-                crate::structure::Complexity::Moderate => 3..=4,
-                crate::structure::Complexity::Complex => 4..=8,
-            };
-            assert!(range.contains(&summary.steps), "{}: {summary:?} outside {range:?}", task.id.as_str());
-            assert!(!task.rewrite.contains("The request is fulfilled faithfully"));
-            assert!(!task.rewrite.contains("return to Step 2 (max"));
-        }
     }
 }

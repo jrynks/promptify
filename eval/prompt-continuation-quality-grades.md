@@ -405,6 +405,14 @@ source generation and review instructions have therefore been restored to their 
 The per-round instruction snapshots above preserve the experimental versions, and the evaluation
 harness additions remain in place for future measurement.
 
+**Second follow-up decision:** in live desktop use, the restored batch-7 build still produced no
+usable prompt in two consecutive attempts. One was blocked by the quality review, and the other
+failed the stricter graph validation after two repairs. All application code was therefore
+reverted to v1.2.1 (`27f9aaf`), the version before the quality-review iterations. This removes
+the runtime quality review, tone-aware dictation and the iteration harness. A saved
+`dictation_tone` setting is still accepted and ignored. The evaluation evidence in `eval/` is
+kept for reference, but the harness commands that produced it are no longer in the code.
+
 Limitations: grading is by Copilot reading actual outputs. It is independent of the runtime
 reviewer, but it is neither blinded nor human. The corpus is finite and synthetic. Request-ID
 seeds are not paired across rounds whose call counts differ, so per-case differences include

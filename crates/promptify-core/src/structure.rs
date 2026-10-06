@@ -150,40 +150,22 @@ pub enum GraphError {
     LoopLimitOutOfRange { rounds: usize },
     #[error("the prompt has no numbered steps; lay the work out as Step 1, Step 2 (after 1) and so on")]
     NoSteps,
-    #[error("the prompt has no loop; add a correction and repeat-verification loop such as \"Loop: if Step 2 fails the stated requirements, return to Step 1 to correct the mismatches; then recheck Step 2 (max 2 rounds).\"")]
+    #[error("the prompt has no loop; add a check loop such as \"Loop: if the result misses a requirement, return to Step 1 (max 2 rounds).\"")]
     NoLoop,
     #[error("the prompt has no checks; add a non-empty \"Done when:\" section listing conditions that can fail, such as \"the tests pass\" or \"every claim has a source\"")]
     NoChecks,
-    #[error("the prompt needs at least two steps: do the work, then verify it")]
-    TooFewSteps,
-    #[error("Step {step} has an empty body; describe the work or verification it performs")]
-    EmptyStep { step: usize },
-    #[error("Step {step} has malformed dependencies; use (after 1, 2) for prerequisites and add ; parallel with N only for an independent step. Use existing step numbers and never list the same step as both dependent and parallel")]
-    DependencySyntax { step: usize },
-    #[error("Step {step} repeats reference {on} in a dependency or parallel clause")]
-    DuplicateReference { step: usize, on: usize },
-    #[error("the graph has no dependency edges; make the verification step depend explicitly on the work it checks")]
-    NoDependencies,
-    #[error("Step {step} lists nonexistent or self parallel reference {on}")]
-    ParallelReference { step: usize, on: usize },
-    #[error("Step {step} cannot run parallel with Step {on}: one depends directly or transitively on the other")]
-    ParallelConflict { step: usize, on: usize },
-    #[error("use a meaningful bounded correction loop: \"Loop: if Step 2 fails the stated checks, return to Step 1 to correct the failed requirements; then recheck Step 2 (max 2 rounds).\" Name the failed checks, correction action, and verification step")]
-    LoopCorrectionSyntax,
-    #[error("loop verification Step {check} must be the failed-check step and depend directly or transitively on correction Step {target}; do not return to the checker itself")]
-    LoopDoesNotRecheckWork { target: usize, check: usize },
 }
 
 static HEADING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)(?:^|[;.:])[ \t]*(?:[-*>#]+[ \t]*)?(?:\d+[.)][ \t]+)?(?:\*\*)?step[ \t]+(\d+)[ \t]*(?:\(([^)\n]*)\))?(?:[ \t]*\*\*)?[ \t]*[:\-–—]")
+    Regex::new(r"(?im)(?:^|[;.])[ \t]*(?:[-*>#]+[ \t]*)?(?:\d+[.)][ \t]+)?(?:\*\*)?step[ \t]+(\d+)[ \t]*(?:\(([^)\n]*)\))?(?:[ \t]*\*\*)?[ \t]*[:\-–—]")
         .expect("valid heading regex")
 });
 static LOOP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bloop(?:\*\*)?[ \t]*:").expect("valid loop regex"));
+static LOOP_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bdone when(?:\*\*)?[ \t]*:|\bloop(?:\*\*)?[ \t]*:").expect("valid loop end regex"));
 static STEP_REFS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bsteps?[ \t]+(\d+(?:[ \t]*(?:-|–|,|and|to|or)[ \t]*\d+)*)").expect("valid step reference regex")
 });
-static INLINE_DEPENDENCY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\(\s*(?:after|depends on)\s+\d+[^)\n]*\)").expect("valid inline dependency regex"));
 static ROUNDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(?:max(?:imum)?|at most|up to|no more than)\.?[ \t]+(?:of[ \t]+)?(\d+)[ \t]*(?:rounds?|iterations?|attempts?|times|passes|cycles)\b")
         .expect("valid rounds regex")
@@ -192,44 +174,6 @@ static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").expect("val
 
 fn numbers(text: &str) -> impl Iterator<Item = usize> + '_ {
     NUMBER.find_iter(text).map(|m| m.as_str().parse().unwrap_or(usize::MAX))
-}
-
-fn section_end(text: &str) -> usize {
-    [HEADING.find(text), LOOP.find(text), DONE_WHEN.find(text)]
-        .into_iter().flatten().map(|m| m.start()).min().unwrap_or(text.len())
-}
-
-fn nonempty(text: &str) -> bool {
-    text.chars().any(char::is_alphanumeric)
-}
-
-fn loop_body(text: &str) -> &str {
-    let rest = text.trim_start_matches(|c: char| c.is_whitespace() || c == '*');
-    &rest[..section_end(rest)]
-}
-
-/// Removes workflow metadata, but retains step references in the goal and task prose:
-/// those can refer to a user-supplied document rather than this graph.
-pub(crate) fn without_graph_metadata(text: &str) -> String {
-    let mut spans: Vec<_> = HEADING.find_iter(text).map(|heading| (heading.start(), heading.end())).collect();
-    for heading in LOOP.find_iter(text) {
-        let rest = &text[heading.end()..];
-        let segment = loop_body(rest);
-        let start = heading.end() + rest.len() - rest.trim_start_matches(|c: char| c.is_whitespace() || c == '*').len();
-        spans.extend(STEP_REFS.find_iter(segment).chain(ROUNDS.find_iter(segment)).map(|field| (start + field.start(), start + field.end())));
-    }
-    spans.sort_unstable();
-    let mut result = String::new();
-    let mut cursor = 0;
-    for (start, end) in spans {
-        if start >= cursor {
-            result.push_str(&text[cursor..start]);
-            result.push(' ');
-        }
-        cursor = cursor.max(end);
-    }
-    result.push_str(&text[cursor..]);
-    result
 }
 
 /// Checks numbered steps, dependency order (which rules out cycles) and loop bounds.
@@ -261,7 +205,13 @@ pub fn validate_structure(text: &str) -> Result<GraphSummary, GraphError> {
     let mut loops = 0;
     for found in LOOP.find_iter(text) {
         loops += 1;
-        let segment = loop_body(&text[found.end()..]);
+        let rest = text[found.end()..].trim_start_matches(|c: char| c.is_whitespace() || c == '*');
+        let mut end = rest.find('\n').unwrap_or(rest.len());
+        let line = &rest[..end];
+        for cut in [LOOP_END.find(line).map(|m| m.start()), HEADING.find(line).map(|m| m.start())].into_iter().flatten() {
+            end = end.min(cut);
+        }
+        let segment = &rest[..end];
 
         let targets: Vec<usize> = STEP_REFS.captures_iter(segment).flat_map(|c| numbers(c.get(1).unwrap().as_str()).collect::<Vec<_>>()).collect();
         if targets.is_empty() {
@@ -281,127 +231,30 @@ pub fn validate_structure(text: &str) -> Result<GraphSummary, GraphError> {
     Ok(GraphSummary { steps, loops })
 }
 
-/// Final-output contract, stronger than the backwards-compatible structure inspection API.
-/// Checks explicit graph edges and correction/recheck wiring, not the semantic truth of prose.
+/// A prompt for an AI must be a well-formed loop or graph: numbered steps, at least one loop, and a
+/// "Done when" line with the checks the work must pass.
 pub fn validate_graph(text: &str) -> Result<GraphSummary, GraphError> {
     if opens_with_role(text) {
         return Err(GraphError::RoleOpener);
-    }
-    let headings: Vec<_> = HEADING.captures_iter(text).collect();
-    if let Some(marker) = STEP_START.find_iter(text).find(|marker| {
-        !headings.iter().any(|heading| heading.get(0).unwrap().start() == marker.start())
-    }) {
-        let step = numbers(marker.as_str()).next().unwrap_or(1);
-        return Err(GraphError::DependencySyntax { step });
     }
     let summary = validate_structure(text)?;
     if summary.steps == 0 {
         return Err(GraphError::NoSteps);
     }
-    if summary.steps < 2 {
-        return Err(GraphError::TooFewSteps);
-    }
-    let mut dependencies = vec![Vec::new(); summary.steps];
-    let mut parallels = vec![Vec::new(); summary.steps];
-    for (index, heading) in headings.iter().enumerate() {
-        let step = index + 1;
-        let heading_end = heading.get(0).unwrap().end();
-        let body_end = headings.get(index + 1).and_then(|next| next.get(0)).map_or(text.len(), |next| next.start());
-        let rest = &text[heading_end..body_end];
-        if INLINE_DEPENDENCY.is_match(rest) {
-            return Err(GraphError::DependencySyntax { step });
-        }
-        if !nonempty(&rest[..section_end(rest)]) {
-            return Err(GraphError::EmptyStep { step });
-        }
-        if let Some(clause) = heading.get(2) {
-            let caps = DEPENDENCIES.captures(clause.as_str().trim())
-                .ok_or(GraphError::DependencySyntax { step })?;
-            for capture in 1..=3 {
-                let list = if capture == 1 { &mut dependencies[index] } else { &mut parallels[index] };
-                if let Some(values) = caps.get(capture) {
-                    for on in numbers(values.as_str()) {
-                        if list.contains(&on) {
-                            return Err(GraphError::DuplicateReference { step, on });
-                        }
-                        list.push(on);
-                    }
-                }
-            }
-        }
-        for &on in &dependencies[index] {
-            if on == 0 || on >= step {
-                return Err(GraphError::ForwardDependency { step, on });
-            }
-        }
-        for &on in &parallels[index] {
-            if on == 0 || on > summary.steps || on == step {
-                return Err(GraphError::ParallelReference { step, on });
-            }
-        }
-    }
-    if dependencies.iter().all(Vec::is_empty) {
-        return Err(GraphError::NoDependencies);
-    }
-    // Dependencies always point backwards, so closure is computed in one ordered pass.
-    let mut ancestors = vec![vec![false; summary.steps]; summary.steps];
-    for index in 0..summary.steps {
-        for &on in &dependencies[index] {
-            ancestors[index][on - 1] = true;
-            for prior in 0..on - 1 {
-                ancestors[index][prior] |= ancestors[on - 1][prior];
-            }
-        }
-    }
-    for (index, parallel) in parallels.iter().enumerate() {
-        for &on in parallel {
-            if ancestors[index][on - 1] || ancestors[on - 1][index] {
-                return Err(GraphError::ParallelConflict { step: index + 1, on });
-            }
-        }
-    }
     if summary.loops == 0 {
         return Err(GraphError::NoLoop);
     }
-    for found in LOOP.find_iter(text) {
-        let segment = loop_body(&text[found.end()..]);
-        let caps = CORRECTION_LOOP.captures(segment).ok_or(GraphError::LoopCorrectionSyntax)?;
-        if !nonempty(&caps[2]) || !nonempty(&caps[4]) {
-            return Err(GraphError::LoopCorrectionSyntax);
-        }
-        let failed = caps[1].parse::<usize>().unwrap_or(usize::MAX);
-        let target = caps[3].parse::<usize>().unwrap_or(usize::MAX);
-        let check = caps[5].parse::<usize>().unwrap_or(usize::MAX);
-        for target in [failed, target, check] {
-            if target == 0 || target > summary.steps {
-                return Err(GraphError::LoopTargetMissing { target });
-            }
-        }
-        if failed != check || !ancestors[check - 1][target - 1] {
-            return Err(GraphError::LoopDoesNotRecheckWork { target, check });
-        }
-    }
     let has_checks = DONE_WHEN.find_iter(text).any(|heading| {
         let rest = &text[heading.end()..];
-        nonempty(&rest[..section_end(rest)])
+        let end = [HEADING.find(rest), LOOP.find(rest), DONE_WHEN.find(rest)]
+            .into_iter().flatten().map(|m| m.start()).min().unwrap_or(rest.len());
+        rest[..end].chars().any(char::is_alphanumeric)
     });
     if !has_checks {
         return Err(GraphError::NoChecks);
     }
     Ok(summary)
 }
-
-static DEPENDENCIES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(?:after[ \t]+(\d+(?:[ \t]*,[ \t]*\d+)*)(?:[ \t]*;[ \t]*parallel with[ \t]+(\d+(?:[ \t]*,[ \t]*\d+)*))?|parallel with[ \t]+(\d+(?:[ \t]*,[ \t]*\d+)*))$").unwrap()
-});
-
-static STEP_START: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)(?:^|[;.])[ \t]*(?:[-*>#]+[ \t]*)?(?:\d+[.)][ \t]+)?(?:\*\*)?step[ \t]+\d+").unwrap()
-});
-
-static CORRECTION_LOOP: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)^if\s+Step\s+(\d+)\s+fails\s+([^;]+?),\s*return to Step\s+(\d+)\s+to\s+([^;]+?);\s*then recheck Step\s+(\d+)\s*\(max\s+(\d+)\s+rounds?\)\s*[.]?(?:\s|$)").unwrap()
-});
 
 static DONE_WHEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?im)(?:^|[;.])[ \t]*(?:[-*>#]+[ \t]*)?(?:\*\*)?done when(?:\*\*)?[ \t]*:(?:[ \t]*\*\*)?")
@@ -412,87 +265,6 @@ static DONE_WHEN: LazyLock<Regex> = LazyLock::new(|| {
 mod tests {
     use super::*;
 
-    const COMPACT: &str = "Explain the result.\nStep 1: Draft the explanation.\nStep 2 (after 1): Verify its accuracy against the supplied evidence.\nLoop: if Step 2 fails the accuracy checks, return to Step 1 to correct unsupported claims; then recheck Step 2 (max 2 rounds).\nDone when: the explanation is supported by the supplied evidence.";
-
-    #[test]
-    fn accepts_compact_multiline_inline_and_markdown_correction_graphs() {
-        assert_eq!(validate_graph(COMPACT), Ok(GraphSummary { steps: 2, loops: 1 }));
-        assert!(validate_graph(&COMPACT.replace('\n', "; ")).is_ok());
-        let labeled = COMPACT.replace("Explain the result.\nStep 1:", "Explain the result; Task graph: Step 1:").replace('\n', "; ");
-        assert!(validate_graph(&labeled).is_ok(), "a section label before Step 1 is not a missing step");
-        assert!(validate_graph(&COMPACT.replace("the explanation is supported by the supplied evidence.", "Step 1 is supported by the supplied evidence.")).is_ok());
-        let markdown = COMPACT.replace("Step 1:", "**Step 1:**")
-            .replace("Step 2 (after 1):", "**Step 2 (after 1):**")
-            .replace("Loop: if", "- **Loop:**\nIf")
-            .replace("; then recheck", ";\nthen recheck")
-            .replace("Done when:", "## **Done when:**\n");
-        assert!(validate_graph(&markdown).is_ok(), "{markdown}");
-    }
-
-    #[test]
-    fn rejects_one_step_empty_steps_and_decorative_graphs() {
-        let one = "Step 1: Write it.\nLoop: if it fails, return to Step 1 (max 2 rounds).\nDone when: it is clear.";
-        assert!(validate_structure(one).is_ok(), "legacy inspection remains available");
-        assert_eq!(validate_graph(one), Err(GraphError::TooFewSteps));
-        for body in ["", "...", "** **"] {
-            assert_eq!(validate_graph(&COMPACT.replace("Draft the explanation.", body)), Err(GraphError::EmptyStep { step: 1 }));
-            assert_eq!(validate_graph(&COMPACT.replace("Verify its accuracy against the supplied evidence.", body)), Err(GraphError::EmptyStep { step: 2 }));
-        }
-        assert_eq!(validate_graph(&COMPACT.replace(" (after 1)", "")), Err(GraphError::NoDependencies));
-    }
-
-    #[test]
-    fn rejects_malformed_and_duplicate_dependencies() {
-        for clause in ["after", "after one", "after 1,", "after 1 or loop exit", "depends on Step 1", "after 1; anything 1"] {
-            let text = COMPACT.replace("after 1", clause);
-            assert_eq!(validate_graph(&text), Err(GraphError::DependencySyntax { step: 2 }), "{clause}");
-        }
-        assert_eq!(validate_graph(&COMPACT.replace("after 1", "after 1, 1")), Err(GraphError::DuplicateReference { step: 2, on: 1 }));
-        assert_eq!(validate_graph(&COMPACT.replace("(after 1):", "(after 1:")), Err(GraphError::DependencySyntax { step: 2 }));
-        for on in [0, 2, 3] {
-            assert_eq!(validate_graph(&COMPACT.replace("after 1", &format!("after {on}"))), Err(GraphError::ForwardDependency { step: 2, on }));
-        }
-    }
-
-    #[test]
-    fn accepts_independent_forward_parallel_work_and_join() {
-        let graph = "Build a comparison.\nStep 1: Identify criteria.\nStep 2 (after 1; parallel with 3): Research option A.\nStep 3 (after 1; parallel with 2): Research option B.\nStep 4 (after 2, 3): Compare the options.\nStep 5 (after 4): Verify source support and consistent criteria.\nLoop: if Step 5 fails the source or consistency checks, return to Step 2 to repair the research and comparison; then recheck Step 5 (max 8 rounds).\nDone when: both options have supported findings under consistent criteria.";
-        assert_eq!(validate_graph(graph), Ok(GraphSummary { steps: 5, loops: 1 }));
-        assert!(validate_graph(&graph.replace('\n', "; ")).is_ok());
-        assert_eq!(validate_graph(&graph.replace("parallel with 3", "parallel with 6")), Err(GraphError::ParallelReference { step: 2, on: 6 }));
-        assert_eq!(validate_graph(&graph.replace("parallel with 3", "parallel with 2")), Err(GraphError::ParallelReference { step: 2, on: 2 }));
-        assert_eq!(validate_graph(&graph.replace("parallel with 3", "parallel with 3, 3")), Err(GraphError::DuplicateReference { step: 2, on: 3 }));
-        assert_eq!(validate_graph(&graph.replace("parallel with 3", "parallel with 4")), Err(GraphError::ParallelConflict { step: 2, on: 4 }));
-        assert_eq!(validate_graph(&graph.replace("parallel with 3", "parallel with 5")), Err(GraphError::ParallelConflict { step: 2, on: 5 }));
-        assert_eq!(validate_graph(&graph.replace("after 1; parallel with 2", "after 2; parallel with 2")), Err(GraphError::ParallelConflict { step: 2, on: 3 }));
-    }
-
-    #[test]
-    fn loop_requires_explicit_failure_correction_recheck_and_bounds() {
-        for bad in [
-            "Loop: if the result is wrong, return to Step 1 (max 2 rounds).",
-            "Loop: return to Step 1 to correct claims; then recheck Step 2 (max 2 rounds).",
-            "Loop: if Step 2 fails ..., return to Step 1 to correct claims; then recheck Step 2 (max 2 rounds).",
-            "Loop: if Step 2 fails accuracy, return to Step 1 to ...; then recheck Step 2 (max 2 rounds).",
-            "Loop: if Step 2 fails accuracy, return to Step 1 to correct claims (max 2 rounds).",
-        ] {
-            let text = COMPACT.lines().map(|line| if line.starts_with("Loop:") { bad } else { line }).collect::<Vec<_>>().join("\n");
-            assert_eq!(validate_graph(&text), Err(GraphError::LoopCorrectionSyntax), "{bad}");
-        }
-        assert_eq!(validate_graph(&COMPACT.replace("return to Step 1", "return to Step 2")), Err(GraphError::LoopDoesNotRecheckWork { target: 2, check: 2 }));
-        assert_eq!(validate_graph(&COMPACT.replace("recheck Step 2", "recheck Step 1")), Err(GraphError::LoopDoesNotRecheckWork { target: 1, check: 1 }));
-        for (from, to) in [("return to Step 1", "return to Step 3"), ("recheck Step 2", "recheck Step 3"), ("if Step 2", "if Step 3")] {
-            assert_eq!(validate_graph(&COMPACT.replace(from, to)), Err(GraphError::LoopTargetMissing { target: 3 }));
-        }
-        assert_eq!(validate_graph(&COMPACT.replace("(max 2 rounds)", "")), Err(GraphError::LoopWithoutLimit));
-        for rounds in [0, 9] {
-            assert_eq!(validate_graph(&COMPACT.replace("max 2 rounds", &format!("max {rounds} rounds"))), Err(GraphError::LoopLimitOutOfRange { rounds }));
-        }
-        let unrelated = COMPACT.replace("\nLoop:", "\nStep 3: Verify unrelated work.\nLoop:")
-            .replace("if Step 2", "if Step 3").replace("recheck Step 2", "recheck Step 3");
-        assert_eq!(validate_graph(&unrelated), Err(GraphError::LoopDoesNotRecheckWork { target: 1, check: 3 }));
-    }
-
     const GOOD: &str = "\
 Fix the flaky upload test.
 
@@ -501,8 +273,8 @@ Step 2 (after 1): Find the root cause.
 Step 3 (after 2): Fix it.
 Step 4 (after 2; parallel with 3): Add a regression test.
 Step 5 (after 3, 4): Run the full test suite.
-Loop: if Step 5 fails the regression or suite checks, return to Step 3 to correct the implementation and affected tests; then recheck Step 5 (max 3 rounds).
-Done when: the upload regression test and suite pass.";
+Loop: if any test fails, return to Step 2 (max 3 rounds).
+Done when: the suite passes 5 times in a row.";
 
     #[test]
     fn accepts_well_formed_graphs() {
@@ -515,11 +287,11 @@ Done when: the upload regression test and suite pass.";
 
     #[test]
     fn a_reference_to_done_when_inside_a_loop_does_not_end_it() {
-        let graph = "Research the evidence.\nStep 1: Find reliable sources.\nStep 2 (after 1): Check the findings.\nLoop: if Step 2 fails the criteria in Done when, return to Step 1 to replace unsupported evidence; then recheck Step 2 (max 3 rounds).\nDone when: every claim has a reliable source.";
+        let graph = "Research the evidence.\nStep 1: Find reliable sources.\nStep 2 (after 1): Check the findings.\nLoop: if the criteria in Done when are not met, return to Step 2 (max 3 rounds).\nDone when: every claim has a reliable source.";
         assert!(validate_graph(graph).is_ok());
         assert!(validate_graph(&graph.replace('\n', "; ")).is_ok());
-        let missing = graph.replace("return to Step 1 to replace unsupported evidence;", "revise the findings;");
-        assert_eq!(validate_graph(&missing), Err(GraphError::LoopCorrectionSyntax));
+        let missing = graph.replace("return to Step 2 (max 3 rounds)", "revise the findings (max 3 rounds)");
+        assert_eq!(validate_graph(&missing), Err(GraphError::LoopWithoutTarget));
     }
 
     #[test]
@@ -561,12 +333,6 @@ Done when: the upload regression test and suite pass.";
     }
 
     #[test]
-    fn rejects_dependency_metadata_outside_step_headings() {
-        let malformed = GOOD.replace("Step 1: Reproduce the failure and capture the error.", "Step 1: Reproduce the failure and capture the error. (after 0)");
-        assert_eq!(validate_graph(&malformed), Err(GraphError::DependencySyntax { step: 1 }));
-    }
-
-    #[test]
     fn rejects_unbounded_or_dangling_loops() {
         let base = "Step 1: a\nStep 2 (after 1): b\n";
         assert_eq!(validate_structure(&format!("{base}Loop: if it fails, try again (max 2 rounds).")), Err(GraphError::LoopWithoutTarget));
@@ -590,7 +356,7 @@ Done when: the upload regression test and suite pass.";
     fn loop_headings_may_be_on_their_own_line() {
         let base = "Step 1: Build.\nStep 2 (after 1): Test.\n";
         for heading in ["Loop:\n", "**Loop:**\n\n", "- **Loop:**\r\n"] {
-            let text = format!("{base}{heading}If Step 2 fails the test checks,\nreturn to Step 1 to fix the failures;\nthen recheck Step 2 (max 3 rounds).\nDone when: all tests pass.");
+            let text = format!("{base}{heading}If a test fails, return to Step 1 (max 3 rounds).\nDone when: all tests pass.");
             assert_eq!(validate_graph(&text), Ok(GraphSummary { steps: 2, loops: 1 }));
         }
         let missing = format!("{base}**Loop:**\n**Done when:** Step 1 succeeds within max 2 rounds.");
@@ -653,15 +419,14 @@ Done when: the upload regression test and suite pass.";
         assert_eq!(validate_graph(GOOD), Ok(GraphSummary { steps: 5, loops: 1 }));
         assert_eq!(validate_graph("Just a prompt."), Err(GraphError::NoSteps));
         assert_eq!(validate_graph("Step 1: a\nStep 2 (after 1): b\nDone when: b works."), Err(GraphError::NoLoop));
-        let graph = "Step 1: Build.\nStep 2 (after 1): Test.\nLoop: if Step 2 fails the tests, return to Step 1 to fix failures; then recheck Step 2 (max 2 rounds).";
-        assert_eq!(validate_graph(graph), Err(GraphError::NoChecks));
-        assert!(validate_graph(&format!("**Done when:** tests pass.\n{graph}")).is_ok(), "checks may come first");
+        assert_eq!(validate_graph("Step 1: a\nLoop: if a fails, return to Step 1 (max 2 rounds)."), Err(GraphError::NoChecks));
+        assert!(validate_graph("**Done when:** a passes.\nStep 1: a\nLoop: if a fails, return to Step 1 (max 2 rounds).").is_ok(), "checks may come first");
         assert_eq!(validate_graph("Step 1: a\nStep 2 (after 2): b\nLoop: if it fails, return to Step 1 (max 2 rounds).\nDone when: b."), Err(GraphError::ForwardDependency { step: 2, on: 2 }));
     }
 
     #[test]
     fn completion_checks_must_have_their_own_nonempty_section() {
-        let graph = "Step 1: Implement the change.\nStep 2 (after 1): Run the tests.\nLoop: if Step 2 fails the tests, return to Step 1 to fix the failures; then recheck Step 2 (max 2 rounds).";
+        let graph = "Step 1: Run the tests.\nLoop: if a test fails, return to Step 1 (max 2 rounds).";
         for empty in ["Done when:", "Done when: ...", "**Done when:**", "Done when: ;"] {
             for text in [format!("{empty}\n{graph}"), format!("{graph}\n{empty}")] {
                 assert_eq!(validate_graph(&text), Err(GraphError::NoChecks), "{text}");
@@ -673,9 +438,9 @@ Done when: the upload regression test and suite pass.";
             assert!(validate_graph(&format!("{checks}\n{graph}")).is_ok(), "{checks}");
             assert!(validate_graph(&format!("{graph}\n{checks}")).is_ok(), "{checks}");
         }
-        let inline = format!("Done when: all tests pass; {}", graph.replace('\n', "; "));
-        assert!(validate_graph(&inline).is_ok());
-        let empty_inline = format!("Done when: ; {}", graph.replace('\n', "; "));
-        assert_eq!(validate_graph(&empty_inline), Err(GraphError::NoChecks));
+        let inline = "Done when: all tests pass; Step 1: Run the tests; Loop: if a test fails, return to Step 1 (max 2 rounds).";
+        assert!(validate_graph(inline).is_ok());
+        let empty_inline = "Done when: ; Step 1: Run the tests; Loop: if a test fails, return to Step 1 (max 2 rounds).";
+        assert_eq!(validate_graph(empty_inline), Err(GraphError::NoChecks));
     }
 }

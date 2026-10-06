@@ -164,7 +164,6 @@ pub fn run() {
             commands::set_modifier_hold,
             commands::set_modifier_keyboard,
             commands::set_auto_mode,
-            commands::set_dictation_tone,
             commands::set_code_chat_paste,
             commands::set_vocabulary,
             commands::set_screen_text_apps,

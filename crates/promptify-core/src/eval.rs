@@ -56,66 +56,6 @@ pub fn load_cases(source: &str) -> Result<Vec<EvalCase>, String> {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct QualityPromptCase {
-    pub id: String,
-    pub category: String,
-    pub said: String,
-    #[serde(default = "default_process")]
-    pub process: String,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub title: String,
-    /// Explicit synthetic reference only; never loaded from the user's history.
-    #[serde(default)]
-    pub previous_prompt: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QualityDictationCase {
-    pub id: String,
-    pub category: String,
-    pub said: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct QualityEvalSuite {
-    pub prompt: Vec<QualityPromptCase>,
-    pub heldout_prompt: Vec<QualityPromptCase>,
-    pub dictation: Vec<QualityDictationCase>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QualityEvalFile {
-    #[serde(default, rename = "prompt")]
-    prompt: Vec<QualityPromptCase>,
-    #[serde(default, rename = "heldout_prompt")]
-    heldout_prompt: Vec<QualityPromptCase>,
-    #[serde(default)]
-    dictation: Vec<QualityDictationCase>,
-}
-
-pub fn load_quality_suite(source: &str) -> Result<QualityEvalSuite, String> {
-    let file: QualityEvalFile = toml::from_str(source).map_err(|error| error.to_string())?;
-    if file.prompt.is_empty() || file.heldout_prompt.is_empty() || file.dictation.is_empty() {
-        return Err("quality evaluation requires original prompt, held-out prompt, and dictation cases".into());
-    }
-    let mut seen = std::collections::HashSet::new();
-    for id in file.prompt.iter().map(|case| &case.id)
-        .chain(file.heldout_prompt.iter().map(|case| &case.id))
-        .chain(file.dictation.iter().map(|case| &case.id))
-    {
-        if id.trim().is_empty() || !seen.insert(id.as_str()) {
-            return Err(format!("quality evaluation has an empty or duplicate case id {id:?}"));
-        }
-    }
-    Ok(QualityEvalSuite { prompt: file.prompt, heldout_prompt: file.heldout_prompt, dictation: file.dictation })
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AdaptiveCase {
     pub id: String,
     pub said: String,
@@ -283,130 +223,8 @@ mod tests {
     }
 
     #[test]
-    fn saved_local_model_comparison_uses_the_production_contract() {
-        let cases = load_cases(include_str!("../../../eval/graph-quality.toml")).unwrap();
-        assert_eq!(cases.len(), 7);
-        let evidence: serde_json::Value = serde_json::from_str(include_str!("../../../eval/graph-quality-results.json")).unwrap();
-        for phase in ["baseline", "updated"] {
-            let outputs = evidence[phase].as_array().unwrap();
-            assert_eq!(outputs.len(), cases.len() * 2);
-            let mut passed = 0;
-            for output in outputs {
-                let case = cases.iter().find(|case| output["case_id"].as_str() == Some(case.id.as_str())).unwrap();
-                let text = output["text"].as_str();
-                let result = score(case.expect, text);
-                passed += usize::from(result.pass);
-                if phase == "updated" && text.is_some() {
-                    assert!(result.pass, "{}: {:?}", case.id, output["rendering"]);
-                }
-                if let Some(text) = text {
-                    assert_eq!(text.chars().count() as u64, output["output_characters"].as_u64().unwrap());
-                    let definition = evidence["cases"].as_array().unwrap().iter()
-                        .find(|definition| definition["id"].as_str() == Some(case.id.as_str())).unwrap();
-                    let matches: Vec<_> = definition["required_detail_patterns"].as_array().unwrap().iter()
-                        .map(|pattern| regex::RegexBuilder::new(pattern.as_str().unwrap()).case_insensitive(true).build().unwrap().is_match(text))
-                        .collect();
-                    assert_eq!(matches.iter().all(|matched| *matched), output["all_detail_patterns_present"].as_bool().unwrap());
-                }
-            }
-            assert_eq!(passed as u64, evidence["summary"][phase]["strict_contract_passed"].as_u64().unwrap());
-        }
-    }
-
-    #[test]
-    fn actual_text_input_quality_grades_retain_real_outcomes_and_consistent_scores() {
-        let evidence: serde_json::Value = serde_json::from_str(include_str!("../../../eval/graph-quality-graded-results.json")).unwrap();
-        assert_eq!(evidence["model"], "qwen3.5-9b-q4km");
-        let dimensions = evidence["rubric"]["dimensions"].as_array().unwrap();
-        assert_eq!(dimensions.len(), 5);
-        let outputs = evidence["results"].as_array().unwrap();
-        assert_eq!(outputs.len(), 18);
-        let mut seen = std::collections::BTreeSet::new();
-        let mut returned = 0;
-        for output in outputs {
-            let id = output["case"]["id"].as_str().unwrap();
-            let rendering = output["rendering"].as_str().unwrap();
-            assert!(seen.insert((id, rendering)));
-            assert!(output["case"]["said"].as_str().is_some_and(|said| !said.is_empty()));
-            assert!(output["command"].as_array().is_some_and(|args| args.iter().any(|arg| arg == "rewrite")));
-            let outcome = &output["report"]["outcome"];
-            let text = outcome["text"].as_str();
-            if let Some(text) = text {
-                assert!(score(Expect::Graph, Some(text)).pass, "{id}/{rendering}");
-                returned += 1;
-            } else {
-                assert_eq!(outcome["kind"], "failed");
-                assert!(output["stderr"].as_str().is_some_and(|detail| detail.contains("Rejected repair:")));
-            }
-
-            let grade = &output["grade"];
-            let sum: u64 = dimensions.iter().map(|dimension| {
-                let score = grade[dimension.as_str().unwrap()].as_u64().unwrap();
-                assert!(score <= 5);
-                if text.is_none() { assert_eq!(score, 0); }
-                score
-            }).sum();
-            assert_eq!(grade["overall_10"].as_f64().unwrap(), sum as f64 * 2.0 / 5.0);
-            assert!(grade["evidence"].as_str().is_some_and(|detail| !detail.is_empty()));
-        }
-        assert_eq!(returned, 17);
-    }
-
-    #[test]
-    fn quality_suite_covers_original_heldout_and_dictation_cases() {
-        let suite = load_quality_suite(include_str!("../../../eval/quality-review.toml")).unwrap();
-        assert_eq!(suite.prompt.len(), 9);
-        assert_eq!(suite.heldout_prompt.len(), 8);
-        assert_eq!(suite.dictation.len(), 3);
-        assert!(suite.dictation.iter().all(|case| !case.said.is_empty()));
-        assert!(suite.heldout_prompt.iter().any(|case| case.category == "missing_reference"));
-        assert!(suite.heldout_prompt.iter().any(|case| case.category == "post_verification_edit"));
-        assert!(load_quality_suite("[[prompt]]\nid='same'\ncategory='x'\nsaid='x'\n[[heldout_prompt]]\nid='same'\ncategory='x'\nsaid='x'\n[[dictation]]\nid='d'\ncategory='x'\nsaid='x'").is_err());
-
-        for (fragment, expected_id) in [
-            (include_str!("../../../eval/quality-review-heldout-batch-1.toml"), "b1_h09"),
-            (include_str!("../../../eval/quality-review-heldout-batch-2.toml"), "b2_h11"),
-            (include_str!("../../../eval/quality-review-heldout-batch-3.toml"), "b3_h13"),
-            (include_str!("../../../eval/quality-review-heldout-batch-4.toml"), "b4_h15"),
-            (include_str!("../../../eval/quality-review-heldout-batch-5.toml"), "b5_h17"),
-            (include_str!("../../../eval/quality-review-heldout-batch-6.toml"), "b6_h19"),
-            (include_str!("../../../eval/quality-review-heldout-batch-7.toml"), "b7_h21"),
-        ] {
-            let combined = format!("{}\n\n{fragment}", include_str!("../../../eval/quality-review.toml"));
-            let expanded = load_quality_suite(&combined).unwrap();
-            assert_eq!(expanded.prompt.len(), 9);
-            let expected_heldout_count = match expected_id {
-                "b1_h09" => 10,
-                "b2_h11" => 12,
-                "b3_h13" => 14,
-                "b4_h15" => 16,
-                "b5_h17" => 18,
-                "b6_h19" => 20,
-                _ => 22,
-            };
-            assert_eq!(expanded.heldout_prompt.len(), expected_heldout_count);
-            assert!(expanded.heldout_prompt.iter().any(|case| case.id == expected_id));
-            if expected_id == "b3_h13" {
-                assert!(expanded.heldout_prompt.iter().any(|case| case.id == "b3_h14"));
-            }
-            if expected_id == "b4_h15" {
-                assert!(expanded.heldout_prompt.iter().any(|case| case.id == "b4_h16"));
-            }
-            if expected_id == "b5_h17" {
-                assert!(expanded.heldout_prompt.iter().any(|case| case.id == "b5_h18"));
-            }
-            if expected_id == "b6_h19" {
-                assert!(expanded.heldout_prompt.iter().any(|case| case.id == "b6_h20"));
-            }
-            if expected_id == "b7_h21" {
-                assert!(expanded.heldout_prompt.iter().any(|case| case.id == "b7_h22"));
-            }
-        }
-    }
-
-    #[test]
     fn scoring_requires_valid_structure_matching_expectation() {
-        let graph = "Step 1: Draft the explanation.\nStep 2 (after 1): Check its accuracy.\nLoop: if Step 2 fails the accuracy checks, return to Step 1 to correct inaccuracies; then recheck Step 2 (max 2 rounds).\nDone when: the explanation is accurate.";
+        let graph = "Step 1: a\nStep 2 (after 1): b\nLoop: if b fails, return to Step 1 (max 2 rounds).\nDone when: b passes.";
         assert!(score(Expect::Graph, Some(graph)).pass);
         let persona = format!("Act as a senior DevOps engineer.\n{graph}");
         assert_eq!(score(Expect::Graph, Some(&persona)), CaseScore { valid: false, structured: true, pass: false });
@@ -422,23 +240,9 @@ mod tests {
             let incomplete = format!("Step 1: a\nLoop: if a fails, return to Step 1 (max 2 rounds).{checks}");
             assert_eq!(score(Expect::Graph, Some(&incomplete)), CaseScore { valid: false, structured: true, pass: false });
         }
-
         let dup = "[[case]]\nid = \"c01\"\nsaid = \"x\"\nexpect = \"flat\"\n[[case]]\nid = \"c01\"\nsaid = \"y\"\nexpect = \"flat\"\n";
         assert!(load_cases(dup).is_err());
         assert!(load_cases("case = []").is_err());
-    }
-
-    #[test]
-    fn continuation_fixture_is_explicit_and_not_implicit_history() {
-        let source = format!("{}\n{}", include_str!("../../../eval/quality-review.toml"),
-            include_str!("../../../eval/quality-review-heldout-continuation.toml"));
-        let suite = load_quality_suite(&source).unwrap();
-        let absent = suite.heldout_prompt.iter().find(|case| case.id == "c01").unwrap();
-        let present = suite.heldout_prompt.iter().find(|case| case.id == "c02").unwrap();
-        assert_eq!(absent.said, present.said);
-        assert!(absent.previous_prompt.is_none());
-        assert!(present.previous_prompt.as_deref().unwrap().contains("two consecutive"));
-        assert!(suite.prompt.iter().all(|case| case.previous_prompt.is_none()));
     }
 
     #[test]

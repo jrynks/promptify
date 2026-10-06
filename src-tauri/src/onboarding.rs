@@ -658,19 +658,7 @@ mod tests {
 
     fn finished(job_id: u64, outcome: Outcome) -> OverlayEvent {
         OverlayEvent::Finished {
-            report: JobReport {
-                job_id,
-                profile_id: "generic".into(),
-                outcome,
-                elapsed_ms: 1,
-                history_saved: false,
-                structure: None,
-                generation_elapsed_ms: 0,
-                structure_repair_attempts: 0,
-                quality: None,
-                routing: None,
-                delivery: None,
-            },
+            report: JobReport { job_id, profile_id: "generic".into(), outcome, elapsed_ms: 1, history_saved: false, structure: None, routing: None, delivery: None },
             capped: false,
         }
     }

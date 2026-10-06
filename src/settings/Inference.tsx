@@ -120,7 +120,7 @@ export function Inference({ state, onChange, guided = false }: { state: Inferenc
   return (
     <section className={guided ? "tour-target" : undefined} aria-label="Inference settings">
       <h2>Inference</h2>
-      <p className="hint">One selected model handles every language-model stage: generation, repair, review, rewriting, and dictation polish. No automatic provider fallback. Speech recognition remains local.</p>
+      <p className="hint">One selected model handles every language-model stage: prompt generation and structural repair. Dictation does not use it. No automatic provider fallback. Speech recognition remains local.</p>
       {!config && !state.error && <p role="status">Loading inference configuration…</p>}
       {state.error && <div role="alert"><p className="error">{state.error}</p><button disabled={busy} onClick={() => void act(state.retry)}>Retry inference configuration</button>
         <button disabled={busy} onClick={() => {
@@ -203,7 +203,7 @@ export function Inference({ state, onChange, guided = false }: { state: Inferenc
         </select></label>}
         <label className="inline"><input type="checkbox" checked={draft.stream} onChange={(event) => patch({ stream: event.target.checked })} />Stream responses</label>
         {policy.remote && <div className="inference-disclosure">
-          <p>This non-loopback endpoint receives transcripts, prompt instructions, permitted app/context metadata, opted-in focused screen text, enabled history context, and review drafts. History and screen-text opt-ins still control collection. Local history storage does not prevent outgoing context. Check the endpoint operator's retention and privacy policies.</p>
+          <p>This non-loopback endpoint receives transcripts, prompt instructions, permitted app/context metadata, opted-in focused screen text, enabled history context, and drafts sent for structural repair. History and screen-text opt-ins still control collection. Local history storage does not prevent outgoing context. Check the endpoint operator's retention and privacy policies.</p>
           <label className="inline"><input type="checkbox" checked={draft.consent_remote} onChange={(event) => patch({ consent_remote: event.target.checked })} />I consent to sending this context to this endpoint.</label>
         </div>}
         {policy.insecure && <div className="inference-disclosure">

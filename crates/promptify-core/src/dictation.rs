@@ -19,19 +19,6 @@ const TERMINAL: [char; 3] = ['.', '!', '?'];
 /// Removes spoken fillers while keeping the speaker's words. Deliberately conservative:
 /// "like" and "you know" are only removed when set off as a parenthetical.
 pub fn remove_fillers(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    for segment in text.split_inclusive('\n') {
-        if let Some(line) = segment.strip_suffix('\n') {
-            result.push_str(&remove_fillers_line(line.trim()));
-            result.push('\n');
-        } else {
-            result.push_str(&remove_fillers_line(segment.trim()));
-        }
-    }
-    result
-}
-
-fn remove_fillers_line(text: &str) -> String {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut capitalize_next = false;
@@ -178,13 +165,7 @@ impl Vocabulary {
             let found = &caps[0];
             terms.iter().find(|r| r.from.eq_ignore_ascii_case(found) || r.from.to_lowercase() == found.to_lowercase()).map_or_else(|| found.to_owned(), |r| r.to.clone())
         });
-        replaced
-            .split_inclusive('\n')
-            .map(|segment| {
-                let (line, newline) = segment.strip_suffix('\n').map_or((segment, ""), |line| (line, "\n"));
-                format!("{}{newline}", line.split_whitespace().collect::<Vec<_>>().join(" "))
-            })
-            .collect()
+        replaced.split(' ').filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
     }
 }
 
@@ -207,19 +188,6 @@ const CLAUSE_END: [char; 6] = ['.', '!', '?', ',', ':', ';'];
 /// Applies "new line", "new paragraph" and "scratch that"/"delete that" when said on their own,
 /// as a separate sentence or clause. Inside a sentence ("delete that file") they stay as words.
 pub fn apply_spoken_commands(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    for segment in text.split_inclusive('\n') {
-        if let Some(line) = segment.strip_suffix('\n') {
-            result.push_str(&apply_spoken_commands_line(line));
-            result.push('\n');
-        } else {
-            result.push_str(&apply_spoken_commands_line(segment));
-        }
-    }
-    result.trim().to_owned()
-}
-
-fn apply_spoken_commands_line(text: &str) -> String {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     let mut out: Vec<String> = Vec::new();
     let mut scratched = false;
@@ -382,19 +350,5 @@ mod tests {
         ] {
             assert_eq!(apply_spoken_commands(text), text);
         }
-    }
-
-    #[test]
-    fn vocabulary_and_cleanup_preserve_explicit_paragraph_boundaries() {
-        let vocabulary = vocab(&[], &[("prompt if I", "Promptify")]);
-        let text = "First paragraph, um, with prompt if I.\n\nSecond paragraph.";
-        let corrected = vocabulary.apply(text);
-        assert_eq!(corrected, "First paragraph, um, with Promptify.\n\nSecond paragraph.");
-        assert_eq!(remove_fillers(&corrected), "First paragraph with Promptify.\n\nSecond paragraph.");
-        assert_eq!(
-            apply_spoken_commands(&remove_fillers("First paragraph. New paragraph. Second paragraph.")),
-            "First paragraph.\n\nSecond paragraph."
-        );
-        assert_eq!(apply_spoken_commands("First paragraph.\n\nSecond paragraph."), "First paragraph.\n\nSecond paragraph.");
     }
 }

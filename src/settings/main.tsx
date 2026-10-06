@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
-import { api, type AppInfo, type DictationTone, type DownloadEvent, type HistoryEntry, type ModelStatus, type OnboardingStatus, type OnboardingStep } from "../api";
+import { api, type AppInfo, type DownloadEvent, type HistoryEntry, type ModelStatus, type OnboardingStatus, type OnboardingStep } from "../api";
 import { OnboardingTour } from "./OnboardingTour";
 import { DesktopIntegration } from "./DesktopIntegration";
 import { UpdateIndicator, UpdatesSettings, useUpdates } from "./Updates";
@@ -11,14 +11,6 @@ import { RecoveryButton } from "./RecoveryButton";
 import { Inference, useInference } from "./Inference";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
-const DICTATION_TONES: { value: DictationTone; label: string; description: string }[] = [
-  { value: "clean_transcript", label: "Clean transcript", description: "Remove fillers and apply spoken editing commands without language-model rewriting." },
-  { value: "natural", label: "Natural", description: "Improve grammar and flow while keeping your voice." },
-  { value: "casual", label: "Casual", description: "Use relaxed, conversational wording." },
-  { value: "formal", label: "Formal", description: "Polish professionally without adding greetings, recipients, or signatures." },
-  { value: "concise", label: "Concise", description: "Trim repetition without dropping facts or requested actions." },
-  { value: "unhinged", label: "Unhinged", description: "Add playful, irreverent emphasis without new claims or profanity." },
-];
 
 function formatHotkey(accelerator: string) {
   const isMac = navigator.userAgent.includes("Mac");
@@ -145,29 +137,7 @@ function Status({ info, onChange, guidedStep, external = false }: { info: AppInf
         <dt>Dictation</dt>
         <dd>
           <HotkeyField mode="dictation" value={info.hotkeys.dictation} onSaved={onChange} />
-          <div className="hint desc">Rewrites your words in the selected tone after recording; it does not answer questions or execute dictated instructions.</div>
-        </dd>
-        <dt>Dictation tone</dt>
-        <dd>
-          <label htmlFor="dictation-tone">Choose how dictated text is polished</label>
-          <select
-            id="dictation-tone"
-            aria-label="Dictation tone"
-            value={info.dictation_tone}
-            onChange={(event) => {
-              const tone = DICTATION_TONES.find((option) => option.value === event.target.value)?.value;
-              if (!tone) {
-                setError("The selected dictation tone is not supported.");
-                return;
-              }
-              setError(null);
-              void api.setDictationTone(tone).then(onChange, (reason) => setError(`Could not save dictation tone: ${String(reason)}`));
-            }}
-          >
-            {DICTATION_TONES.map((tone) => <option key={tone.value} value={tone.value}>{tone.label}{tone.value === "natural" ? " (default)" : ""}</option>)}
-          </select>
-          <div className="hint desc">{DICTATION_TONES.find((tone) => tone.value === info.dictation_tone)?.description}</div>
-          <div className="hint desc">Rewrite tones use your selected local language model and add processing time. Clean transcript stays deterministic; choose it when the model is unavailable or you prefer no rewrite.</div>
+          <div className="hint desc">Types what you said.</div>
         </dd>
         <dt>Cancel</dt>
         <dd>
