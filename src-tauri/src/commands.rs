@@ -175,7 +175,6 @@ pub struct AppInfo {
     modifier_keyboard: Option<String>,
     modifier_keyboard_devices: Vec<crate::modifier_hook::KeyboardDevice>,
     auto_mode: bool,
-    dictation_tone: promptify_core::quality::DictationTone,
     code_chat_paste: bool,
     vocabulary: promptify_core::dictation::Vocabulary,
     screen_text_apps: Vec<String>,
@@ -425,7 +424,6 @@ fn app_info_snapshot(state: &AppState) -> AppInfo {
         modifier_keyboard: settings.modifier_keyboard.clone(),
         modifier_keyboard_devices,
         auto_mode: settings.auto_mode,
-        dictation_tone: settings.dictation_tone,
         code_chat_paste: false,
         vocabulary: settings.vocabulary.clone(),
         screen_text_apps: settings.screen_text_apps.clone(),
@@ -645,14 +643,14 @@ pub fn set_modifier_keyboard(app: AppHandle, state: State<'_, AppState>, path: S
 pub fn apply_text_settings(orchestrator: &promptify_core::pipeline::Orchestrator, settings: &settings::AppSettings) {
     orchestrator.set_delivery_enabled(settings.desktop_integration_enabled);
     orchestrator.set_auto_mode(settings.auto_mode);
-    orchestrator.set_dictation_tone(settings.dictation_tone);
     orchestrator.service().set_vocabulary(settings.vocabulary.clone());
     let apps = settings.screen_text_apps.iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect();
     orchestrator.set_policy(promptify_core::context::ContextPolicy { surrounding_text_apps: apps, ..Default::default() });
 }
 
 fn update_text_settings(state: &AppState, change: impl FnOnce(&mut settings::AppSettings)) -> Result<(), String> {
-    settings::update(&state.settings, &state.data_dir, change)?;
+    change(&mut state.settings.write().unwrap());
+    save_settings(state)?;
     apply_text_settings(&state.orchestrator, &state.settings.read().unwrap());
     Ok(())
 }
@@ -660,11 +658,6 @@ fn update_text_settings(state: &AppState, change: impl FnOnce(&mut settings::App
 #[tauri::command]
 pub fn set_auto_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     update_text_settings(&state, |s| s.auto_mode = enabled)
-}
-
-#[tauri::command]
-pub fn set_dictation_tone(state: State<'_, AppState>, tone: promptify_core::quality::DictationTone) -> Result<(), String> {
-    update_text_settings(&state, |s| s.dictation_tone = tone)
 }
 
 #[tauri::command]

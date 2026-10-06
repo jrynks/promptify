@@ -52,7 +52,9 @@ pub struct AppSettings {
     pub modifier_keyboard: Option<String>,
     /// The prompt hotkey writes plain dictation in apps that are not AI tools.
     pub auto_mode: bool,
-    pub dictation_tone: promptify_core::quality::DictationTone,
+    /// Read-only migration field; tone-aware dictation is retired.
+    #[serde(skip_serializing, rename = "dictation_tone")]
+    pub(crate) retired_dictation_tone: Option<String>,
     pub desktop_integration_enabled: bool,
     pub desktop_integration_authorized: bool,
     #[serde(skip_serializing)]
@@ -82,7 +84,7 @@ impl Default for AppSettings {
             modifier_hold: false,
             modifier_keyboard: None,
             auto_mode: false,
-            dictation_tone: promptify_core::quality::DictationTone::Natural,
+            retired_dictation_tone: None,
             desktop_integration_enabled: true,
             desktop_integration_authorized: false,
             code_chat_paste: false,
@@ -236,7 +238,8 @@ mod tests {
             "check_updates_on_startup":false,"modifier_hold":true,
             "onboarding":{"version":1,"step":"practice","completed":true},
             "vocabulary":{"words":["Promptify"],"replacements":[]},
-            "screen_text_apps":["outlook"],"desktop_integration_enabled":false
+            "screen_text_apps":["outlook"],"desktop_integration_enabled":false,
+            "dictation_tone":"natural"
         }"#;
         std::fs::write(dir.0.join("settings.json"), text).unwrap();
         let settings = load_checked(&dir.0).unwrap().unwrap();
@@ -250,10 +253,9 @@ mod tests {
         assert!(settings.onboarding.as_ref().unwrap().completed);
         assert_eq!(settings.vocabulary.words, ["Promptify"]);
         assert_eq!(settings.screen_text_apps, ["outlook"]);
-        assert_eq!(settings.dictation_tone, promptify_core::quality::DictationTone::Natural);
         save(&dir.0, &settings).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.0.join("settings.json")).unwrap()).unwrap();
-        for key in ["answer_hotkey", "server_enabled", "relay_url", "lan_direct", "lan_discovery"] {
+        for key in ["answer_hotkey", "server_enabled", "relay_url", "lan_direct", "lan_discovery", "dictation_tone"] {
             assert!(saved.get(key).is_none(), "{key} must not be written");
         }
         let reloaded = load_checked(&dir.0).unwrap().unwrap();
@@ -267,26 +269,6 @@ mod tests {
         assert!(serde_json::from_str::<AppSettings>(r#"{"unknown_preference":true}"#).is_err());
         assert!(serde_json::from_str::<AppSettings>(r#"{"server_enabled":"yes"}"#).is_err());
         assert!(serde_json::from_str::<AppSettings>(r#"{"answer_hotkey":42}"#).is_err());
-        assert!(serde_json::from_str::<AppSettings>(r#"{"dictation_tone":"invented"}"#).is_err());
-    }
-
-    #[test]
-    fn dictation_tone_defaults_persists_and_rejects_invalid_saved_values() {
-        let dir = TestDir::new();
-        std::fs::write(dir.0.join("settings.json"), "{}").unwrap();
-        assert_eq!(
-            load_checked(&dir.0).unwrap().unwrap().dictation_tone,
-            promptify_core::quality::DictationTone::Natural
-        );
-
-        let mut settings = AppSettings::default();
-        for tone in promptify_core::quality::DictationTone::ALL {
-            settings.dictation_tone = tone;
-            save(&dir.0, &settings).unwrap();
-            assert_eq!(load_checked(&dir.0).unwrap().unwrap().dictation_tone, tone);
-        }
-        std::fs::write(dir.0.join("settings.json"), r#"{"dictation_tone":"unknown"}"#).unwrap();
-        assert!(load_checked(&dir.0).is_err(), "invalid values must surface as configuration errors");
     }
 
     struct TestDir(PathBuf);

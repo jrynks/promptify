@@ -17,7 +17,6 @@ const BLOCK_MESSAGES: Record<string, string> = {
   insert_failed: "Couldn't paste into the app.",
   surface_unconfirmed: "AI input not confirmed. Review and copy this prompt.",
   graph_unsupported: "This graph needs a capable AI assistant. Review before copying.",
-  quality_review: "Quality review did not approve this text. Review and copy it; it was not pasted.",
 };
 
 const FAIL_MESSAGES: Record<string, string> = {
@@ -56,10 +55,8 @@ function describe(outcome: Outcome, capped: boolean): View {
 
 const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing…",
-  generating: "Writing your draft…",
+  generating: "Writing your prompt…",
   revising: "Checking the prompt's format…",
-  reviewing_quality: "Reviewing wording quality…",
-  improving_wording: "Improving wording…",
   inserting: "Pasting…",
 };
 
@@ -200,10 +197,8 @@ function Overlay() {
           setPreview(payload.text);
           break;
         case "stage":
-          if (["generating", "revising", "reviewing_quality", "improving_wording"].includes(payload.stage)) {
-            setPreview("");
-            streaming.current = false;
-          }
+          if (payload.stage === "revising") setPreview("");
+          if (payload.stage === "generating" || payload.stage === "revising") streaming.current = false;
           setView({ kind: "working", label: STAGE_LABELS[payload.stage] });
           break;
         case "transcript":

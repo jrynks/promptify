@@ -1,9 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Mode = "prompt" | "dictation";
-export type Stage = "transcribing" | "generating" | "revising" | "reviewing_quality" | "improving_wording" | "inserting";
-export type DictationTone = "clean_transcript" | "natural" | "casual" | "formal" | "concise" | "unhinged";
-export type QualityStatus = "checked" | "corrected" | "rejected" | "unavailable";
+export type Stage = "transcribing" | "generating" | "revising" | "inserting";
 export type Rendering = "legacy" | "adaptive";
 export type PromptForm = "graph" | "inline_graph";
 export type PromptSurface =
@@ -61,7 +59,7 @@ export interface PromptRouting {
 
 export type Outcome =
   | { kind: "inserted"; text: string }
-  | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed" | "surface_unconfirmed" | "graph_unsupported" | "quality_review"; detail: string | null }
+  | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed" | "surface_unconfirmed" | "graph_unsupported"; detail: string | null }
   | { kind: "no_speech" }
   | { kind: "cancelled" }
   | { kind: "failed"; reason: string; detail: string | null };
@@ -74,9 +72,6 @@ export interface JobReport {
   elapsed_ms: number;
   history_saved: boolean;
   structure: "valid" | "repaired" | "kept_original" | null;
-  generation_elapsed_ms: number;
-  structure_repair_attempts: number;
-  quality?: { status: QualityStatus; review_calls: number; rewrite_calls: number; generation_elapsed_ms: number; review_elapsed_ms: number; rewrite_elapsed_ms: number; deadline_exhausted: boolean } | null;
   routing?: PromptRouting | null;
 }
 
@@ -118,7 +113,6 @@ export interface AppInfo {
   modifier_keyboard: string | null;
   modifier_keyboard_devices: { path: string; name: string }[];
   auto_mode: boolean;
-  dictation_tone: DictationTone;
   code_chat_paste: boolean;
   vocabulary: Vocabulary;
   screen_text_apps: string[];
@@ -252,7 +246,6 @@ export const api = {
   setModifierHold: (enabled: boolean) => invoke<void>("set_modifier_hold", { enabled }),
   setModifierKeyboard: (path: string) => invoke<void>("set_modifier_keyboard", { path }),
   setAutoMode: (enabled: boolean) => invoke<void>("set_auto_mode", { enabled }),
-  setDictationTone: (tone: DictationTone) => invoke<void>("set_dictation_tone", { tone }),
   setCodeChatPaste: (enabled: boolean) => invoke<void>("set_code_chat_paste", { enabled }),
   disableDesktopIntegration: () => invoke<void>("disable_desktop_integration"),
   restoreInsertionClipboard: () => invoke<void>("restore_insertion_clipboard"),

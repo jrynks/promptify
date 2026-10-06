@@ -14,15 +14,12 @@ use crate::pipeline::{
     StructureCheck, Transcriber,
 };
 use crate::profiles::{NewlinePolicy, Profile, ProfileSet};
-use crate::prompt::{PromptRequest, adaptive_prefix_len, build_adaptive_messages, build_prompt_messages, choose_mode, stable_prefix_len};
-use crate::quality::{
-    self, DictationTone, QualityReport, QualityStatus, ReviewContext, ReviewResponse, Verdict,
-};
+use crate::prompt::{ChatMessage, PromptRequest, Role, adaptive_prefix_len, build_adaptive_messages, build_prompt_messages, choose_mode, stable_prefix_len};
 use crate::routing::{self, Rendering, ResolvedPromptPolicy, RoutingOptions};
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler};
-use crate::structure::{GraphError, Structure, opens_with_role, validate_graph};
+use crate::structure::{GraphError, MAX_LOOP_ROUNDS, Structure, opens_with_role, validate_graph};
 pub const MAX_TEXT_INPUT_CHARS: usize = 8000;
 
 #[derive(Debug, Clone, Copy)]
@@ -45,7 +42,6 @@ pub struct Transform<'a> {
     /// For a prompt job: write plain dictation instead when the target is not an AI app, unless the
     /// user says "prompt:" first.
     pub auto_mode: bool,
-    pub dictation_tone: DictationTone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -57,8 +53,6 @@ pub enum TransformOutcome {
     NoSpeech,
     Cancelled,
     Failed { reason: FailReason, detail: Option<String> },
-    /// Structurally valid text retained for explicit user review, never automatic insertion.
-    ReviewOnly { text: String, status: QualityStatus },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,9 +61,6 @@ pub struct TransformReport {
     #[serde(skip)]
     pub transcript: Option<String>,
     pub structure: Option<StructureCheck>,
-    pub quality: Option<QualityReport>,
-    pub generation_elapsed_ms: u64,
-    pub structure_repair_attempts: u8,
     /// The mode actually used; differs from the request only with automatic mode.
     pub mode: Mode,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,17 +75,6 @@ pub struct TransformService {
     limits: Limits,
     scheduler: EngineScheduler,
     vocabulary: std::sync::RwLock<Vocabulary>,
-}
-
-enum ReviewError {
-    Cancelled,
-    Unavailable,
-    Deadline,
-}
-
-struct ReviewAttempt {
-    result: Result<ReviewResponse, ReviewError>,
-    elapsed_ms: u64,
 }
 
 impl TransformService {
@@ -157,15 +137,15 @@ impl TransformService {
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<TransformReport, AdmitError> {
         if let Err(reason) = self.check_input(transform) {
-            return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, quality: None, generation_elapsed_ms: 0, structure_repair_attempts: 0, mode: transform.mode, routing: None });
+            return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, mode: transform.mode, routing: None });
         }
         if let Err(error) = options.validate() {
-            return Ok(TransformReport { outcome: failed(FailReason::InvalidPrompt, error), transcript: None, structure: None, quality: None, generation_elapsed_ms: 0, structure_repair_attempts: 0, mode: transform.mode, routing: None });
+            return Ok(TransformReport { outcome: failed(FailReason::InvalidPrompt, error), transcript: None, structure: None, mode: transform.mode, routing: None });
         }
         if transform.mode != Mode::Prompt && (options.task_type.is_some() || options.surface.is_some()) {
             return Ok(TransformReport {
                 outcome: failed(FailReason::InvalidPrompt, "Task and surface overrides apply only to Prompt mode.".into()),
-                transcript: None, structure: None, quality: None, generation_elapsed_ms: 0, structure_repair_attempts: 0, mode: transform.mode, routing: None,
+                transcript: None, structure: None, mode: transform.mode, routing: None,
             });
         }
         let _permit = self.scheduler.acquire(cancel, Instant::now() + queue_wait)?;
@@ -193,7 +173,7 @@ impl TransformService {
 
     /// Callers must hold a scheduler permit; use [`Self::run_scheduled`] unless already holding one.
     fn run(&self, t: &Transform<'_>, options: &RoutingOptions, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>)) -> TransformReport {
-        let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, quality: None, generation_elapsed_ms: 0, structure_repair_attempts: 0, mode: t.mode, routing: None };
+        let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, mode: t.mode, routing: None };
         report.outcome = self.stages(t, options, cancel, &mut report, on_event);
         report
     }
@@ -270,9 +250,9 @@ impl TransformService {
         } else { None };
         let profile = prepared.as_ref().unwrap_or(profile);
 
-        if mode == Mode::Dictation {
-            return self.dictate(t, transcript, profile, report, cancel, on_event);
-        }
+        let (raw, finish) = match mode {
+            Mode::Dictation => (apply_spoken_commands(&remove_fillers(transcript)), FinishReason::Stop),
+            Mode::Prompt => {
                 let label = target_label(t.target);
                 let mut history = if !t.use_history {
                     HistoryContext::default()
@@ -301,26 +281,17 @@ impl TransformService {
                 on_event(JobEvent::Stage(Stage::Generating));
                 let stable_prefix = report.routing.as_ref().map_or_else(|| stable_prefix_len(profile), adaptive_prefix_len);
                 let request = GenerationRequest { messages: &messages, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
-                let generation_started = Instant::now();
                 let mut forward = |token: &str| on_event(JobEvent::Token(token));
                 let generation = match self.generator.generate(&request, cancel, &mut forward) {
                     Ok(generation) => generation,
                     Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
-                    Err(_) if Instant::now() >= deadline => {
-                        report.generation_elapsed_ms = elapsed_ms(generation_started);
-                        return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None };
-                    }
-                    Err(err) => {
-                        report.generation_elapsed_ms = elapsed_ms(generation_started);
-                        return failed(FailReason::GenerationFailed, err.0);
-                    }
+                    Err(_) if Instant::now() > deadline => return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None },
+                    Err(err) => return failed(FailReason::GenerationFailed, err.0),
                 };
                 // A result that arrives after the deadline is discarded, never used late.
                 if Instant::now() > deadline {
-                    report.generation_elapsed_ms = elapsed_ms(generation_started);
                     return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None };
                 }
-                report.generation_elapsed_ms = elapsed_ms(generation_started);
                 let newlines = report.routing.as_ref().map_or(profile.newlines, |policy| policy.newlines);
                 let outcome = finish_output(&generation.text, generation.finish, newlines, self.limits.max_output_chars);
                 if matches!(&outcome, TransformOutcome::Truncated { text } if validate_graph(text).is_err()) {
@@ -334,361 +305,20 @@ impl TransformService {
                 let TransformOutcome::Ready { text } = outcome else {
                     return outcome;
                 };
-                let structure_result = self.check_structure(
-                    &request,
-                    newlines,
-                    text.clone(),
-                    report.routing.as_ref().map(|policy| (policy, transcript, references.as_str())),
-                    cancel,
-                    &mut report.structure_repair_attempts,
-                    on_event,
-                );
-                report.generation_elapsed_ms = elapsed_ms(generation_started);
-                let (text, check) = match structure_result {
-                    Ok(result) => result,
-                    Err(outcome) => return outcome,
-                };
-                report.structure = Some(check);
-                let destination_capability = format!(
-                    "profile={} can_reply={} surface={}",
-                    profile.id,
-                    profile.can_reply,
-                    report.routing.as_ref().map_or_else(|| "profile_default".to_owned(), |policy| format!("{:?}", policy.surface)),
-                );
-                let context = ReviewContext {
-                    mode: Mode::Prompt,
-                    tone: None,
-                    original_request: transcript,
-                    current_request: transcript,
-                    reference_context: &references,
-                    candidate: &text,
-                    prompt_graph_required: true,
-                    destination_capability: &destination_capability,
-                };
-                let adaptive_policy = report.routing.clone();
-                let validate = |candidate: &str| match adaptive_policy.as_ref() {
-                    Some(policy) => routing::validate_rewrite_with_context(policy, transcript, &references, candidate),
-                    None => validate_graph(candidate).map(|_| ()).map_err(|error| error.to_string()),
-                };
-                let generation_elapsed_ms = report.generation_elapsed_ms;
-                return self.review_and_correct(
-                    context,
-                    text.clone(),
-                    &request,
-                    newlines,
-                    cancel,
-                    report,
-                    on_event,
-                    generation_elapsed_ms,
-                    validate,
-                );
-    }
-
-    fn dictate(
-        &self,
-        t: &Transform<'_>,
-        transcript: &str,
-        profile: &Profile,
-        report: &mut TransformReport,
-        cancel: &CancelToken,
-        on_event: &mut dyn FnMut(JobEvent<'_>),
-    ) -> TransformOutcome {
-        let cleaned = apply_spoken_commands(&remove_fillers(transcript));
-        if t.dictation_tone == DictationTone::CleanTranscript {
-            return finish_output(&cleaned, FinishReason::Stop, profile.newlines, self.limits.max_output_chars);
-        }
-        let deadline = Instant::now() + self.limits.generation_timeout;
-        let messages = match quality::build_dictation_messages(&cleaned, t.dictation_tone) {
-            Ok(messages) => messages,
-            Err(_) => {
-                let candidate = finish_output(&cleaned, FinishReason::Stop, NewlinePolicy::Keep, self.limits.max_output_chars);
-                return self.unavailable_review(candidate, report, false, 0);
-            }
-        };
-        on_event(JobEvent::Stage(Stage::Generating));
-        let request = GenerationRequest {
-            messages: &messages,
-            stable_prefix: 0,
-            max_new_tokens: self.limits.max_new_tokens,
-            deadline,
-        };
-        let generation_started = Instant::now();
-        let mut forward = |token: &str| on_event(JobEvent::Token(token));
-        let generation = match self.generator.generate(&request, cancel, &mut forward) {
-            Ok(generation) if Instant::now() <= deadline => generation,
-            Ok(_) => {
-                report.generation_elapsed_ms = elapsed_ms(generation_started);
-                let candidate = finish_output(&cleaned, FinishReason::Stop, NewlinePolicy::Keep, self.limits.max_output_chars);
-                let elapsed = report.generation_elapsed_ms;
-                return self.unavailable_review(candidate, report, true, elapsed);
-            }
-            Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
-            Err(_) => {
-                report.generation_elapsed_ms = elapsed_ms(generation_started);
-                let candidate = finish_output(&cleaned, FinishReason::Stop, NewlinePolicy::Keep, self.limits.max_output_chars);
-                let deadline_exhausted = Instant::now() >= deadline;
-                let elapsed = report.generation_elapsed_ms;
-                return self.unavailable_review(candidate, report, deadline_exhausted, elapsed);
-            }
-        };
-        report.generation_elapsed_ms = elapsed_ms(generation_started);
-        if cancel.is_cancelled() {
-            return TransformOutcome::Cancelled;
-        }
-        let candidate = finish_output(&generation.text, generation.finish, NewlinePolicy::Keep, self.limits.max_output_chars);
-        let TransformOutcome::Ready { text } = candidate else {
-            return candidate;
-        };
-        let destination_capability = format!("profile={} newline_policy={:?}", profile.id, profile.newlines);
-        let context = ReviewContext {
-            mode: Mode::Dictation,
-            tone: Some(t.dictation_tone),
-            original_request: transcript,
-            current_request: &cleaned,
-            reference_context: "",
-            candidate: &text,
-            prompt_graph_required: false,
-            destination_capability: &destination_capability,
-        };
-        let request = GenerationRequest {
-            messages: &messages,
-            stable_prefix: 0,
-            max_new_tokens: self.limits.max_new_tokens,
-            deadline,
-        };
-        let generation_elapsed_ms = report.generation_elapsed_ms;
-        let outcome = self.review_and_correct(
-            context,
-            text.clone(),
-            &request,
-            NewlinePolicy::Keep,
-            cancel,
-            report,
-            on_event,
-            generation_elapsed_ms,
-            |_| Ok(()),
-        );
-        let (text, mut review_status) = match outcome {
-            TransformOutcome::Ready { text } => (text, None),
-            TransformOutcome::ReviewOnly { text, status } => (text, Some(status)),
-            other => return other,
-        };
-        if let Err(reason) = quality::validate_dictation_fidelity(&cleaned, &text) {
-            log::warn!("dictation rewrite rejected by deterministic fidelity check: {reason}");
-            if let Some(quality) = &mut report.quality {
-                quality.status = QualityStatus::Rejected;
-            }
-            review_status = Some(QualityStatus::Rejected);
-        }
-        match finish_output(&text, FinishReason::Stop, profile.newlines, self.limits.max_output_chars) {
-            TransformOutcome::Ready { text } => match review_status {
-                Some(status) => TransformOutcome::ReviewOnly { text, status },
-                None => TransformOutcome::Ready { text },
-            },
-            other => other,
-        }
-    }
-
-    fn unavailable_review(
-        &self,
-        candidate: TransformOutcome,
-        report: &mut TransformReport,
-        deadline_exhausted: bool,
-        generation_elapsed_ms: u64,
-    ) -> TransformOutcome {
-        report.quality = Some(QualityReport {
-            status: QualityStatus::Unavailable,
-            generation_elapsed_ms,
-            deadline_exhausted,
-            ..Default::default()
-        });
-        match candidate {
-            TransformOutcome::Ready { text } => TransformOutcome::ReviewOnly { text, status: QualityStatus::Unavailable },
-            other => other,
-        }
-    }
-
-    fn review_and_correct(
-        &self,
-        context: ReviewContext<'_>,
-        candidate: String,
-        request: &GenerationRequest<'_>,
-        newline_policy: NewlinePolicy,
-        cancel: &CancelToken,
-        report: &mut TransformReport,
-        on_event: &mut dyn FnMut(JobEvent<'_>),
-        generation_elapsed_ms: u64,
-        validate: impl Fn(&str) -> Result<(), String>,
-    ) -> TransformOutcome {
-        let mut metrics = QualityReport { generation_elapsed_ms, ..Default::default() };
-        let first = self.review(&context, request.deadline, cancel, on_event);
-        metrics.review_calls = 1;
-        metrics.review_elapsed_ms = first.elapsed_ms;
-        let response = match first.result {
-            Ok(response) => response,
-            Err(ReviewError::Cancelled) => return TransformOutcome::Cancelled,
-            Err(ReviewError::Unavailable) => {
-                metrics.status = QualityStatus::Unavailable;
-                report.quality = Some(metrics);
-                return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-            }
-            Err(ReviewError::Deadline) => {
-                metrics.status = QualityStatus::Unavailable;
-                metrics.deadline_exhausted = true;
-                report.quality = Some(metrics);
-                return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-            }
-        };
-        if response.verdict == Verdict::Approve {
-            metrics.status = QualityStatus::Checked;
-            report.quality = Some(metrics);
-            return TransformOutcome::Ready { text: candidate };
-        }
-
-        if cancel.is_cancelled() {
-            return TransformOutcome::Cancelled;
-        }
-        if Instant::now() >= request.deadline {
-            metrics.status = QualityStatus::Unavailable;
-            metrics.deadline_exhausted = true;
-            report.quality = Some(metrics);
-            return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-        }
-        let rewrite_messages = match quality::build_targeted_rewrite_messages(context, &response.issues) {
-            Ok(messages) => messages,
-            Err(_) => {
-                metrics.status = QualityStatus::Unavailable;
-                report.quality = Some(metrics);
-                return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-            }
-        };
-        on_event(JobEvent::Stage(Stage::ImprovingWording));
-        let rewrite_request = GenerationRequest {
-            messages: &rewrite_messages,
-            stable_prefix: 0,
-            max_new_tokens: self.limits.max_new_tokens,
-            deadline: request.deadline,
-        };
-        let rewrite_started = Instant::now();
-        let mut forward = |token: &str| on_event(JobEvent::Token(token));
-        let rewritten = self.generator.generate(&rewrite_request, cancel, &mut forward);
-        metrics.rewrite_calls = 1;
-        metrics.rewrite_elapsed_ms = rewrite_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        let rewritten = match rewritten {
-            Ok(generation) if Instant::now() <= request.deadline => generation,
-            Ok(_) => {
-                metrics.status = QualityStatus::Unavailable;
-                metrics.deadline_exhausted = true;
-                report.quality = Some(metrics);
-                return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-            }
-            Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
-            Err(_) => {
-                metrics.status = QualityStatus::Unavailable;
-                metrics.deadline_exhausted = Instant::now() >= request.deadline;
-                report.quality = Some(metrics);
-                return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-            }
-        };
-        if cancel.is_cancelled() {
-            return TransformOutcome::Cancelled;
-        }
-        if rewritten.finish == FinishReason::Length {
-            metrics.status = QualityStatus::Unavailable;
-            report.quality = Some(metrics);
-            return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-        }
-        let rewritten = match finish_output(&rewritten.text, FinishReason::Stop, newline_policy, self.limits.max_output_chars) {
-            TransformOutcome::Ready { text } => text,
-            _ => {
-                metrics.status = QualityStatus::Unavailable;
-                report.quality = Some(metrics);
-                return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Unavailable };
-            }
-        };
-        if let Err(error) = validate(&rewritten) {
-            metrics.status = QualityStatus::Rejected;
-            report.quality = Some(metrics);
-            log::warn!("targeted wording correction rejected; preserving the structurally valid draft for review: {error}");
-            return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Rejected };
-        }
-        let second_context = ReviewContext { candidate: &rewritten, ..context };
-        let second = self.review(&second_context, request.deadline, cancel, on_event);
-        metrics.review_calls = 2;
-        metrics.review_elapsed_ms = metrics.review_elapsed_ms.saturating_add(second.elapsed_ms);
-        match second.result {
-            Err(ReviewError::Cancelled) => TransformOutcome::Cancelled,
-            Err(ReviewError::Unavailable) => {
-                metrics.status = QualityStatus::Unavailable;
-                report.quality = Some(metrics);
-                TransformOutcome::ReviewOnly { text: rewritten, status: QualityStatus::Unavailable }
-            }
-            Err(ReviewError::Deadline) => {
-                metrics.status = QualityStatus::Unavailable;
-                metrics.deadline_exhausted = true;
-                report.quality = Some(metrics);
-                TransformOutcome::ReviewOnly { text: rewritten, status: QualityStatus::Unavailable }
-            }
-            Ok(response) if response.verdict == Verdict::Approve => {
-                metrics.status = QualityStatus::Corrected;
-                report.quality = Some(metrics);
-                TransformOutcome::Ready { text: rewritten }
-            }
-            Ok(_) => {
-                metrics.status = QualityStatus::Rejected;
-                report.quality = Some(metrics);
-                TransformOutcome::ReviewOnly { text: rewritten, status: QualityStatus::Rejected }
-            }
-        }
-    }
-
-    fn review(
-        &self,
-        context: &ReviewContext<'_>,
-        deadline: Instant,
-        cancel: &CancelToken,
-        on_event: &mut dyn FnMut(JobEvent<'_>),
-    ) -> ReviewAttempt {
-        let started = Instant::now();
-        let result = if cancel.is_cancelled() {
-            Err(ReviewError::Cancelled)
-        } else if Instant::now() >= deadline {
-            Err(ReviewError::Deadline)
-        } else {
-            match quality::build_review_messages(*context) {
-                Err(_) => Err(ReviewError::Unavailable),
-                Ok(messages) => {
-                    on_event(JobEvent::Stage(Stage::ReviewingQuality));
-                    let request = GenerationRequest {
-                        messages: &messages,
-                        stable_prefix: 0,
-                        max_new_tokens: self.limits.max_new_tokens.min(256),
-                        deadline,
-                    };
-                    let mut discard = |_: &str| {};
-                    match self.generator.generate(&request, cancel, &mut discard) {
-                        Err(_) if cancel.is_cancelled() => Err(ReviewError::Cancelled),
-                        Err(_) if Instant::now() >= deadline => Err(ReviewError::Deadline),
-                        Err(_) => Err(ReviewError::Unavailable),
-                        Ok(_) if cancel.is_cancelled() => Err(ReviewError::Cancelled),
-                        Ok(_) if Instant::now() > deadline => Err(ReviewError::Deadline),
-                        Ok(generation) if generation.finish == FinishReason::Length => Err(ReviewError::Unavailable),
-                        Ok(generation) => {
-                            let parsed = quality::parse_review_response(&generation.text).map_err(|_| ReviewError::Unavailable);
-                            if Instant::now() > deadline {
-                                Err(ReviewError::Deadline)
-                            } else {
-                                parsed
-                            }
+                if report.routing.is_some() || profile.structure != Structure::Flat {
+                    return match self.check_structure(&request, newlines, text, report.routing.as_ref().map(|policy| (policy, transcript, references.as_str())), cancel, on_event) {
+                        Ok((text, check)) => {
+                            report.structure = Some(check);
+                            TransformOutcome::Ready { text }
                         }
-                    }
+                        Err(outcome) => outcome,
+                    };
                 }
+                return TransformOutcome::Ready { text };
             }
         };
-        ReviewAttempt {
-            result,
-            elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        }
+
+        finish_output(&raw, finish, profile.newlines, self.limits.max_output_chars)
     }
 
     /// Validates the sanitized draft and runs at most `max_structure_repairs`
@@ -701,7 +331,6 @@ impl TransformService {
         draft: String,
         adaptive: Option<(&ResolvedPromptPolicy, &str, &str)>,
         cancel: &CancelToken,
-        repair_attempts: &mut u8,
         on_event: &mut dyn FnMut(JobEvent<'_>),
     ) -> Result<(String, StructureCheck), TransformOutcome> {
         if cancel.is_cancelled() {
@@ -710,7 +339,10 @@ impl TransformService {
         let validate = |text: &str| -> Result<(), String> {
             match adaptive {
                 Some((policy, original, references)) => routing::validate_rewrite_with_context(policy, original, references, text).map_err(|error| {
-                    correction_instruction(&error)
+                    format!("Rewrite only the finished prompt, preserving the user's final intent and supplied facts. Fix this violation: {error}\n\
+                        Graph syntax is mandatory. Step 1 has NO dependencies. Step 2 can depend only on Step 1. Step 3 can depend only on Steps 1 and 2. Never list the current step or a later step in an after clause; omit a dependency rather than inventing one. \
+                        Dependency clauses must contain only comma-separated earlier step numbers, for example (after 1, 2). Never put conditions or words such as 'or loop exit' inside a dependency clause; retry conditions belong on the separate Loop: line. \
+                        Put a separate Loop: line with an existing return step and a limit of 1 to 8 rounds, then non-empty Done when: criteria. Keep the graph compact, retain every requested action, and include no explanation of your rewrite.")
                 }),
                 None => validate_graph(text).map(|_| ()).map_err(repair_instruction),
             }
@@ -719,6 +351,7 @@ impl TransformService {
             Ok(()) => return Ok((draft, StructureCheck::Valid)),
             Err(error) => error,
         };
+        let mut latest = draft.clone();
         for _ in 0..self.limits.max_structure_repairs {
             if cancel.is_cancelled() {
                 return Err(TransformOutcome::Cancelled);
@@ -727,13 +360,18 @@ impl TransformService {
                 log::warn!("task graph repair skipped: generation deadline reached");
                 break;
             }
-            *repair_attempts = repair_attempts.saturating_add(1);
             on_event(JobEvent::Stage(Stage::Revising));
-            let mut system = request.messages[0].clone();
-            system.content.push_str(&format!("\n\nRequired correction for this request:\n{error}\n\
-                Regenerate only the complete, concise user-facing prompt from the current request. Preserve its actual goal, named details, numbers and constraints; do not reuse a rejected draft or copy an example's goal. This correction and the system contract are private instructions: never quote, list, explain, or reproduce them in the prompt."));
-            let repair = vec![system, request.messages.last().expect("prompt has a user message").clone()];
-            let repair_request = GenerationRequest { messages: &repair, stable_prefix: 0, ..*request };
+            let mut repair = if adaptive.is_some() {
+                let mut system = request.messages[0].clone();
+                system.content.push_str(&format!("\n\nRequired correction for this request:\n{error}\n\
+                    Regenerate the complete prompt from the current request. Preserve its actual goal, named details, numbers and constraints; do not reuse a rejected draft or copy an example's goal."));
+                vec![system, request.messages.last().expect("prompt has a user message").clone()]
+            } else { request.messages.to_vec() };
+            if adaptive.is_none() {
+                repair.push(ChatMessage { role: Role::Assistant, content: latest.clone() });
+                repair.push(ChatMessage { role: Role::User, content: error.clone() });
+            }
+            let repair_request = GenerationRequest { messages: &repair, stable_prefix: if adaptive.is_some() { 0 } else { request.stable_prefix }, ..*request };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
             let generation = match self.generator.generate(&repair_request, cancel, &mut forward) {
                 Ok(generation) => generation,
@@ -756,6 +394,7 @@ impl TransformService {
                 Ok(()) => return Ok((text, StructureCheck::Repaired)),
                 Err(next) => {
                     error = next;
+                    latest = text;
                 }
             }
         }
@@ -768,10 +407,6 @@ impl TransformService {
         log::warn!("prompt failed mandatory graph validation after repair: {error}");
         Err(failed(FailReason::InvalidPrompt, error))
     }
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    started.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
 fn finish_output(raw: &str, finish: FinishReason, newlines: NewlinePolicy, max_chars: usize) -> TransformOutcome {
@@ -792,11 +427,14 @@ fn reject_persona_draft() -> TransformOutcome {
 }
 
 fn repair_instruction(error: GraphError) -> String {
-    correction_instruction(&error.to_string())
-}
-
-fn correction_instruction(error: &str) -> String {
-    format!("Fix this violation: {error}. Rewrite the complete prompt, preserving the user's final intent, supplied facts, requested actions and exclusions. Do not invent details or numeric constraints. Keep the target's required formatting. Output only the finished prompt.\n\n{}", crate::prompt::GRAPH_CONTRACT)
+    format!(
+        "Your prompt has a problem: {error}. Rewrite the complete prompt as a valid task graph, preserving the user's intent and details. \
+Number the steps 1, 2, 3 in order and let each step depend only on earlier steps. Include at least one loop with a failure condition, \
+an existing step to return to and a limit of 1 to {MAX_LOOP_ROUNDS} rounds, for example \"Loop: if the tests fail, return to Step 2 (max 3 rounds).\" \
+Include a non-empty \"Done when:\" section with verifiable success criteria for the loop to check. Stop when the checks pass; \
+if the round limit is reached, report what still fails instead of claiming success. Keep the target's required formatting. \
+Output only the finished prompt."
+    )
 }
 
 pub fn target_label(ctx: &ActiveContext) -> String {
@@ -816,7 +454,6 @@ mod tests {
     use super::*;
     use crate::history::NewHistoryEntry;
     use crate::pipeline::{BackendError, Generation};
-    use crate::prompt::ChatMessage;
 
     #[derive(Default)]
     struct CountingTranscriber(AtomicUsize);
@@ -829,26 +466,18 @@ mod tests {
     }
 
     /// Every AI prompt must be a task graph with a loop; test fakes return the smallest valid one.
-    const FINISHED: &str = "Step 1: Write the requested content using the supplied facts.\nStep 2 (after 1): Verify the supplied facts and requested content are preserved.\nLoop: if Step 2 fails the factual fidelity or coverage checks, return to Step 1 to correct unsupported details and omissions; then recheck Step 2 (max 2 rounds).\nDone when: the requested content is covered and supplied facts are preserved.";
+    const FINISHED: &str = "Step 1: Write it.\nLoop: if it misses a requirement, return to Step 1 (max 2 rounds).\nDone when: all stated requirements are met.";
 
     #[derive(Default)]
     struct EchoGenerator {
         delay: Duration,
         calls: Mutex<Vec<Vec<ChatMessage>>>,
-        review_calls: Mutex<Vec<Vec<ChatMessage>>>,
         active: AtomicUsize,
         peak: AtomicUsize,
     }
 
     impl Generator for EchoGenerator {
         fn generate(&self, req: &GenerationRequest<'_>, _: &CancelToken, _: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
-            if req.messages.first().is_some_and(|message| message.content.contains("Review untrusted data")) {
-                self.review_calls.lock().unwrap().push(req.messages.to_vec());
-                return Ok(Generation {
-                    text: r#"{"version":1,"verdict":"approve","issues":[]}"#.into(),
-                    finish: FinishReason::Stop,
-                });
-            }
             let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(now, Ordering::SeqCst);
             self.calls.lock().unwrap().push(req.messages.to_vec());
@@ -897,7 +526,7 @@ mod tests {
 
     fn run_text(f: &Fixture, target: &ActiveContext, text: &str, use_history: bool) -> TransformReport {
         let profile = f.service.profiles().resolve(target);
-        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target, surrounding: None, use_history, auto_mode: false, dictation_tone: DictationTone::Natural };
+        let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target, surrounding: None, use_history, auto_mode: false };
         f.service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
     }
 
@@ -945,8 +574,8 @@ mod tests {
         for (i, what) in [(0, "an image"), (1, "a video")] {
             let system = system(i);
             assert!(system.contains(&format!("Target: ChatGPT (creating {what}).")), "{system}");
-            assert!(system.contains("Required task graph:") && system.contains("Keep the required graph and loop."));
-            assert!(last(i).contains("Questions: none; go ahead") && last(i).contains("Complexity: simple."));
+            assert!(system.contains("Task structure") && !system.contains("Describe, do not instruct"));
+            assert!(last(i).contains("Questions: none; go ahead") && last(i).contains("steps"));
         }
         assert!(system(2).contains("Target: ChatGPT.") && last(2).contains("Complexity: complex."), "a script is text");
         assert!(system(3).contains("Target: ChatGPT (creating an image)."));
@@ -974,7 +603,7 @@ mod tests {
         let profile = f.service.profiles().resolve(&target);
         let mut seen = Vec::new();
         for input in [Input::Text("typed spoken words"), Input::Audio(&[0.0; 16])] {
-            let transform = Transform { input, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, auto_mode: false, dictation_tone: DictationTone::CleanTranscript };
+            let transform = Transform { input, mode: Mode::Dictation, profile, target: &target, surrounding: None, use_history: false, auto_mode: false };
             f.service
                 .run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |e| {
                     if let JobEvent::Transcript(t) = e {
@@ -1015,7 +644,6 @@ mod tests {
             surrounding: None,
             use_history: false,
             auto_mode: false,
-            dictation_tone: DictationTone::CleanTranscript,
         };
         let mut transcript = String::new();
         service
@@ -1075,7 +703,7 @@ mod tests {
                 std::thread::spawn(move || {
                     let target = ActiveContext::default();
                     let profile = f.service.profiles().resolve(&target);
-                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, auto_mode: false, dictation_tone: DictationTone::Natural };
+                    let transform = Transform { input: Input::Text("hello there"), mode: Mode::Prompt, profile, target: &target, surrounding: None, use_history: false, auto_mode: false };
                     f.service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
                 })
             })
