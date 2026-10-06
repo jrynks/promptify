@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type Mode = "prompt" | "dictation";
-export type Stage = "transcribing" | "generating" | "revising" | "inserting";
+export type Stage = "transcribing" | "generating" | "revising" | "reviewing" | "inserting";
 export type Rendering = "legacy" | "adaptive";
 export type PromptForm = "graph" | "inline_graph";
 export type PromptSurface =
@@ -59,7 +59,7 @@ export interface PromptRouting {
 
 export type Outcome =
   | { kind: "inserted"; text: string }
-  | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed" | "surface_unconfirmed" | "graph_unsupported"; detail: string | null }
+  | { kind: "blocked"; text: string; reason: "focus_changed" | "focus_unknown" | "output_truncated" | "insert_failed" | "surface_unconfirmed" | "graph_unsupported" | "quality_review"; detail: string | null }
   | { kind: "no_speech" }
   | { kind: "cancelled" }
   | { kind: "failed"; reason: string; detail: string | null };
@@ -199,6 +199,11 @@ export interface HistoryEntry {
   inserted: boolean;
 }
 
+export interface JevStatus {
+  enabled: boolean;
+  key_configured: boolean;
+}
+
 export type InferenceProvider = "custom" | "lm_studio" | "openai" | "anthropic" | "google";
 export type InferenceProtocol = "openai_chat_completions" | "openai_responses" | "anthropic_messages";
 export type InferenceSelection = { kind: "bundled_local" } | { kind: "connection"; connection_id: string; model: string };
@@ -235,6 +240,10 @@ export interface InferenceStatus {
 export interface DiscoveredInferenceModel { id: string; name: string }
 
 export const api = {
+  jevStatus: () => invoke<JevStatus>("jev_status"),
+  saveJevKey: (key: string) => invoke<JevStatus>("save_jev_key", { key }),
+  deleteJevKey: () => invoke<JevStatus>("delete_jev_key"),
+  setJevEnabled: (enabled: boolean) => invoke<JevStatus>("set_jev_enabled", { enabled }),
   inferenceConfig: () => invoke<InferenceConfig>("inference_config"),
   inferenceStatus: () => invoke<InferenceStatus>("inference_status"),
   saveInferenceConnection: (input: InferenceConnectionInput) => invoke<InferenceConfig>("save_inference_connection", { input }),

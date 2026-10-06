@@ -39,6 +39,7 @@ pub enum Stage {
     Generating,
     /// Rewriting a draft whose task graph was malformed.
     Revising,
+    Reviewing,
     Inserting,
 }
 
@@ -214,6 +215,7 @@ pub enum BlockReason {
     InsertFailed,
     SurfaceUnconfirmed,
     GraphUnsupported,
+    QualityReview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -366,6 +368,10 @@ impl Orchestrator {
         self.auto_mode.store(enabled, Ordering::SeqCst);
     }
 
+    pub fn set_prompt_reviewer(&self, reviewer: Arc<dyn crate::review::PromptReviewer>) {
+        self.service.set_prompt_reviewer(reviewer);
+    }
+
     pub fn set_delivery_enabled(&self, enabled: bool) {
         let _ = self.delivery_generation.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
             ((generation & 1 == 0) != enabled).then(|| generation.wrapping_add(1))
@@ -509,6 +515,7 @@ impl Orchestrator {
                     }
                     TransformOutcome::Ready { text } => self.insert(&job, profile, text, on_event),
                     TransformOutcome::Truncated { text } => Outcome::Blocked { text, reason: BlockReason::OutputTruncated, detail: None },
+                    TransformOutcome::ReviewRequired { text, detail } => Outcome::Blocked { text, reason: BlockReason::QualityReview, detail: Some(detail) },
                     TransformOutcome::NoSpeech => Outcome::NoSpeech,
                     TransformOutcome::Cancelled => Outcome::Cancelled,
                     TransformOutcome::Failed { reason, detail } => Outcome::Failed { reason, detail },
@@ -520,6 +527,7 @@ impl Orchestrator {
         };
         let history_saved = job.options.use_personal_context && match (&outcome, transcript) {
             (Outcome::Inserted { text }, Some(transcript)) => self.record(&job, mode, transcript, text, true, routing.as_ref()),
+            (Outcome::Blocked { reason: BlockReason::QualityReview, .. }, _) => false,
             (Outcome::Blocked { text, .. }, Some(transcript)) => self.record(&job, mode, transcript, text, false, routing.as_ref()),
             _ => false,
         };
@@ -803,6 +811,35 @@ mod tests {
         assert!(h.orchestrator.begin(Mode::Prompt).is_ok(), "diagnostics must release admission");
     }
 
+    struct FixedReviewer(crate::review::ReviewDecision);
+
+    impl crate::review::PromptReviewer for FixedReviewer {
+        fn review(&self, _: &crate::review::ReviewRequest<'_>, _: &CancelToken) -> Result<crate::review::ReviewDecision, BackendError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn uncertain_quality_review_preserves_copy_but_never_pastes_or_trains_history() {
+        let h = harness(chat_ctx(), "suggest improvements", generator("Suggest useful improvements."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_prompt_reviewer(Arc::new(FixedReviewer(crate::review::ReviewDecision::Uncertain { detail: "Jev could not confidently assess this draft.".into() })));
+        let result = run(&h, Mode::Prompt);
+        assert!(matches!(result.outcome, Outcome::Blocked { reason: BlockReason::QualityReview, ref text, .. } if text == &test_graph("Suggest useful improvements.")));
+        assert!(h.inserter.calls.lock().unwrap().is_empty());
+        assert!(!result.history_saved);
+        assert!(h.history.records.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn quality_approval_does_not_override_destination_safety() {
+        let h = harness(chat_ctx(), "suggest improvements", generator("Suggest useful improvements."), ContextPolicy::default(), Limits::default());
+        h.orchestrator.set_prompt_reviewer(Arc::new(FixedReviewer(crate::review::ReviewDecision::Approved)));
+        *h.context.foreground.lock().unwrap() = None;
+        let result = run(&h, Mode::Prompt);
+        assert!(matches!(result.outcome, Outcome::Blocked { reason: BlockReason::FocusUnknown, .. }));
+        assert!(h.inserter.calls.lock().unwrap().is_empty());
+    }
+
     fn chat_ctx() -> ActiveContext {
         ActiveContext {
             window: TARGET,
@@ -859,6 +896,35 @@ mod tests {
         let job = orchestrator.begin(Mode::Prompt).unwrap();
         orchestrator.finish(job, &[], &mut |_| {});
         assert_eq!(next.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn quality_rewrite_uses_the_admitted_inference_backend() {
+        let h = harness(chat_ctx(), "Suggest improvements", generator(""), ContextPolicy::default(), Limits::default());
+        let first = Arc::new(generator("Suggest improvements."));
+        let next = Arc::new(generator("Different provider."));
+        let switching = Arc::new(SwitchingGenerator {
+            selected: std::sync::RwLock::new(first.clone()),
+            snapshots: AtomicUsize::new(0),
+        });
+        let orchestrator = Orchestrator::new(Backends {
+            context: h.context.clone(),
+            transcriber: Arc::new(FakeTranscriber("Suggest improvements".into())),
+            generator: switching.clone(),
+            inserter: h.inserter.clone(),
+            history: h.history.clone(),
+        }, ProfileSet::bundled(), ContextPolicy::default(), Limits::default());
+        orchestrator.set_prompt_reviewer(Arc::new(FixedReviewer(crate::review::ReviewDecision::Revise {
+            issues: vec!["Make the suggestions actionable.".into()],
+        })));
+        let job = orchestrator.begin(Mode::Prompt).unwrap();
+        *switching.selected.write().unwrap() = next.clone();
+        let result = orchestrator.finish(job, &[], &mut |_| {});
+        assert!(matches!(result.outcome, Outcome::Blocked { reason: BlockReason::QualityReview, .. }));
+        assert_eq!(first.calls.lock().unwrap().len(), 2);
+        assert!(next.calls.lock().unwrap().is_empty());
+        assert_eq!(switching.snapshots.load(Ordering::SeqCst), 1);
+        assert!(h.inserter.calls.lock().unwrap().is_empty());
     }
 
     #[test]

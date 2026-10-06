@@ -223,6 +223,16 @@ mod tests {
     }
 
     #[test]
+    fn intent_expansion_cases_include_live_request_and_route_correctly() {
+        let cases = load_adaptive_cases(include_str!("../../../eval/intent-expansion.toml")).unwrap();
+        assert_eq!(cases.iter().filter(|case|
+            case.said == "Can you think of any other ways to improve prompt quality"
+        ).count(), 3);
+        let score = score_routing(&cases);
+        assert_eq!(score.passed, score.total, "{score:?}");
+    }
+
+    #[test]
     fn scoring_requires_valid_structure_matching_expectation() {
         let graph = "Step 1: a\nStep 2 (after 1): b\nLoop: if b fails, return to Step 1 (max 2 rounds).\nDone when: b passes.";
         assert!(score(Expect::Graph, Some(graph)).pass);

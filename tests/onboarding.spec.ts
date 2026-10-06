@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { AppInfo, InferenceConfig, InferenceConnectionInput, InferenceStatus, ModelStatus, OnboardingStatus, OverlayEvent, PromptCatalog, Rendering, UpdateInfo } from "../src/api";
+import type { AppInfo, InferenceConfig, InferenceConnectionInput, InferenceStatus, JevStatus, ModelStatus, OnboardingStatus, OverlayEvent, PromptCatalog, Rendering, UpdateInfo } from "../src/api";
 
 interface Fixture {
   info: AppInfo;
@@ -13,6 +13,8 @@ interface Fixture {
   inference: InferenceConfig;
   inferenceStatus: InferenceStatus;
   inferenceTestError?: string;
+  jev: JevStatus;
+  jevDeleteError?: string;
 }
 
 interface TestBridge {
@@ -24,6 +26,7 @@ interface TestBridge {
   lastRouting: unknown;
   overlaySizes: number[];
   inferenceWrites: { input: Omit<InferenceConnectionInput, "secret">; hasSecret: boolean }[];
+  lastRecoverySection: unknown;
 }
 
 declare global {
@@ -64,6 +67,7 @@ function fixture(ready = false): Fixture {
     failures: {},
     inference: { version: 1, revision: 0, selection: { kind: "bundled_local" }, connections: [] },
     inferenceStatus: { state: ready ? "ready" : "configured", selection: { kind: "bundled_local" }, revision: 0, message: null },
+    jev: { enabled: false, key_configured: false },
     updates: {
       current_version: "1.1.1", check_on_startup: true, checking: false, checked: true,
       release: { version: "1.1.1", url: "https://github.com/jrynks/promptify/releases/tag/v1.1.1", update_available: false, install_error: null },
@@ -132,7 +136,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
       initial.status.speech = initial.status.language = { state: "ready" };
     };
     window.onboardingTest = {
-      state: initial, calls: [], emit, lastRouting: null, overlaySizes: [], inferenceWrites: [],
+      state: initial, calls: [], emit, lastRouting: null, overlaySizes: [], inferenceWrites: [], lastRecoverySection: null,
       change: (update) => { Object.assign(initial, update); changed(); },
       practice: (event, id = initial.status.practice.attempt_id ?? -1) => {
         const practice = initial.status.practice;
@@ -229,6 +233,20 @@ async function launch(page: Page, state = fixture(), path = "/") {
               initial.inferenceStatus = { state: "configured", selection: initial.inference.selection, revision: initial.inference.revision, message: null };
               emit("inference-changed", null);
               return structuredClone(initial.inference);
+            case "jev_status": return structuredClone(initial.jev);
+            case "save_jev_key":
+              if (typeof args.key !== "string" || !args.key) throw new Error("Enter an API key.");
+              initial.jev.key_configured = true;
+              return structuredClone(initial.jev);
+            case "delete_jev_key":
+              initial.jev.enabled = false;
+              if (initial.jevDeleteError) throw new Error(initial.jevDeleteError);
+              initial.jev.key_configured = false;
+              return structuredClone(initial.jev);
+            case "set_jev_enabled":
+              if (args.enabled && !initial.jev.key_configured) throw new Error("Save a key first.");
+              initial.jev.enabled = args.enabled === true;
+              return structuredClone(initial.jev);
             case "retry_focus_detection":
               initial.info.desktop_error = null;
               changed();
@@ -250,6 +268,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
             case "open_system_settings":
             case "restart_after_update": return;
             case "open_recovery_settings":
+              window.onboardingTest.lastRecoverySection = args.section;
               emit("open-settings-section", args.section);
               return;
             case "grant_paste_permission":
@@ -559,6 +578,93 @@ test("inference recovery navigation and external history disclosures are availab
   await page.getByRole("button", { name: "Test Hosted model", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Selected model unavailable" }).first()).toBeVisible();
   await expect(page.getByText(/Synthetic test completed/)).toHaveCount(0);
+});
+
+test("Jev key saving is separate from explicit remote review consent and removal disables it", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  const section = page.getByRole("region", { name: "Jev remote review" });
+  const toggle = section.getByRole("checkbox");
+  const input = section.getByLabel("TypeSafe API key", { exact: true });
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeDisabled();
+  await expect(section).toContainText("spoken request and generated prompt to TypeSafe");
+  await expect(section).toContainText("may run twice after a bounded rewrite");
+  await expect(section).toContainText("No separate histories or screen context are sent");
+  await expect(section).toContainText("generated prompt may contain context you opted into using");
+  await expect(section).toContainText("Optional desktop prompt review");
+  await expect(section).toContainText("CLI evaluations are not reviewed");
+  await expect(section).toContainText("not probabilities calibrated");
+  await expect(input).toHaveAttribute("type", "password");
+  await input.fill("synthetic-test-key");
+  await section.getByRole("button", { name: "Save API key", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).not.toBeChecked();
+  await expect(section).toContainText("Stored does not mean verified; no connection test has been made.");
+  expect(await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)].join(" "))).not.toContain("synthetic-test-key");
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  await section.getByRole("button", { name: "Remove API key", exact: true }).click();
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeDisabled();
+  await expect(section).toContainText("No API key stored.");
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call.includes("jev")))).toEqual([
+    "jev_status", "save_jev_key", "set_jev_enabled", "delete_jev_key",
+  ]);
+});
+
+test("Jev errors are visible and failed operations preserve the actual state", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.failures.save_jev_key = "OS credential store locked.";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  const section = page.getByRole("region", { name: "Jev remote review" });
+  const toggle = section.getByRole("checkbox");
+  await section.getByLabel("TypeSafe API key", { exact: true }).fill("synthetic-test-key");
+  await section.getByRole("button", { name: "Save API key", exact: true }).click();
+  await expect(section.getByRole("alert")).toContainText("OS credential store locked.");
+  await expect(toggle).toBeDisabled();
+  await page.evaluate(() => {
+    delete window.onboardingTest.state.failures.save_jev_key;
+    window.onboardingTest.state.jev.key_configured = true;
+    window.onboardingTest.state.failures.set_jev_enabled = "Could not save Jev settings.";
+  });
+  await section.getByLabel("TypeSafe API key", { exact: true }).fill("synthetic-test-key");
+  await section.getByRole("button", { name: "Save API key", exact: true }).click();
+  await expect(toggle).toBeEnabled();
+  await toggle.click();
+  await expect(section.getByRole("alert")).toContainText("Could not save Jev settings.");
+  await expect(toggle).not.toBeChecked();
+  await page.evaluate(() => {
+    delete window.onboardingTest.state.failures.set_jev_enabled;
+    window.onboardingTest.state.jevDeleteError = "Jev disabled but key could not be removed.";
+  });
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  await section.getByRole("button", { name: "Remove API key", exact: true }).click();
+  await expect(section.getByRole("alert")).toContainText("key could not be removed");
+  await expect(toggle).not.toBeChecked();
+  await expect(section.getByRole("button", { name: "Remove API key", exact: true })).toBeEnabled();
+});
+
+test("Jev unavailable credential store offers retry and blocks edits", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.failures.jev_status = "Could not access the OS credential store.";
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  const section = page.getByRole("region", { name: "Jev remote review" });
+  await expect(section.getByRole("alert")).toContainText("OS credential store");
+  await expect(section.getByRole("checkbox")).toBeDisabled();
+  await expect(section.getByLabel("TypeSafe API key", { exact: true })).toBeDisabled();
+  await page.evaluate(() => { delete window.onboardingTest.state.failures.jev_status; });
+  await section.getByRole("button", { name: "Retry Jev settings" }).click();
+  await expect(section.getByRole("alert")).toHaveCount(0);
+  await expect(section.getByLabel("TypeSafe API key", { exact: true })).toBeEnabled();
 });
 
 test("update indicator installs only after the user clicks and then offers restart", async ({ page }) => {
@@ -1500,6 +1606,28 @@ test.describe("native overlay sizing", () => {
       return bounds.bottom <= window.innerHeight && bounds.right <= window.innerWidth;
     })).toBe(true);
   }
+
+  test("Jev review stage and blocked draft retain Copy and Models recovery", async ({ page }) => {
+    await openOverlay(page);
+    await emitOverlay(page, { type: "stage", stage: "reviewing" });
+    await expect(page.getByText("Checking prompt quality with Jev…", { exact: true })).toBeVisible();
+    const draft = "Synthetic draft retained for manual review.";
+    await emitOverlay(page, {
+      type: "finished", capped: false,
+      report: {
+        job_id: 42, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: "valid",
+        outcome: { kind: "blocked", text: draft, reason: "quality_review", detail: "Experimental review was inconclusive." },
+      },
+    });
+    await expect(page.getByText("Jev did not approve this prompt. Review and copy; it was not pasted.", { exact: true })).toBeVisible();
+    await expect(page.getByText(draft, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Copy", exact: true }).click();
+    expect(await page.evaluate(() => window.onboardingTest.calls.includes("copy_last_result"))).toBe(true);
+    await page.getByRole("button", { name: "Model settings", exact: true }).click();
+    expect(await page.evaluate(() => window.onboardingTest.lastRecoverySection)).toBe("models");
+    await fitsWindow(page);
+  });
 
   test("failed results stay actionable and offer Settings without retrying insertion", async ({ page }) => {
     await openOverlay(page);

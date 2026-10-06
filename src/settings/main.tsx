@@ -6,6 +6,7 @@ import { OnboardingTour } from "./OnboardingTour";
 import { DesktopIntegration } from "./DesktopIntegration";
 import { UpdateIndicator, UpdatesSettings, useUpdates } from "./Updates";
 import { PromptRoutingSettings } from "./PromptRouting";
+import { JevSettings } from "./JevSettings";
 import "./settings.css";
 import { RecoveryButton } from "./RecoveryButton";
 import { Inference, useInference } from "./Inference";
@@ -116,7 +117,7 @@ function Status({ info, onChange, guidedStep, external = false }: { info: AppInf
   return (
     <section className={`general${guidedStep === "input" ? " tour-target" : ""}`} hidden={guidedStep === "practice"} aria-label="General settings">
       <h2>General</h2>
-      <p className="hint">Hold a hotkey anywhere, say what you want, and Promptify writes it into the app you're using. {external ? "Speech recognition stays local; language-model work uses your selected endpoint." : "Speech recognition and bundled inference run on this computer."} Promptify keeps running in the system tray when you close this window.</p>
+      <p className="hint">Hold a hotkey anywhere, say what you want, and Promptify writes it into the app you're using. {external ? "Speech recognition stays local; language-model work uses your selected endpoint." : "Speech recognition and bundled inference run on this computer."} Optional Jev remote review is configured under Models. Promptify keeps running in the system tray when you close this window.</p>
       {[...new Set(guided ? (info.prompt_hotkey_error ? [info.prompt_hotkey_error] : []) : info.hotkey_errors)].map((e) => (
         <p key={e} className="error">{e}</p>
       ))}
@@ -307,6 +308,7 @@ function Models({ onChange, guided = false, external = false }: { onChange: () =
         setListenerAttempt((value) => value + 1);
         refresh();
       }}>Refresh models</button></div>}
+      {!guided && <JevSettings />}
     </section>
   );
 }
