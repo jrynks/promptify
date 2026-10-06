@@ -334,3 +334,27 @@ label.inline { flex-direction: row; align-items: center; gap: 8px; font-weight: 
 .history .said { margin: 4px 0; font-style: italic; }
 button.link { border: none; background: none; color: LinkText; cursor: pointer; padding: 0 0 0 8px; }
 input.capture { min-width: 320px; font-style: italic; }
+
+.writer-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.writer-switch button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 14px 16px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 10px;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere;
+}
+.writer-switch button:hover:not(:disabled) { background: rgba(127, 127, 127, 0.08); }
+.writer-switch button[aria-checked="true"] { border: 2px solid Highlight; padding: 13px 15px; background: rgba(127, 127, 127, 0.1); }
+.writer-switch button[aria-checked="true"] strong::after { content: " ✓"; color: Highlight; }
+.writer-switch button.viewing:not([aria-checked="true"]) { border-style: dashed; }
+.writer-switch button:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.writer-switch button span.hint { font-size: 12px; }
+.writer-now { margin: 8px 0 16px; }
+.writer-panel { padding-top: 4px; }
+.inference-connections { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.inference-connections li { padding: 10px 12px; border: 1px solid rgba(127, 127, 127, 0.25); border-radius: 8px; }
+.inference-connections li.active { border-color: Highlight; }
+.inference-connections .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.writer-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; }
+.writer-model { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.writer-model select { max-width: 100%; }
+.badge.ok { background: #16a34a; color: #fff; }
+@media (max-width: 560px) { .writer-switch { grid-template-columns: 1fr; } }

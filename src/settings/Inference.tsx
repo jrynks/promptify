@@ -57,7 +57,18 @@ export function useInference() {
 
 export type InferenceState = ReturnType<typeof useInference>;
 
-export function Inference({ state, onChange, guided = false, children }: { state: InferenceState; onChange: () => void; guided?: boolean; children?: ReactNode }) {
+const LAST_ONLINE = "promptify.lastOnlineModel";
+function rememberOnline(id: string, model: string) {
+  try { localStorage.setItem(LAST_ONLINE, JSON.stringify({ id, model })); } catch { /* preference only */ }
+}
+function recallOnline(): { id: string; model: string } | null {
+  try { return JSON.parse(localStorage.getItem(LAST_ONLINE) ?? "null"); } catch { return null; }
+}
+function hostOf(base: string) {
+  try { return new URL(base).host; } catch { return base; }
+}
+
+export function Inference({ state, onChange, guided = false, localModel = null, children }: { state: InferenceState; onChange: () => void; guided?: boolean; localModel?: string | null; children?: ReactNode }) {
   const { config, status, refresh } = state;
   const [draft, setDraft] = useState<InferenceConnectionInput | null>(null);
   const [original, setOriginal] = useState<InferenceConnection | null>(null);
@@ -65,6 +76,7 @@ export function Inference({ state, onChange, guided = false, children }: { state
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [phase, setPhase] = useState<string | null>(null);
   const [models, setModels] = useState<DiscoveredInferenceModel[]>([]);
   const [discoveryState, setDiscoveryState] = useState<"idle" | "pending" | "ready" | "error">("idle");
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
@@ -89,7 +101,7 @@ export function Inference({ state, onChange, guided = false, children }: { state
       await refresh();
       onChange();
     } catch (reason) {
-      setError(String(reason));
+      setError(String(reason).replace(/^Error: /, ""));
     } finally {
       lock.current = false;
       setBusy(false);
@@ -170,10 +182,78 @@ export function Inference({ state, onChange, guided = false, children }: { state
   }, [draft?.id, draft?.base_url, draft?.protocol, draft?.provider, draft?.auth, draft?.remove_secret,
     draft?.consent_remote, draft?.allow_insecure_lan, secret, reusableCredential, canDiscover, busy, discoveryAttempt]);
 
+  const selection = config?.selection;
+  const activeId = selection?.kind === "connection" ? selection.connection_id : null;
+  const activeConnection = config?.connections.find((connection) => connection.id === activeId) ?? null;
+  const online = selection?.kind === "connection";
+  const [view, setView] = useState<"local" | "online">(online ? "online" : "local");
+  useEffect(() => { if (selection) setView(selection.kind === "connection" ? "online" : "local"); }, [selection?.kind]);
+  const isVerified = (connection: InferenceConnection, model: string) =>
+    !!config?.verified.some((tested) => tested.connection_id === connection.id && tested.model === model && tested.revision === connection.revision);
+  const preferredModel = (connection: InferenceConnection) => {
+    if (selection?.kind === "connection" && selection.connection_id === connection.id) return selection.model;
+    const last = recallOnline();
+    return last?.id === connection.id && last.model ? last.model : connection.model;
+  };
+  const onlineTarget = () => activeConnection ?? config?.connections.find((connection) => connection.id === recallOnline()?.id) ?? config?.connections[0] ?? null;
+
+  // Verify before selecting so a failing endpoint never replaces a working prompt writer.
+  const switchOnline = async (connection: InferenceConnection, model: string) => {
+    if (!isVerified(connection, model)) {
+      setPhase(`Checking ${connection.name} · ${model}…`);
+      try {
+        const result = await api.testInferenceConnection(connection.id, model);
+        if (result.state !== "ready") throw new Error(result.message || "The test did not complete.");
+      } catch (reason) {
+        const keep = selection?.kind === "connection" && selection.connection_id === connection.id && status?.state !== "ready";
+        throw new Error(`${connection.name} · ${model} could not be reached: ${String(reason).replace(/^Error: /, "")} ${keep ? "Shortcuts stay paused until it passes. Fix the connection or switch to On this device." : `You are still using ${currentLabel}.`}`);
+      } finally { setPhase(null); }
+    }
+    await api.selectInference({ kind: "connection", connection_id: connection.id, model });
+    rememberOnline(connection.id, model);
+    setNotice(`Now using ${connection.name} · ${model}.`);
+  };
+  const check = async (connection: InferenceConnection, model: string) => {
+    setPhase(`Checking ${connection.name} · ${model}…`);
+    try {
+      const result = await api.testInferenceConnection(connection.id, model);
+      if (result.state !== "ready") throw new Error(`${connection.name} · ${model} check failed: ${result.message || "no details"}`);
+    } finally { setPhase(null); }
+    setNotice(`${connection.name} · ${model} responded. A working connection does not guarantee prompt quality.`);
+  };
+  const switchLocal = async () => {
+    await api.selectInference({ kind: "bundled_local" });
+    setNotice(`Now using ${localModel} on this device.`);
+  };
+  const chooseLocal = () => {
+    setView("local");
+    if (!localModel) { setNotice("Download a prompt model below to write prompts on this device."); return; }
+    if (online) void act(switchLocal);
+  };
+  const chooseOnline = () => {
+    setView("online");
+    const target = onlineTarget();
+    if (!target) { setNotice("Set up an online or server model below. It is checked once, then used for prompts."); return; }
+    if (!online) void act(() => switchOnline(target, preferredModel(target)));
+  };
+
+  const [activeModels, setActiveModels] = useState<DiscoveredInferenceModel[] | null>(null);
+  useEffect(() => {
+    setActiveModels(null);
+    if (!activeConnection) return;
+    let current = true;
+    api.discoverInferenceModels(activeConnection.id).then((found) => { if (current) setActiveModels(found); }, () => { if (current) setActiveModels([]); });
+    return () => { current = false; };
+  }, [activeConnection?.id, activeConnection?.revision]);
+
+  const localLabel = localModel ? `On this device · ${localModel}` : "On this device";
+  const currentLabel = !config ? "" : selection?.kind === "connection" ? `${activeConnection?.name ?? "Connection"} · ${selection.model}` : localLabel;
+  const readiness = status?.state === "ready" ? "Ready" : status?.state === "error" ? "Needs attention" : online ? "Not checked yet" : localModel ? "Ready when used" : "No model downloaded";
+
   return (
     <section className={guided ? "tour-target" : undefined} aria-label="Prompt writer">
       <h2 id="prompt-writer" tabIndex={-1}>2. Prompt writer</h2>
-      <p className="hint">One selected model handles every language-model stage: prompt generation and structural repair. Dictation does not use it. No automatic provider fallback. Speech recognition remains local.</p>
+      <p className="hint">Choose where prompts are written. Switch any time; speech recognition always stays on this device and plain dictation never uses the prompt writer.</p>
       {!config && !state.error && <p role="status">Loading inference configuration…</p>}
       {state.error && <div role="alert"><p className="error">{state.error}</p><button disabled={busy} onClick={() => void act(state.retry)}>Retry inference configuration</button>
         <button disabled={busy} onClick={() => {
@@ -181,52 +261,76 @@ export function Inference({ state, onChange, guided = false, children }: { state
         }}>Reset inference</button>
       </div>}
       {config && <>
-        <p role="status"><strong>Selected: </strong>{config.selection.kind === "bundled_local" ? "Bundled local" : `${config.connections.find((connection) => config.selection.kind === "connection" && connection.id === config.selection.connection_id)?.name ?? "Connection"} · ${config.selection.model}`}
-          {" · "}{status?.state === "ready" ? "Ready" : status?.state === "error" ? "Error" : "Configured, not yet verified"}</p>
-        {status?.message && <p className={status.state === "error" ? "error" : "hint"} role={status.state === "error" ? "alert" : undefined}>{status.message}</p>}
-        {config.selection.kind === "connection" && status?.state === "configured" && <p role="alert" className="warn">
-          Shortcuts are unavailable until the selected connection passes its test. Click Test below.
-          {" "}Successful verification is remembered across restarts. Only changed connection settings or a different unverified model require a new test; model discovery is not a generation test.
-        </p>}
-        <button disabled={busy || config.selection.kind === "bundled_local"} onClick={() => void act(() => api.selectInference({ kind: "bundled_local" }))}>Use bundled local</button>
-        <p className="hint">Bundled local is the default: no account, API key, or external language-model service.</p>
-        {children}
-        <h3>API and local-server connections</h3>
-        <div className="inference-options">
-          {PRESETS.map((preset) => <button key={preset.provider} disabled={busy} aria-pressed={draft?.provider === preset.provider} onClick={() => add(preset.provider)}>{preset.provider === "custom" ? "Add custom model" : preset.name}</button>)}
+        <div className="writer-switch" role="radiogroup" aria-label="Prompt writer location">
+          <button role="radio" aria-checked={!online} className={view === "local" ? "viewing" : undefined} disabled={busy} onClick={chooseLocal}>
+            <strong>On this device</strong>
+            <span>{localModel ?? "No prompt model downloaded"}</span>
+            <span className="hint">Private · free · works offline</span>
+          </button>
+          <button role="radio" aria-checked={online} className={view === "online" ? "viewing" : undefined} disabled={busy} onClick={chooseOnline}>
+            <strong>Online or server</strong>
+            <span>{activeConnection ? `${activeConnection.name} · ${selection?.kind === "connection" ? selection.model : ""}` : onlineTarget() ? `${onlineTarget()!.name} · ${preferredModel(onlineTarget()!)}` : "Not set up yet"}</span>
+            <span className="hint">Your API key or local server</span>
+          </button>
         </div>
-        <p className="hint">Provider API keys use API billing, not a ChatGPT or other consumer subscription. Keys are write-only and stored in the operating system credential store, never in browser storage. OAuth subscriptions are not supported here.</p>
-        <ul className="inference-connections">
-          {config.connections.map((connection) => {
-            const activeConnection = config.selection.kind === "connection" && config.selection.connection_id === connection.id;
-            const selected = activeConnection && config.selection.kind === "connection" && config.selection.model === connection.model;
-            return <li key={connection.id}>
-              <strong>{connection.name}</strong> · {connection.model} {selected && <span className="badge">Selected</span>}
-              <div className="hint">{connection.base_url} · {connection.protocol} · {connection.credential_present ? "Key saved (never displayed)" : "No key saved"}</div>
-              <div className="actions">
-                <button disabled={busy || selected} onClick={() => void act(() => api.selectInference({ kind: "connection", connection_id: connection.id, model: connection.model }))}>Use {connection.name}</button>
-                <button disabled={busy} onClick={() => edit(connection)}>Edit {connection.name}</button>
-                <button disabled={busy} onClick={() => void act(async () => {
-                  const result = await api.testInferenceConnection(connection.id, connection.model);
-                  if (result.state !== "ready") throw new Error(result.message || "Synthetic inference test did not verify the selected model.");
-                  setNotice(`Synthetic test completed for ${connection.name} · ${connection.model}. Connectivity is not a quality guarantee.`);
-                })}>Test {connection.name}</button>
-                <button disabled={busy || activeConnection} onClick={() => {
-                  if (window.confirm(`Remove ${connection.name} and its saved credential?`)) void act(async () => {
-                    await api.removeInferenceConnection(connection.id);
-                    if (draft?.id === connection.id) { invalidateDiscovery(); setDraft(null); setSecret(""); }
-                  });
-                }}>Remove {connection.name}</button>
-              </div>
-              {activeConnection && <p className="hint">Select a replacement before removing the active connection.{!selected && " The saved model changed; select it explicitly to use the new model."}</p>}
-            </li>;
-          })}
-        </ul>
-        <p className="hint">Tests send tiny synthetic, non-sensitive content to the exact saved model, not your history or screen text. They may incur API charges or trigger just-in-time model loading. Nothing is tested automatically.</p>
+        <p role="status" className="writer-now"><strong>Now using: </strong>{currentLabel} · {readiness}</p>
+        {status?.message && <p className={status.state === "error" ? "error" : "hint"} role={status.state === "error" ? "alert" : undefined}>{status.message}</p>}
+        {online && activeConnection && status && status.state !== "ready" && <p role="alert" className="warn">
+          Shortcuts are paused until {activeConnection.name} passes a quick check.{" "}
+          <button disabled={busy} onClick={() => void act(() => check(activeConnection, selection!.kind === "connection" ? selection!.model : activeConnection.model))}>Check now</button>
+          {" "}A successful check is remembered across restarts until the connection changes.
+        </p>}
+
+        {view === "local" && <div className="writer-panel" aria-label="On-device prompt models">
+          {online && localModel && <p className="hint">Still using {currentLabel}. <button disabled={busy} onClick={() => void act(switchLocal)}>Use {localModel} on this device</button></p>}
+          {children}
+        </div>}
+
+        {view === "online" && <div className="writer-panel" aria-label="Online prompt models">
+          {config.connections.length > 0 && <ul className="inference-connections" aria-label="Saved online models">
+            {config.connections.map((connection) => {
+              const active = connection.id === activeId;
+              const model = preferredModel(connection);
+              const options = active && activeModels?.length ? activeModels : [];
+              return <li key={connection.id} className={active ? "active" : undefined}>
+                <label className="inline writer-choice">
+                  <input type="radio" name="online-connection" checked={active} disabled={busy} onChange={() => void act(() => switchOnline(connection, model))} aria-label={`Use ${connection.name}`} />
+                  <strong>{connection.name}</strong>
+                  <span className="hint">{hostOf(connection.base_url)} · {connection.credential_present ? "Key saved (never displayed)" : "No key saved"}</span>
+                  {active && status?.state === "ready" && <span className="badge ok">Ready</span>}
+                  {!active && isVerified(connection, model) && <span className="badge ok">Checked</span>}
+                </label>
+                {active ? <label className="writer-model">Model
+                  <select aria-label={`${connection.name} model`} disabled={busy} value={model} onChange={(event) => void act(() => switchOnline(connection, event.target.value))}>
+                    {!options.some((option) => option.id === model) && <option value={model}>{model}</option>}
+                    {options.map((option) => <option key={option.id} value={option.id}>{option.name === option.id ? option.id : `${option.name} (${option.id})`}</option>)}
+                  </select>
+                  {activeModels === null && <span className="hint">Loading available models…</span>}
+                </label> : <div className="hint">{model}</div>}
+                <div className="actions">
+                  {active && <button disabled={busy} onClick={() => void act(() => check(connection, model))}>Check {connection.name}</button>}
+                  <button disabled={busy} onClick={() => edit(connection)}>Edit {connection.name}</button>
+                  <button disabled={busy || active} title={active ? "Switch to another prompt writer first" : undefined} onClick={() => {
+                    if (window.confirm(`Remove ${connection.name} and its saved credential?`)) void act(async () => {
+                      await api.removeInferenceConnection(connection.id);
+                      if (draft?.id === connection.id) { invalidateDiscovery(); setDraft(null); setSecret(""); }
+                    });
+                  }}>Remove {connection.name}</button>
+                </div>
+              </li>;
+            })}
+          </ul>}
+          <h3>{config.connections.length ? "Add another" : "Set up an online or server model"}</h3>
+          <div className="inference-options">
+            {PRESETS.map((preset) => <button key={preset.provider} disabled={busy} aria-pressed={!original && draft?.provider === preset.provider} onClick={() => add(preset.provider)}>{preset.provider === "custom" ? "Add custom model" : preset.name}</button>)}
+          </div>
+          <p className="hint">Use “Add custom model” for Agent Maestro, Ollama, or any OpenAI-compatible server. API keys use API billing, are write-only, and are stored in the operating system credential store.</p>
+          <p className="hint">Switching to a model that has not been used before sends one tiny synthetic message to check it works; your history and screen text are not sent. If the check fails, your current prompt writer stays active.</p>
+        </div>}
       </>}
       {draft && <fieldset className="inference-editor" disabled={busy}>
         <legend>{original ? `Edit ${original.name}` : `Add ${draft.name}`}</legend>
-        {draft.provider === "lm_studio" && <p>In LM Studio, open the Developer tab, start the server, and make a text model available. Models are discovered automatically; choose or enter an ID, save, select it, then test it. Localhost does not prove the model itself is offline: check LM Link or other remote routing.</p>}
+        {draft.provider === "lm_studio" && <p>In LM Studio, open the Developer tab, start the server, and make a text model available. Models are discovered automatically. Localhost does not prove the model itself is offline: check LM Link or other remote routing.</p>}
         <label>Connection name<input value={draft.name} onChange={(event) => patch({ name: event.target.value })} /></label>
         <label>API base URL<input type="url" value={draft.base_url} onChange={(event) => { patch({ base_url: event.target.value, consent_remote: false, allow_insecure_lan: false }); setModels([]); }} placeholder="http://localhost:1234/v1" /></label>
         <p className="hint">Enter an HTTP(S) API base, not a full generation path. HTTPS encrypts data in transit; HTTP does not.</p>
@@ -248,23 +352,22 @@ export function Inference({ state, onChange, guided = false, children }: { state
           setSecret("");
         }} />Remove saved key / token</label>}
         {endpointChanged && <p className="warn">Changing the endpoint or protocol cannot silently reuse a saved key. Supply a new key or explicitly remove it.</p>}
-        <label>Model ID<input value={draft.model} onChange={(event) => patch({ model: event.target.value })} placeholder="Exact text-model identifier" /></label>
-        <p className="hint">Manual model entry works even when discovery is unavailable. Discovery lists IDs only; it does not prove a model is loaded or ready.</p>
-        {discoveryState === "idle" && <p className="hint">To discover models, enter a valid HTTP(S) endpoint, confirm remote data disclosure if needed, and provide an API key when authentication is enabled.</p>}
-        {draft.provider === "google" && draft.protocol !== "openai_chat_completions" && <p className="warn">Google model discovery requires its documented OpenAI Chat Completions protocol.</p>}
-        {discoveryState === "pending" && <p role="status">Discovering models…</p>}
-        {discoveryState === "ready" && <p role="status">{models.length ? "Models discovered from this draft endpoint. Choose an ID and save before testing." : "No models discovered. Enter a model ID manually."}</p>}
-        {discoveryError && <p role="alert" className="error">{discoveryError}</p>}
-        <button disabled={!canDiscover || discoveryState === "pending"} onClick={() => { invalidateDiscovery(); setDiscoveryAttempt((attempt) => attempt + 1); }}>{discoveryState === "error" ? "Retry model discovery" : "Refresh models"}</button>
-        {models.length > 0 && <label>Discovered model<select aria-label="Discovered model" value={models.some((model) => model.id === draft.model) ? draft.model : ""} onChange={(event) => patch({ model: event.target.value })}>
-          <option value="" disabled>Choose a discovered model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} ({model.id})</option>)}
-        </select></label>}
-        <label className="inline"><input type="checkbox" checked={draft.stream} onChange={(event) => patch({ stream: event.target.checked })} />Stream responses</label>
         {policy.remote && <div className="inference-disclosure">
           <p>This non-loopback endpoint receives transcripts, prompt instructions, permitted app/context metadata, opted-in focused screen text, enabled history context, and drafts sent for structural repair. History and screen-text opt-ins still control collection. Local history storage does not prevent outgoing context. Check the endpoint operator's retention and privacy policies.</p>
           <label className="inline"><input type="checkbox" checked={draft.consent_remote} onChange={(event) => patch({ consent_remote: event.target.checked })} />I consent to sending this context to this endpoint.</label>
         </div>}
         {policy.insecure && <p className="warn">HTTP is unencrypted. Other devices on the network may read context and tokens in transit. Use HTTPS when available.</p>}
+        {discoveryState === "idle" && <p className="hint">Available models appear automatically once the URL{policy.remote ? ", consent" : ""}{draft.auth === "api_key" ? " and key" : ""} are filled in.</p>}
+        {draft.provider === "google" && draft.protocol !== "openai_chat_completions" && <p className="warn">Google model discovery requires its documented OpenAI Chat Completions protocol.</p>}
+        {discoveryState === "pending" && <p role="status">Discovering models…</p>}
+        {discoveryState === "ready" && <p role="status">{models.length ? `${models.length} models found. Choose one below.` : "No models discovered. Enter a model ID manually."}</p>}
+        {discoveryError && <p role="alert" className="error">{discoveryError}</p>}
+        {models.length > 0 && <label>Discovered model<select aria-label="Discovered model" value={models.some((model) => model.id === draft.model) ? draft.model : ""} onChange={(event) => patch({ model: event.target.value })}>
+          <option value="" disabled>Choose a discovered model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} ({model.id})</option>)}
+        </select></label>}
+        <label>Model ID<input value={draft.model} onChange={(event) => patch({ model: event.target.value })} placeholder="Exact text-model identifier" /></label>
+        <button disabled={!canDiscover || discoveryState === "pending"} onClick={() => { invalidateDiscovery(); setDiscoveryAttempt((attempt) => attempt + 1); }}>{discoveryState === "error" ? "Retry model discovery" : "Refresh models"}</button>
+        <label className="inline"><input type="checkbox" checked={draft.stream} onChange={(event) => patch({ stream: event.target.checked })} />Stream responses</label>
         <div className="actions">
           <button className="primary" disabled={!canSave} onClick={() => {
             invalidateDiscovery();
@@ -274,20 +377,31 @@ export function Inference({ state, onChange, guided = false, children }: { state
               allow_insecure_lan: false, consent_remote: draft.consent_remote,
               secret: draft.auth === "api_key" && secret ? secret : null, remove_secret: draft.remove_secret,
             };
+            const wasActive = input.id === activeId;
+            const isNew = !original;
             setSecret("");
             void act(async () => {
               const next = await api.saveInferenceConnection(input);
               const saved = next.connections.find((connection) => connection.id === input.id);
-              if (saved) edit(saved);
-              setNotice("Connection saved. Select it explicitly if needed; test only when the selected model is not yet verified.");
+              invalidateDiscovery();
+              setDraft(null);
+              setOriginal(null);
+              if (saved && isNew) await switchOnline(saved, saved.model);
+              else if (saved && wasActive) {
+                const model = selection?.kind === "connection" && original?.model === saved.model ? selection.model : saved.model;
+                await api.selectInference({ kind: "connection", connection_id: saved.id, model });
+                rememberOnline(saved.id, model);
+                if (!next.verified.some((tested) => tested.connection_id === saved.id && tested.model === model && tested.revision === saved.revision)) await check(saved, model);
+                else setNotice(`${saved.name} saved and still in use.`);
+              } else setNotice(`${input.name} saved.`);
             });
-          }}>{busy ? "Working…" : "Save connection"}</button>
+          }}>{busy ? "Working…" : original ? "Save connection" : "Save and use"}</button>
           <button onClick={() => { invalidateDiscovery(); setDraft(null); setSecret(""); }}>Cancel editing</button>
         </div>
       </fieldset>}
+      {phase && <p role="status">{phase}</p>}
       {notice && <p role="status">{notice}</p>}
       {error && <p role="alert" className="error">{error}</p>}
-      {busy && <p role="status">Inference action in progress…</p>}
     </section>
   );
 }

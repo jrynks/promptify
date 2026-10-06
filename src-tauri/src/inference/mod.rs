@@ -656,7 +656,7 @@ impl InferenceManager {
                         BackendError("Selected inference connection unavailable.".into())
                     })?;
                 if !config.is_verified(connection, model) {
-                    return Err(BackendError("Inference is configured but not verified. Explicitly test the selected model in Models > Prompt writer; tests may incur charges or load a model.".into()));
+                    return Err(BackendError("Inference is configured but not verified. Click Check now in Models > Prompt writer, or switch to On this device; checks may incur charges or load a model.".into()));
                 }
                 self.secret(connection).map_err(BackendError).map(|_| ())
             }

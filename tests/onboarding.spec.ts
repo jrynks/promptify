@@ -215,27 +215,40 @@ async function launch(page: Page, state = fixture(), path = "/") {
             }
             case "select_inference":
               initial.inference.selection = args.selection as InferenceConfig["selection"];
-              initial.inferenceStatus = { state: "configured", selection: initial.inference.selection, revision: ++initial.inference.revision, message: null };
-              if (initial.inference.selection.kind === "connection") {
-                initial.info.engines_ready = false;
-                initial.status.language = { state: "missing" };
-              } else if (initial.models.every((model) => model.installed)) ready();
+              {
+                const chosen = initial.inference.selection;
+                const verified = chosen.kind === "connection" && initial.inference.verified.some((tested) => tested.connection_id === chosen.connection_id && tested.model === chosen.model &&
+                  tested.revision === initial.inference.connections.find((connection) => connection.id === chosen.connection_id)?.revision);
+                initial.inferenceStatus = { state: verified ? "ready" : "configured", selection: chosen, revision: ++initial.inference.revision, message: null };
+                if (chosen.kind === "connection") {
+                  initial.status.language = { state: verified ? "ready" : "missing" };
+                  initial.info.engines_ready = verified && initial.status.speech.state === "ready";
+                } else if (initial.models.every((model) => model.installed)) ready();
+              }
               emit("inference-changed", null); changed();
               return structuredClone(initial.inference);
             case "discover_inference_models": return [{ id: "discovered-text-model", name: "Discovered text model" }];
             case "test_inference_connection":
+            {
+              const tested = { kind: "connection" as const, connection_id: args.id as string, model: args.model as string };
+              const isSelected = initial.inference.selection.kind === "connection" && initial.inference.selection.connection_id === tested.connection_id && initial.inference.selection.model === tested.model;
               if (initial.inferenceTestError) {
-                initial.inferenceStatus = { state: "error", selection: initial.inference.selection, revision: initial.inference.revision, message: initial.inferenceTestError };
+                const failed = { state: "error" as const, selection: tested, revision: initial.inference.revision, message: initial.inferenceTestError };
+                if (isSelected) initial.inferenceStatus = failed;
                 emit("inference-changed", null);
-                return structuredClone(initial.inferenceStatus);
+                return structuredClone(failed);
               }
-              initial.inferenceStatus = { state: "ready", selection: initial.inference.selection, revision: initial.inference.revision, message: null };
-              if (initial.inference.selection.kind === "connection" && initial.inference.selection.connection_id === args.id && initial.inference.selection.model === args.model) {
+              const revision = initial.inference.connections.find((connection) => connection.id === tested.connection_id)!.revision;
+              initial.inference.verified = [...initial.inference.verified.filter((entry) => !(entry.connection_id === tested.connection_id && entry.model === tested.model)), { connection_id: tested.connection_id, model: tested.model, revision }];
+              const passed = { state: "ready" as const, selection: tested, revision: initial.inference.revision, message: null };
+              if (isSelected) {
+                initial.inferenceStatus = passed;
                 initial.status.language = { state: "ready" };
                 initial.info.engines_ready = initial.status.speech.state === "ready";
               }
               emit("inference-changed", null); changed();
-              return structuredClone(initial.inferenceStatus);
+              return structuredClone(passed);
+            }
             case "remove_inference_connection":
               if (initial.inference.selection.kind === "connection" && initial.inference.selection.connection_id === args.id) throw new Error("Select a replacement first");
               initial.inference.connections = initial.inference.connections.filter((connection) => connection.id !== args.id);
@@ -444,6 +457,11 @@ async function finishPractice(page: Page, paste = true) {
   }), output);
 }
 
+async function showOnlineWriters(page: Page) {
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.getByRole("radio", { name: /^Online or server/ }).click();
+}
+
 async function launchPractice(page: Page) {
   const state = fixture(true);
   state.status.step = "practice";
@@ -457,16 +475,19 @@ test("inference presets keep bundled default and require explicit remote context
   state.status.required = false;
   await launch(page, state);
   await page.getByRole("button", { name: "Models", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Selected:" })).toContainText("Bundled local");
+  await expect(page.getByRole("status").filter({ hasText: "Now using:" })).toContainText("On this device");
+  await expect(page.getByRole("radio", { name: /^On this device/ })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("radio", { name: /^Online or server/ }).click();
+  await expect(page.getByRole("radio", { name: /^On this device/ })).toHaveAttribute("aria-checked", "true");
   for (const provider of ["OpenAI", "Anthropic", "Google"]) {
     await page.getByRole("button", { name: provider, exact: true }).click();
     await expect(page.getByLabel("API base URL")).toHaveValue(provider === "OpenAI" ? "https://api.openai.com/v1" : provider === "Anthropic" ? "https://api.anthropic.com/v1" : "https://generativelanguage.googleapis.com/v1beta/openai");
     await page.getByLabel("Model ID", { exact: true }).fill("text-model");
     await page.getByLabel("API key / token", { exact: true }).fill("mock-write-only-token");
-    await expect(page.getByRole("button", { name: "Save connection" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Save and use" })).toBeDisabled();
     await expect(page.getByText(/transcripts, prompt instructions, permitted app\/context metadata/)).toBeVisible();
     await page.getByLabel("I consent to sending this context to this endpoint.").check();
-    await expect(page.getByRole("button", { name: "Save connection" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Save and use" })).toBeEnabled();
   }
   await expect.poll(() => page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "test_inference_connection" || call === "save_inference_connection").length)).toBe(0);
 });
@@ -475,14 +496,16 @@ test("inference keys are write-only, cleared after save, and cannot follow endpo
   const state = fixture(true);
   state.status.required = false;
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "OpenAI", exact: true }).click();
   await page.getByLabel("Model ID", { exact: true }).fill("text-model");
   await page.getByLabel("API key / token", { exact: true }).fill("mock-write-only-token");
   await page.getByLabel("I consent to sending this context to this endpoint.").check();
-  await page.getByRole("button", { name: "Save connection" }).click();
-  await expect(page.getByLabel("Replace saved API key / token (leave blank to keep)")).toHaveValue("");
+  await page.getByRole("button", { name: "Save and use" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Now using:" })).toHaveText("Now using: OpenAI · text-model · Ready");
   await expect(page.getByText("Key saved (never displayed)", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Edit OpenAI" }).click();
+  await expect(page.getByLabel("Replace saved API key / token (leave blank to keep)")).toHaveValue("");
   expect(await page.evaluate(() => JSON.stringify(window.onboardingTest.state.inference))).not.toContain("mock-write-only-token");
   expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain("mock-write-only-token");
   expect(await page.evaluate(() => window.onboardingTest.inferenceWrites[0].hasSecret)).toBe(true);
@@ -500,7 +523,7 @@ test("inference hostname HTTP auto discovery needs general remote disclosure and
   const state = fixture(true);
   state.status.required = false;
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "Add custom model" }).click();
   await page.getByLabel("API base URL").fill("http://inference.example:1234/v1");
   await page.getByLabel("Protocol", { exact: true }).selectOption("openai_responses");
@@ -521,7 +544,7 @@ test("inference hostname HTTP auto discovery needs general remote disclosure and
   });
   expect(await page.evaluate(() => window.onboardingTest.inferenceWrites)).toEqual([]);
   expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "test_inference_connection" || call === "select_inference"))).toEqual([]);
-  await page.getByRole("button", { name: "Save connection" }).click();
+  await page.getByRole("button", { name: "Save and use" }).click();
   expect(await page.evaluate(() => window.onboardingTest.inferenceWrites[0].input)).toMatchObject({ protocol: "openai_responses", auth: "api_key", consent_remote: true, allow_insecure_lan: false });
 });
 
@@ -529,7 +552,7 @@ test("inference automatically discovers localhost before save without choosing, 
   const state = fixture(true);
   state.status.required = false;
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "LM Studio", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Discovering models" })).toBeVisible();
   await page.getByLabel("Connection name").fill("");
@@ -544,7 +567,7 @@ test("inference automatically discovers localhost before save without choosing, 
   expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toEqual({ kind: "bundled_local" });
   await page.getByLabel("Discovered model").selectOption("discovered-text-model");
   await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("discovered-text-model");
-  await expect(page.getByRole("button", { name: "Save connection" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save and use" })).toBeEnabled();
 });
 
 test("inference saved-key discovery cannot follow an edited endpoint without a new key", async ({ page }) => {
@@ -556,7 +579,7 @@ test("inference saved-key discovery cannot follow an edited endpoint without a n
     allow_insecure_lan: false, consent_remote: true, credential_present: true, revision: 1,
   }];
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "Edit Saved API" }).click();
   await expect(page.getByLabel("Discovered model")).toBeVisible();
   expect(await page.evaluate(() => window.onboardingTest.inferenceDiscoveries[0].hasSecret)).toBe(false);
@@ -584,7 +607,7 @@ test("inference ignores stale endpoint results and cancels debounce on closing t
     "http://localhost:5678/v1": { models: [{ id: "current-model", name: "Current model" }] },
   };
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "LM Studio", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.onboardingTest.inferenceDiscoveries.length)).toBe(1);
   await page.getByLabel("API base URL").fill("http://localhost:5678/v1");
@@ -605,7 +628,7 @@ test("inference ignores stale key, protocol and close/reopen discovery completio
     "http://localhost:8000/v1": { models: [{ id: "old-key-model", name: "Old key model" }], delay: 2200 },
   };
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "Add custom model" }).click();
   await page.getByLabel("API base URL").fill("http://localhost:8000/v1");
   await page.getByLabel("Authentication").selectOption("api_key");
@@ -637,11 +660,11 @@ test("inference discovery failure and empty results preserve manual save and off
   state.status.required = false;
   state.failures.discover_inference_draft = "Model listing unsupported";
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "LM Studio", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Model listing unsupported" })).toBeVisible();
   await page.getByLabel("Model ID", { exact: true }).fill("manual-model");
-  await expect(page.getByRole("button", { name: "Save connection" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save and use" })).toBeEnabled();
   await page.evaluate(() => {
     delete window.onboardingTest.state.failures.discover_inference_draft;
     window.onboardingTest.state.inferenceDiscovery = { "http://localhost:1234/v1": { models: [] } };
@@ -649,42 +672,42 @@ test("inference discovery failure and empty results preserve manual save and off
   await page.getByRole("button", { name: "Retry model discovery" }).click();
   await expect(page.getByRole("status").filter({ hasText: "No models discovered" })).toBeVisible();
   await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("manual-model");
-  await page.getByRole("button", { name: "Save connection" }).click();
+  await page.getByRole("button", { name: "Save and use" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Now using:" })).toHaveText("Now using: LM Studio · manual-model · Ready");
   expect(await page.evaluate(() => window.onboardingTest.inferenceWrites[0].input.model)).toBe("manual-model");
-  expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "test_inference_connection" || call === "select_inference"))).toEqual([]);
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "test_inference_connection" || call === "select_inference"))).toEqual(["test_inference_connection", "select_inference"]);
 });
 
-test("guided inference supports LM Studio discovery and selected-model test without bundled LLM download", async ({ page }) => {
+test("guided inference supports LM Studio discovery and checks before switching without bundled LLM download", async ({ page }) => {
   const state = fixture();
   state.status.speech = { state: "ready" };
   state.models[0].installed = state.models[0].selected = true;
   await launch(page, state);
   await expect(page.getByRole("heading", { name: "Speech and inference" })).toBeVisible();
+  await page.getByRole("radio", { name: /^Online or server/ }).click();
   await page.getByRole("button", { name: "LM Studio", exact: true }).click();
   await expect(page.getByLabel("API base URL")).toHaveValue("http://localhost:1234/v1");
   await expect(page.getByLabel("Authentication")).toHaveValue("none");
-  await page.getByLabel("Model ID", { exact: true }).fill("manual-text-model");
-  await page.getByRole("button", { name: "Save connection" }).click();
-  await page.getByRole("button", { name: "Refresh models", exact: true }).first().click();
   await page.getByLabel("Discovered model").selectOption("discovered-text-model");
   await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeDisabled();
-  await page.getByRole("button", { name: "Save connection" }).click();
-  await page.getByRole("button", { name: "Use LM Studio", exact: true }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "Shortcuts are unavailable" })).toContainText("Click Test below");
-  await expect(page.getByText("No bundled language-model download is required.", { exact: false })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeDisabled();
-  await expect(page.getByText(/Tests send tiny synthetic, non-sensitive content/)).toBeVisible();
-  await page.getByRole("button", { name: "Test LM Studio", exact: true }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "Shortcuts are unavailable" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Save and use" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Now using:" })).toHaveText("Now using: LM Studio · discovered-text-model · Ready");
+  await expect(page.getByRole("radio", { name: /^Online or server/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("alert").filter({ hasText: "Shortcuts are paused" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeEnabled();
-  expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toMatchObject({ kind: "connection", model: "discovered-text-model" });
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "test_inference_connection" || call === "select_inference"))).toEqual(["test_inference_connection", "select_inference"]);
   expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "download_model"))).toEqual([]);
   await expect(page.getByRole("button", { name: "Remove LM Studio" })).toBeDisabled();
+  await page.evaluate(() => { window.onboardingTest.state.inferenceTestError = "Model not loaded."; });
+  await page.getByRole("button", { name: "Edit LM Studio" }).click();
   await page.getByLabel("Model ID", { exact: true }).fill("replacement-model");
   await page.getByRole("button", { name: "Save connection" }).click();
-  await expect(page.getByRole("button", { name: "Use LM Studio", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Use LM Studio", exact: true }).click();
-  expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toMatchObject({ model: "replacement-model" });
+  await expect(page.getByRole("alert").filter({ hasText: "LM Studio · replacement-model check failed: Model not loaded." })).toBeVisible();
+  expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toMatchObject({ kind: "connection", model: "replacement-model" });
+  await expect(page.getByRole("alert").filter({ hasText: "Shortcuts are paused until LM Studio passes" })).toBeVisible();
+  await page.evaluate(() => { delete window.onboardingTest.state.inferenceTestError; });
+  await page.getByRole("button", { name: "Check now" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Shortcuts are paused" })).toHaveCount(0);
 });
 
 test("inference editor preserves pane edits and errors while disabling concurrent actions", async ({ page }) => {
@@ -693,7 +716,7 @@ test("inference editor preserves pane edits and errors while disabling concurren
   state.failures.save_inference_connection = "Credential store is locked. Unlock it and try again.";
   state.delays = { save_inference_connection: 500 };
   await launch(page, state);
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await showOnlineWriters(page);
   await page.getByRole("button", { name: "Add custom model" }).click();
   await page.getByLabel("API base URL").fill("http://localhost:8000/v1");
   await page.getByLabel("Protocol", { exact: true }).selectOption("anthropic_messages");
@@ -703,7 +726,7 @@ test("inference editor preserves pane edits and errors while disabling concurren
   await page.getByRole("button", { name: "General", exact: true }).click();
   await page.getByRole("button", { name: "Models", exact: true }).click();
   await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("persistent-model");
-  await page.getByRole("button", { name: "Save connection" }).click();
+  await page.getByRole("button", { name: "Save and use" }).click();
   await expect(page.getByLabel("API base URL")).toBeDisabled();
   await expect(page.getByRole("button", { name: "LM Studio", exact: true })).toBeDisabled();
   await expect(page.getByRole("alert").filter({ hasText: "Credential store is locked" })).toBeVisible();
@@ -731,9 +754,9 @@ test("inference recovery navigation and external history disclosures are availab
   await expect(page.getByText(/Local storage does not mean inference context stays local/)).toBeVisible();
   await page.getByRole("button", { name: "Models", exact: true }).click();
   await page.evaluate(() => { window.onboardingTest.state.inferenceTestError = "Selected model unavailable. Check server loading."; });
-  await page.getByRole("button", { name: "Test Hosted model", exact: true }).click();
+  await page.getByRole("button", { name: "Check Hosted model", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Selected model unavailable" }).first()).toBeVisible();
-  await expect(page.getByText(/Synthetic test completed/)).toHaveCount(0);
+  await expect(page.getByText(/responded\./)).toHaveCount(0);
 });
 
 test("Jev key saving is separate from explicit remote review consent and removal disables it", async ({ page }) => {
@@ -1611,7 +1634,9 @@ test("combined Models view migrates Inference navigation and preserves connectio
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
   await expect(page.getByRole("table", { name: "Speech to text" })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Bundled prompt models" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "On-device prompt models" })).toBeVisible();
+  await page.getByRole("radio", { name: /^Online or server/ }).click();
+  await expect(page.getByRole("table", { name: "On-device prompt models" })).toHaveCount(0);
   await page.getByRole("button", { name: "Add custom model" }).click();
   await page.getByLabel("Connection name").fill("My endpoint");
   await page.getByLabel("API base URL").fill("http://localhost:1234/v1");
@@ -1641,13 +1666,12 @@ test("verified endpoint opens in combined Models without asking for another test
   await page.getByRole("button", { name: "Models", exact: true }).click();
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await page.reload();
-    await expect(page.getByRole("status").filter({ hasText: "Selected:" })).toHaveText("Selected: Agent Maestro · gpt-6-luna · Ready");
-    await expect(page.getByText(/Shortcuts are unavailable/)).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Now using:" })).toHaveText("Now using: Agent Maestro · gpt-6-luna · Ready");
+    await expect(page.getByRole("radio", { name: /^Online or server/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText(/Shortcuts are paused/)).toHaveCount(0);
     expect(await page.evaluate(() => window.onboardingTest.calls.includes("test_inference_connection"))).toBe(false);
   }
-  await expect(page.getByRole("table", { name: "Bundled prompt models" })).not.toBeVisible();
-  await page.getByText("Manage inactive bundled prompt models", { exact: true }).click();
-  await expect(page.getByRole("table", { name: "Bundled prompt models" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "On-device prompt models" })).toHaveCount(0);
   await page.getByRole("button", { name: "Edit Agent Maestro" }).click();
   await page.getByLabel("Connection name").fill("My Maestro");
   await page.getByRole("button", { name: "Save connection" }).click();
@@ -1656,6 +1680,41 @@ test("verified endpoint opens in combined Models without asking for another test
     "id", "name", "provider", "base_url", "protocol", "auth", "model", "stream",
     "allow_insecure_lan", "consent_remote", "remove_secret",
   ].sort());
+});
+
+test("prompt writer switches between on-device and online in one click and keeps the working writer when a check fails", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.inference.connections = [{
+    id: "maestro", name: "Agent Maestro", provider: "custom", base_url: "http://localhost:23333/api/openai/v1",
+    protocol: "openai_chat_completions", auth: "none", model: "gpt-6-luna", stream: true,
+    allow_insecure_lan: false, consent_remote: false, credential_present: false, revision: 1,
+  }, {
+    id: "broken", name: "Broken server", provider: "custom", base_url: "http://localhost:9000/v1",
+    protocol: "openai_chat_completions", auth: "none", model: "missing-model", stream: true,
+    allow_insecure_lan: false, consent_remote: false, credential_present: false, revision: 1,
+  }];
+  state.inference.verified = [{ connection_id: "maestro", model: "gpt-6-luna", revision: 1 }];
+  await launch(page, state);
+  await page.getByRole("button", { name: "Models", exact: true }).click();
+  const local = page.getByRole("radio", { name: /^On this device/ });
+  const online = page.getByRole("radio", { name: /^Online or server/ });
+  const now = page.getByRole("status").filter({ hasText: "Now using:" });
+  await expect(local).toHaveAttribute("aria-checked", "true");
+  await online.click();
+  await expect(online).toHaveAttribute("aria-checked", "true");
+  await expect(now).toHaveText("Now using: Agent Maestro · gpt-6-luna · Ready");
+  await local.click();
+  await expect(local).toHaveAttribute("aria-checked", "true");
+  await expect(now).toContainText("On this device");
+  await online.click();
+  await expect(now).toHaveText("Now using: Agent Maestro · gpt-6-luna · Ready");
+  expect(await page.evaluate(() => window.onboardingTest.calls.includes("test_inference_connection"))).toBe(false);
+  await page.evaluate(() => { window.onboardingTest.state.inferenceTestError = "Connection refused."; });
+  await page.getByRole("radio", { name: "Use Broken server" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Broken server · missing-model could not be reached: Connection refused." })).toContainText("You are still using Agent Maestro · gpt-6-luna.");
+  expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toEqual({ kind: "connection", connection_id: "maestro", model: "gpt-6-luna" });
+  await expect(now).toHaveText("Now using: Agent Maestro · gpt-6-luna · Ready");
 });
 
 test("prompt catalog stays usable in the minimum window", async ({ page }, testInfo) => {
