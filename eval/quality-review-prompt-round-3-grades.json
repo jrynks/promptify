@@ -1,0 +1,3995 @@
+{
+  "raw_report": "eval/quality-review-prompt-round-3.json",
+  "grader": "Copilot reading final outputs independently of local reviewer verdicts",
+  "rubric": "Five fixed equally weighted dimensions /5; total /25 multiplied by 10. Failures/incomplete output = all zero. Blocked complete text is graded, not excluded.",
+  "limitations": "Independent of the runtime model reviewer, not blinded human grading; finite synthetic sample, fixed request-ID seeds are not paired across altered call counts.",
+  "samples": [
+    {
+      "case_id": "o01",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default explanations synthesize instead of performing a separate final check; #1/#3 add perception detail and steps. Adaptive concise verified explanations with a small unrequested example.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o01",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default explanations synthesize instead of performing a separate final check; #1/#3 add perception detail and steps. Adaptive concise verified explanations with a small unrequested example.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o01",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default explanations synthesize instead of performing a separate final check; #1/#3 add perception detail and steps. Adaptive concise verified explanations with a small unrequested example.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o01",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default explanations synthesize instead of performing a separate final check; #1/#3 add perception detail and steps. Adaptive concise verified explanations with a small unrequested example.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o01",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default explanations synthesize instead of performing a separate final check; #1/#3 add perception detail and steps. Adaptive concise verified explanations with a small unrequested example.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o01",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default explanations synthesize instead of performing a separate final check; #1/#3 add perception detail and steps. Adaptive concise verified explanations with a small unrequested example.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o02",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o02",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o02",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o03",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Default #1 concise; #2 ten steps, unrequested best-option choice and questions; #3 fails. Adaptive loops target early source gathering, add recommendations and #2 has twelve-step boilerplate.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o03",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 1
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 concise; #2 ten steps, unrequested best-option choice and questions; #3 fails. Adaptive loops target early source gathering, add recommendations and #2 has twelve-step boilerplate.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o03",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #1 concise; #2 ten steps, unrequested best-option choice and questions; #3 fails. Adaptive loops target early source gathering, add recommendations and #2 has twelve-step boilerplate.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o03",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #1 concise; #2 ten steps, unrequested best-option choice and questions; #3 fails. Adaptive loops target early source gathering, add recommendations and #2 has twelve-step boilerplate.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o03",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 2
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 concise; #2 ten steps, unrequested best-option choice and questions; #3 fails. Adaptive loops target early source gathering, add recommendations and #2 has twelve-step boilerplate.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o03",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.6,
+      "evidence": "Default #1 concise; #2 ten steps, unrequested best-option choice and questions; #3 fails. Adaptive loops target early source gathering, add recommendations and #2 has twelve-step boilerplate.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o04",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful concise polite drafts, no apology/deadline; adaptive #3 adds missing-detail reporting.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o04",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful concise polite drafts, no apology/deadline; adaptive #3 adds missing-detail reporting.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o04",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful concise polite drafts, no apology/deadline; adaptive #3 adds missing-detail reporting.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o04",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful concise polite drafts, no apology/deadline; adaptive #3 adds missing-detail reporting.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o04",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful concise polite drafts, no apology/deadline; adaptive #3 adds missing-detail reporting.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o04",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Faithful concise polite drafts, no apology/deadline; adaptive #3 adds missing-detail reporting.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o05",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #2 false prerequisite between independent analyses and parallel synthesis; two default failures. Adaptive #1 serializes sources; #2 has proper independent roots but treats disagreement as failure; #3 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o05",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 2,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #2 false prerequisite between independent analyses and parallel synthesis; two default failures. Adaptive #1 serializes sources; #2 has proper independent roots but treats disagreement as failure; #3 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o05",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #2 false prerequisite between independent analyses and parallel synthesis; two default failures. Adaptive #1 serializes sources; #2 has proper independent roots but treats disagreement as failure; #3 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o05",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 3,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default #2 false prerequisite between independent analyses and parallel synthesis; two default failures. Adaptive #1 serializes sources; #2 has proper independent roots but treats disagreement as failure; #3 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o05",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #2 false prerequisite between independent analyses and parallel synthesis; two default failures. Adaptive #1 serializes sources; #2 has proper independent roots but treats disagreement as failure; #3 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o05",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #2 false prerequisite between independent analyses and parallel synthesis; two default failures. Adaptive #1 serializes sources; #2 has proper independent roots but treats disagreement as failure; #3 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o06",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Default keeps the final French request. Adaptive #1 weakens the explicit no-summary exclusion; #2 restores the retracted email in its preamble (rejected); #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o06",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default keeps the final French request. Adaptive #1 weakens the explicit no-summary exclusion; #2 restores the retracted email in its preamble (rejected); #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o06",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default keeps the final French request. Adaptive #1 weakens the explicit no-summary exclusion; #2 restores the retracted email in its preamble (rejected); #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o06",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Default keeps the final French request. Adaptive #1 weakens the explicit no-summary exclusion; #2 restores the retracted email in its preamble (rejected); #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o06",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 1,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.4,
+      "evidence": "Default keeps the final French request. Adaptive #1 weakens the explicit no-summary exclusion; #2 restores the retracted email in its preamble (rejected); #3 faithful.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o06",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default keeps the final French request. Adaptive #1 weakens the explicit no-summary exclusion; #2 restores the retracted email in its preamble (rejected); #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o07",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default fixes and reruns the full suite; #3 awkward Done grammar. Adaptive has two failures and one workflow with appended questions after Done.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o07",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Default fixes and reruns the full suite; #3 awkward Done grammar. Adaptive has two failures and one workflow with appended questions after Done.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o07",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Default fixes and reruns the full suite; #3 awkward Done grammar. Adaptive has two failures and one workflow with appended questions after Done.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o07",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default fixes and reruns the full suite; #3 awkward Done grammar. Adaptive has two failures and one workflow with appended questions after Done.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o07",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Default fixes and reruns the full suite; #3 awkward Done grammar. Adaptive has two failures and one workflow with appended questions after Done.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o07",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default fixes and reruns the full suite; #3 awkward Done grammar. Adaptive has two failures and one workflow with appended questions after Done.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o08",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Default #1 concise; #2/#3 overprescribe story structure without a distinct final check. Adaptive #1 checks only the introduction before the rest; two failures.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o08",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default #1 concise; #2/#3 overprescribe story structure without a distinct final check. Adaptive #1 checks only the introduction before the rest; two failures.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o08",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #1 concise; #2/#3 overprescribe story structure without a distinct final check. Adaptive #1 checks only the introduction before the rest; two failures.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o08",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default #1 concise; #2/#3 overprescribe story structure without a distinct final check. Adaptive #1 checks only the introduction before the rest; two failures.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o08",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #1 concise; #2/#3 overprescribe story structure without a distinct final check. Adaptive #1 checks only the introduction before the rest; two failures.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o08",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #1 concise; #2/#3 overprescribe story structure without a distinct final check. Adaptive #1 checks only the introduction before the rest; two failures.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o09",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 1,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.0,
+      "evidence": "Default #1 returns a single-line image prompt rather than creating the image; the other five create and inspect the requested image.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o09",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default #1 returns a single-line image prompt rather than creating the image; the other five create and inspect the requested image.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o09",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Default #1 returns a single-line image prompt rather than creating the image; the other five create and inspect the requested image.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o09",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default #1 returns a single-line image prompt rather than creating the image; the other five create and inspect the requested image.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o09",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default #1 returns a single-line image prompt rather than creating the image; the other five create and inspect the requested image.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "o09",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Default #1 returns a single-line image prompt rather than creating the image; the other five create and inspect the requested image.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h01",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #1 lacks a final verifier; #3 and adaptive #1 permit Done on prompting for or failing to get the source. Adaptive #3 invents three bullets and replaces comparing claims with checking them.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h01",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Default #1 lacks a final verifier; #3 and adaptive #1 permit Done on prompting for or failing to get the source. Adaptive #3 invents three bullets and replaces comparing claims with checking them.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h01",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 lacks a final verifier; #3 and adaptive #1 permit Done on prompting for or failing to get the source. Adaptive #3 invents three bullets and replaces comparing claims with checking them.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h01",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 lacks a final verifier; #3 and adaptive #1 permit Done on prompting for or failing to get the source. Adaptive #3 invents three bullets and replaces comparing claims with checking them.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h01",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #1 lacks a final verifier; #3 and adaptive #1 permit Done on prompting for or failing to get the source. Adaptive #3 invents three bullets and replaces comparing claims with checking them.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h01",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "Default #1 lacks a final verifier; #3 and adaptive #1 permit Done on prompting for or failing to get the source. Adaptive #3 invents three bullets and replaces comparing claims with checking them.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h02",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful Morgan requests; adaptive #1 sends before verification with no delivery check (rejected; ambiguous send authorization, not classified critical).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h02",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Faithful Morgan requests; adaptive #1 sends before verification with no delivery check (rejected; ambiguous send authorization, not classified critical).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h02",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful Morgan requests; adaptive #1 sends before verification with no delivery check (rejected; ambiguous send authorization, not classified critical).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h02",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Faithful Morgan requests; adaptive #1 sends before verification with no delivery check (rejected; ambiguous send authorization, not classified critical).",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h02",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful Morgan requests; adaptive #1 sends before verification with no delivery check (rejected; ambiguous send authorization, not classified critical).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h02",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Faithful Morgan requests; adaptive #1 sends before verification with no delivery check (rejected; ambiguous send authorization, not classified critical).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h03",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h03",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h03",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h03",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h03",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h03",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h04",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All default samples fail. Adaptive #1/#2 tutor one turn at a time without a fixed total; #3 invents assessment, summaries, parallel monitoring and three Done clauses.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h04",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All default samples fail. Adaptive #1/#2 tutor one turn at a time without a fixed total; #3 invents assessment, summaries, parallel monitoring and three Done clauses.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h04",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All default samples fail. Adaptive #1/#2 tutor one turn at a time without a fixed total; #3 invents assessment, summaries, parallel monitoring and three Done clauses.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h04",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All default samples fail. Adaptive #1/#2 tutor one turn at a time without a fixed total; #3 invents assessment, summaries, parallel monitoring and three Done clauses.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h04",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All default samples fail. Adaptive #1/#2 tutor one turn at a time without a fixed total; #3 invents assessment, summaries, parallel monitoring and three Done clauses.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h04",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 3,
+        "correction_recheck": 2,
+        "completion": 1,
+        "proportionality": 1
+      },
+      "grade_out_of_10": 4.0,
+      "evidence": "All default samples fail. Adaptive #1/#2 tutor one turn at a time without a fixed total; #3 invents assessment, summaries, parallel monitoring and three Done clauses.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h05",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Exact French translation with Nora, date and amount unchanged.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h05",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Exact French translation with Nora, date and amount unchanged.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h05",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Exact French translation with Nora, date and amount unchanged.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h05",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Exact French translation with Nora, date and amount unchanged.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h05",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Exact French translation with Nora, date and amount unchanged.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h05",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Exact French translation with Nora, date and amount unchanged.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h06",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "All preserve 120 versus 102 without averaging. Several synthesize without a distinct final verifier; default #3 serializes source analyses and is overbuilt.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h06",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All preserve 120 versus 102 without averaging. Several synthesize without a distinct final verifier; default #3 serializes source analyses and is overbuilt.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h06",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 4,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "All preserve 120 versus 102 without averaging. Several synthesize without a distinct final verifier; default #3 serializes source analyses and is overbuilt.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h06",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All preserve 120 versus 102 without averaging. Several synthesize without a distinct final verifier; default #3 serializes source analyses and is overbuilt.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h06",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "All preserve 120 versus 102 without averaging. Several synthesize without a distinct final verifier; default #3 serializes source analyses and is overbuilt.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h06",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "All preserve 120 versus 102 without averaging. Several synthesize without a distinct final verifier; default #3 serializes source analyses and is overbuilt.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "h07",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All usable outputs rerun both tests and lint after the final edit and loop correction. Default #2 adds three unnecessary questions.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h07",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 2
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "All usable outputs rerun both tests and lint after the final edit and loop correction. Default #2 adds three unnecessary questions.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h07",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All usable outputs rerun both tests and lint after the final edit and loop correction. Default #2 adds three unnecessary questions.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h07",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All usable outputs rerun both tests and lint after the final edit and loop correction. Default #2 adds three unnecessary questions.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h07",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All usable outputs rerun both tests and lint after the final edit and loop correction. Default #2 adds three unnecessary questions.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h07",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "All usable outputs rerun both tests and lint after the final edit and loop correction. Default #2 adds three unnecessary questions.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h08",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Image created and inspected for no lettering/watermark. Default #2 prescribes a specific site and has a garbled Done clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h08",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "Image created and inspected for no lettering/watermark. Default #2 prescribes a specific site and has a garbled Done clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h08",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Image created and inspected for no lettering/watermark. Default #2 prescribes a specific site and has a garbled Done clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h08",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Image created and inspected for no lettering/watermark. Default #2 prescribes a specific site and has a garbled Done clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h08",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Image created and inspected for no lettering/watermark. Default #2 prescribes a specific site and has a garbled Done clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h08",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Image created and inspected for no lettering/watermark. Default #2 prescribes a specific site and has a garbled Done clause.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h09",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six samples fail without usable output.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h09",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six samples fail without usable output.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h09",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six samples fail without usable output.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h09",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six samples fail without usable output.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h09",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six samples fail without usable output.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h09",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six samples fail without usable output.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h10",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Planned May 8 and post-testing confirmation retained without guarantees or passed-testing claims.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b1_h10",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Planned May 8 and post-testing confirmation retained without guarantees or passed-testing claims.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b1_h10",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Planned May 8 and post-testing confirmation retained without guarantees or passed-testing claims.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b1_h10",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Planned May 8 and post-testing confirmation retained without guarantees or passed-testing claims.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b1_h10",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Planned May 8 and post-testing confirmation retained without guarantees or passed-testing claims.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b1_h10",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Planned May 8 and post-testing confirmation retained without guarantees or passed-testing claims.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b2_h11",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Prototype, pending review and undecided launch retained with owner request; adaptive #1 fails and #2 edits after its check.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h11",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Prototype, pending review and undecided launch retained with owner request; adaptive #1 fails and #2 edits after its check.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h11",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Prototype, pending review and undecided launch retained with owner request; adaptive #1 fails and #2 edits after its check.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h11",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Prototype, pending review and undecided launch retained with owner request; adaptive #1 fails and #2 edits after its check.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h11",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Prototype, pending review and undecided launch retained with owner request; adaptive #1 fails and #2 edits after its check.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h11",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Prototype, pending review and undecided launch retained with owner request; adaptive #1 fails and #2 edits after its check.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h12",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Usable outputs avoid following the embedded command, but most ban mentioning the quoted command in a summary; default #3 and adaptive #3 mischaracterize the message as a request to summarize a missing report.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b2_h12",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Usable outputs avoid following the embedded command, but most ban mentioning the quoted command in a summary; default #3 and adaptive #3 mischaracterize the message as a request to summarize a missing report.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b2_h12",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "Usable outputs avoid following the embedded command, but most ban mentioning the quoted command in a summary; default #3 and adaptive #3 mischaracterize the message as a request to summarize a missing report.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h12",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.6,
+      "evidence": "Usable outputs avoid following the embedded command, but most ban mentioning the quoted command in a summary; default #3 and adaptive #3 mischaracterize the message as a request to summarize a missing report.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h12",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Usable outputs avoid following the embedded command, but most ban mentioning the quoted command in a summary; default #3 and adaptive #3 mischaracterize the message as a request to summarize a missing report.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b2_h12",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "Usable outputs avoid following the embedded command, but most ban mentioning the quoted command in a summary; default #3 and adaptive #3 mischaracterize the message as a request to summarize a missing report.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b3_h13",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "June 18 venue-confirmation note without booking or arrival time; some vague Done criteria.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b3_h13",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "June 18 venue-confirmation note without booking or arrival time; some vague Done criteria.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b3_h13",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "June 18 venue-confirmation note without booking or arrival time; some vague Done criteria.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b3_h13",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "June 18 venue-confirmation note without booking or arrival time; some vague Done criteria.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b3_h13",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "June 18 venue-confirmation note without booking or arrival time; some vague Done criteria.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b3_h13",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "June 18 venue-confirmation note without booking or arrival time; some vague Done criteria.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b3_h14",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Non-default regression and reload retained. Default #2 omits key/default exclusion; default asks optional questions; adaptive writes the test without an explicit run step.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b3_h14",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Non-default regression and reload retained. Default #2 omits key/default exclusion; default asks optional questions; adaptive writes the test without an explicit run step.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b3_h14",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Non-default regression and reload retained. Default #2 omits key/default exclusion; default asks optional questions; adaptive writes the test without an explicit run step.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b3_h14",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Non-default regression and reload retained. Default #2 omits key/default exclusion; default asks optional questions; adaptive writes the test without an explicit run step.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b3_h14",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Non-default regression and reload retained. Default #2 omits key/default exclusion; default asks optional questions; adaptive writes the test without an explicit run step.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b3_h14",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Non-default regression and reload retained. Default #2 omits key/default exclusion; default asks optional questions; adaptive writes the test without an explicit run step.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h15",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 4,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 1
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 twelve-step table/boilerplate; #2 and adaptive #3 fail. Adaptive #1 disclaims recommendation wording; #2 focuses validation on the lower quote and loops before its verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h15",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #1 twelve-step table/boilerplate; #2 and adaptive #3 fail. Adaptive #1 disclaims recommendation wording; #2 focuses validation on the lower quote and loops before its verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h15",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #1 twelve-step table/boilerplate; #2 and adaptive #3 fail. Adaptive #1 disclaims recommendation wording; #2 focuses validation on the lower quote and loops before its verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b4_h15",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default #1 twelve-step table/boilerplate; #2 and adaptive #3 fail. Adaptive #1 disclaims recommendation wording; #2 focuses validation on the lower quote and loops before its verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h15",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default #1 twelve-step table/boilerplate; #2 and adaptive #3 fail. Adaptive #1 disclaims recommendation wording; #2 focuses validation on the lower quote and loops before its verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b4_h15",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #1 twelve-step table/boilerplate; #2 and adaptive #3 fail. Adaptive #1 disclaims recommendation wording; #2 focuses validation on the lower quote and loops before its verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h16",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 never runs the regression and invents documentation; #3 embeds questions. Others preserve binding/no dependency and rerun final checks; adaptive #2 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h16",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default #1 never runs the regression and invents documentation; #3 embeds questions. Others preserve binding/no dependency and rerun final checks; adaptive #2 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h16",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Default #1 never runs the regression and invents documentation; #3 embeds questions. Others preserve binding/no dependency and rerun final checks; adaptive #2 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h16",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default #1 never runs the regression and invents documentation; #3 embeds questions. Others preserve binding/no dependency and rerun final checks; adaptive #2 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h16",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #1 never runs the regression and invents documentation; #3 embeds questions. Others preserve binding/no dependency and rerun final checks; adaptive #2 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b4_h16",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default #1 never runs the regression and invents documentation; #3 embeds questions. Others preserve binding/no dependency and rerun final checks; adaptive #2 fails.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b5_h17",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Draft-for-approval investigation response without refund promise; some omit explicit no-send wording.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h17",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Draft-for-approval investigation response without refund promise; some omit explicit no-send wording.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h17",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Draft-for-approval investigation response without refund promise; some omit explicit no-send wording.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b5_h17",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Draft-for-approval investigation response without refund promise; some omit explicit no-send wording.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b5_h17",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Draft-for-approval investigation response without refund promise; some omit explicit no-send wording.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b5_h17",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Draft-for-approval investigation response without refund promise; some omit explicit no-send wording.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h18",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Attribution and unresolved status retained; several outputs synthesize without a distinct final verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h18",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Attribution and unresolved status retained; several outputs synthesize without a distinct final verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h18",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Attribution and unresolved status retained; several outputs synthesize without a distinct final verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h18",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Attribution and unresolved status retained; several outputs synthesize without a distinct final verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b5_h18",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Attribution and unresolved status retained; several outputs synthesize without a distinct final verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b5_h18",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Attribution and unresolved status retained; several outputs synthesize without a distinct final verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h19",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "One sentence, no code, no analogy; adaptive checks omit accuracy.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h19",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "One sentence, no code, no analogy; adaptive checks omit accuracy.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h19",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "One sentence, no code, no analogy; adaptive checks omit accuracy.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h19",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "One sentence, no code, no analogy; adaptive checks omit accuracy.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h19",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "One sentence, no code, no analogy; adaptive checks omit accuracy.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h19",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "One sentence, no code, no analogy; adaptive checks omit accuracy.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b6_h20",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Internal beta status and bug-report request retained without public launch or date promise.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b6_h20",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Internal beta status and bug-report request retained without public launch or date promise.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b6_h20",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Internal beta status and bug-report request retained without public launch or date promise.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b6_h20",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Internal beta status and bug-report request retained without public launch or date promise.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b6_h20",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Internal beta status and bug-report request retained without public launch or date promise.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b6_h20",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Internal beta status and bug-report request retained without public launch or date promise.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h21",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Confirmed dates/estimates/two undecided locations retained without recommendation; default #2 lacks a separate verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b7_h21",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.8,
+      "evidence": "Confirmed dates/estimates/two undecided locations retained without recommendation; default #2 lacks a separate verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h21",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Confirmed dates/estimates/two undecided locations retained without recommendation; default #2 lacks a separate verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h21",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Confirmed dates/estimates/two undecided locations retained without recommendation; default #2 lacks a separate verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b7_h21",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Confirmed dates/estimates/two undecided locations retained without recommendation; default #2 lacks a separate verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h21",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Confirmed dates/estimates/two undecided locations retained without recommendation; default #2 lacks a separate verifier.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h22",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Conditional Thursday availability usually retained. Default #2/#3 turn not agreeing into refusing Friday; adaptive #2 drops the updated-invite condition (rejected).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h22",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Conditional Thursday availability usually retained. Default #2/#3 turn not agreeing into refusing Friday; adaptive #2 drops the updated-invite condition (rejected).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h22",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 4,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.2,
+      "evidence": "Conditional Thursday availability usually retained. Default #2/#3 turn not agreeing into refusing Friday; adaptive #2 drops the updated-invite condition (rejected).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h22",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Conditional Thursday availability usually retained. Default #2/#3 turn not agreeing into refusing Friday; adaptive #2 drops the updated-invite condition (rejected).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "b7_h22",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Conditional Thursday availability usually retained. Default #2/#3 turn not agreeing into refusing Friday; adaptive #2 drops the updated-invite condition (rejected).",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "b7_h22",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Conditional Thursday availability usually retained. Default #2/#3 turn not agreeing into refusing Friday; adaptive #2 drops the updated-invite condition (rejected).",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "c01",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 1,
+        "dependencies": 4,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 2
+      },
+      "grade_out_of_10": 5.2,
+      "evidence": "No sample preserves the unresolved reference and waits for essential context. Default #1 invents a ChatGPT target prompt; others assume a current prompt draft, history or shared contract; adaptive #2 allows Done at the limit.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c01",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 4,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "No sample preserves the unresolved reference and waits for essential context. Default #1 invents a ChatGPT target prompt; others assume a current prompt draft, history or shared contract; adaptive #2 allows Done at the limit.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c01",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.6,
+      "evidence": "No sample preserves the unresolved reference and waits for essential context. Default #1 invents a ChatGPT target prompt; others assume a current prompt draft, history or shared contract; adaptive #2 allows Done at the limit.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c01",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 4,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.0,
+      "evidence": "No sample preserves the unresolved reference and waits for essential context. Default #1 invents a ChatGPT target prompt; others assume a current prompt draft, history or shared contract; adaptive #2 allows Done at the limit.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c01",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 4,
+        "correction_recheck": 3,
+        "completion": 2,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 5.6,
+      "evidence": "No sample preserves the unresolved reference and waits for essential context. Default #1 invents a ChatGPT target prompt; others assume a current prompt draft, history or shared contract; adaptive #2 allows Done at the limit.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c01",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 4,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 6.0,
+      "evidence": "No sample preserves the unresolved reference and waits for essential context. Default #1 invents a ChatGPT target prompt; others assume a current prompt draft, history or shared contract; adaptive #2 allows Done at the limit.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c02",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "Default #2/#3 retain the supplied workflow and criteria with imperfect check/loop structure; #1 fails. All adaptive samples ignore the supplied workflow and edit one prompt draft.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c02",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 4,
+        "correction_recheck": 4,
+        "completion": 5,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 8.4,
+      "evidence": "Default #2/#3 retain the supplied workflow and criteria with imperfect check/loop structure; #1 fails. All adaptive samples ignore the supplied workflow and edit one prompt draft.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c02",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 4,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default #2/#3 retain the supplied workflow and criteria with imperfect check/loop structure; #1 fails. All adaptive samples ignore the supplied workflow and edit one prompt draft.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c02",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 1,
+        "dependencies": 4,
+        "correction_recheck": 3,
+        "completion": 2,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 5.2,
+      "evidence": "Default #2/#3 retain the supplied workflow and criteria with imperfect check/loop structure; #1 fails. All adaptive samples ignore the supplied workflow and edit one prompt draft.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c02",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 1,
+        "dependencies": 4,
+        "correction_recheck": 3,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.0,
+      "evidence": "Default #2/#3 retain the supplied workflow and criteria with imperfect check/loop structure; #1 fails. All adaptive samples ignore the supplied workflow and edit one prompt draft.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c02",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 1,
+        "dependencies": 4,
+        "correction_recheck": 2,
+        "completion": 2,
+        "proportionality": 2
+      },
+      "grade_out_of_10": 4.4,
+      "evidence": "Default #2/#3 retain the supplied workflow and criteria with imperfect check/loop structure; #1 fails. All adaptive samples ignore the supplied workflow and edit one prompt draft.",
+      "critical_fidelity": true,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c03",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six parallel-evidence samples fail without usable output despite the new two-source teaching.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c03",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six parallel-evidence samples fail without usable output despite the new two-source teaching.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c03",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six parallel-evidence samples fail without usable output despite the new two-source teaching.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c03",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six parallel-evidence samples fail without usable output despite the new two-source teaching.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c03",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six parallel-evidence samples fail without usable output despite the new two-source teaching.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c03",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 0,
+        "dependencies": 0,
+        "correction_recheck": 0,
+        "completion": 0,
+        "proportionality": 0
+      },
+      "grade_out_of_10": 0.0,
+      "evidence": "All six parallel-evidence samples fail without usable output despite the new two-source teaching.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "legacy",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 9.6,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": false,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.6,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "adaptive",
+      "sample": 3,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 5,
+        "dependencies": 5,
+        "correction_recheck": 5,
+        "completion": 5,
+        "proportionality": 5
+      },
+      "grade_out_of_10": 10.0,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": false,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    }
+  ],
+  "means_out_of_10": {
+    "original:legacy": 7.644,
+    "original:adaptive": 7.067,
+    "heldout:legacy": 7.841,
+    "heldout:adaptive": 7.764
+  },
+  "approved_below_7": [
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    }
+  ],
+  "approved_critical_fidelity": [
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o02",
+      "policy": "legacy",
+      "sample": 3,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 2,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 6.8,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "o02",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "original",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "All six still fix or complete a per-click guarantee despite double-click tests. Default #1/#3 and adaptive #2 are approved, so scoped event guidance did not solve the critical failure.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "h03",
+      "policy": "legacy",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 2,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 3,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 7.2,
+      "evidence": "Default #1 approved per-click guarantee contradicts double-click requirement; #2 drops no-new-endpoint; #3 has no explicit test run. Adaptive keeps double-click semantics but #2 has a nonsensical limit clause.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": true
+    },
+    {
+      "case_id": "c04",
+      "policy": "adaptive",
+      "sample": 1,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 4
+      },
+      "grade_out_of_10": 8.0,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    },
+    {
+      "case_id": "c04",
+      "policy": "adaptive",
+      "sample": 2,
+      "suite": "heldout",
+      "dimensions_out_of_5": {
+        "fidelity": 3,
+        "dependencies": 5,
+        "correction_recheck": 4,
+        "completion": 4,
+        "proportionality": 3
+      },
+      "grade_out_of_10": 7.6,
+      "evidence": "Default samples add the empty-selection test and rerun test plus lint after corrections. Adaptive #1/#2 are approved but never create the requested regression test; #3 faithful.",
+      "critical_fidelity": true,
+      "reviewer_approved": true,
+      "auto_paste_eligible": false
+    }
+  ],
+  "operations": {
+    "sample_count": 210,
+    "usable": 182,
+    "auto_paste_eligible": 67,
+    "structure_repairs": 132,
+    "reviews": 241,
+    "rewrites": 103,
+    "quality_statuses": {
+      "rejected": 91,
+      "checked": 66,
+      "unavailable": 17,
+      "failed": 28,
+      "corrected": 8
+    },
+    "blocks": {
+      "QualityReview": 108,
+      "SurfaceUnconfirmed": 7
+    },
+    "deadline_exhausted": 0,
+    "summed_wall_minutes": 61.81,
+    "warning_observability": "Routing warning strings are not serialized by this harness; quality statuses and surface/quality blocks are retained, not relabeled as warning counts."
+  },
+  "wall_seconds": {
+    "original:legacy": {
+      "mean": 19.586,
+      "p95_nearest_rank": 38.131,
+      "maximum": 43.734
+    },
+    "original:adaptive": {
+      "mean": 19.018,
+      "p95_nearest_rank": 34.616,
+      "maximum": 43.832
+    },
+    "heldout:legacy": {
+      "mean": 16.337,
+      "p95_nearest_rank": 31.712,
+      "maximum": 51.318
+    },
+    "heldout:adaptive": {
+      "mean": 17.843,
+      "p95_nearest_rank": 31.106,
+      "maximum": 49.671
+    }
+  },
+  "individual_batch_gates": {
+    "all_four_means_at_least_8_5": false,
+    "no_approved_below_7": false,
+    "no_approved_critical_fidelity": false,
+    "at_least_95_percent_usable": false,
+    "at_least_three_samples_each": true
+  },
+  "passes_individual_batch": false,
+  "consistency_requirement": "Two consecutive full passing batches are required separately; one passing batch is insufficient."
+}
