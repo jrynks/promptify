@@ -399,6 +399,12 @@ Remaining failures:
 * independent parallel-analysis requests, which produce no valid graph
 * deficient final verification, where the output synthesizes instead of checking
 
+**Follow-up decision:** none of the rounds was a net improvement over batch 7. Round 3 lowered
+usability, halved auto-paste eligibility and raised approved critical fidelity failures. The
+source generation and review instructions have therefore been restored to their batch-7 text.
+The per-round instruction snapshots above preserve the experimental versions, and the evaluation
+harness additions remain in place for future measurement.
+
 Limitations: grading is by Copilot reading actual outputs. It is independent of the runtime
 reviewer, but it is neither blinded nor human. The corpus is finite and synthetic. Request-ID
 seeds are not paired across rounds whose call counts differ, so per-case differences include

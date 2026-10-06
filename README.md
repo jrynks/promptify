@@ -99,9 +99,11 @@ do not meet the unchanged gates. The [bounded Prompt continuation workflow](./ev
 retains the raw baseline, per-sample five-dimensional grades, synthetic context boundary, and all three permitted
 measured refinement rounds. None passes: round-3 means are 7.64/7.07 (original default/adaptive) and 7.84/7.76
 (held-out), 182/210 outputs (86.7%) are usable, and six reviewer-approved critical fidelity failures remain. Two
-consecutive passing batches were therefore not achieved. These instruction changes are unreleased experiments, not
-a demonstrated quality improvement.
-The saved source includes the instruction refinements, but no new installer release has been published.
+consecutive passing batches were therefore not achieved. Because round 3 lowered usability (86.7% vs 94.1%) and raised
+approved critical fidelity failures (six vs one) relative to batch 7, the source has been restored to the batch-7
+generation and review instructions. The round 1–3 instruction text remains available in their
+`quality-review-prompt-round-*-instructions.json` snapshots; the evaluation harness additions (`--prompt-only` and
+explicit synthetic `previous_prompt` fixtures) are kept. No new installer release has been published.
 
 The developer CLI accepts `--dictation-tone clean_transcript|natural|casual|formal|concise|unhinged` on `run` and
 `rewrite`; omitting it uses the saved Natural default. Invalid or duplicate values are errors. Evaluation rewrites
