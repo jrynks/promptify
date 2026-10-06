@@ -5,15 +5,15 @@ import { DesktopIntegration } from "./DesktopIntegration";
 import { RecoveryButton } from "./RecoveryButton";
 
 const STEPS: { id: OnboardingStep; label: string }[] = [
-  { id: "models", label: "Local models" },
+  { id: "models", label: "Speech and inference" },
   { id: "input", label: "Microphone and shortcut" },
   { id: "practice", label: "Your first prompt" },
 ];
 
-function engineLabel(engine: EngineStatus): string {
+function engineLabel(engine: EngineStatus, external = false): string {
   switch (engine.state) {
-    case "missing": return "Download and select a model below";
-    case "loading": return "Loading the selected model...";
+    case "missing": return external ? "Configure, select, and test inference below" : "Download and select a model below";
+    case "loading": return external ? "Checking the selected inference endpoint..." : "Loading the selected model...";
     case "ready": return "Loaded successfully";
     case "error": return engine.message;
   }
@@ -25,7 +25,7 @@ interface Receipt {
   text: string;
 }
 
-export function OnboardingTour({ status, info, onChange }: { status: OnboardingStatus; info: AppInfo; onChange: () => void }) {
+export function OnboardingTour({ status, info, onChange, external = false }: { status: OnboardingStatus; info: AppInfo; onChange: () => void; external?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
@@ -185,15 +185,16 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
       <h1 id="setup-title" ref={heading} tabIndex={-1}>{STEPS[index].label}</h1>
       {status.step === "models" && (
         <>
-          <p>Everything runs on this computer. No account or API key is needed. Choose a speech model and a prompt model below, then let them load. <strong>Recommended</strong> marks the highest quality tier supported by your RAM.</p>
-          <p className="hint">Quality models may be slower and need more memory. Smaller and multilingual choices remain available. Internet is needed for downloads, not for dictation or prompt writing.</p>
+          <p>Choose a local speech model, then choose inference below: bundled local, LM Studio, another compatible server, or a hosted API provider. Bundled local remains the default and needs no account or API key. A server or provider does not require downloading a bundled prompt model.</p>
+          <p className="hint">Speech recognition stays on this device. Bundled models need internet for downloads only. External inference sends context to your configured endpoint and may require internet or incur API charges. Recommended marks the highest quality local tier supported by your RAM.</p>
           <ul className="tour-checks" aria-live="polite">
             <li>Speech: {engineLabel(status.speech)}</li>
-            <li>Prompt writer: {engineLabel(status.language)}</li>
+            <li>Prompt writer: {engineLabel(status.language, external)}</li>
           </ul>
           {failedLoad && <div className="tour-actions">
-            <button disabled={busy} onClick={() => void act(api.retryModelLoading)}>Retry model loading</button>
-            {info.use_gpu && <button disabled={busy} onClick={() => void act(() => api.setUseGpu(false))}>Try loading on CPU</button>}
+            {(!external || status.speech.state === "error") && <button disabled={busy} onClick={() => void act(api.retryModelLoading)}>Retry model loading</button>}
+            {external && status.language.state === "error" && <p className="hint">Correct the inference configuration below, then explicitly test the selected model again.</p>}
+            {!external && info.use_gpu && <button disabled={busy} onClick={() => void act(() => api.setUseGpu(false))}>Try loading on CPU</button>}
           </div>}
           <button className="primary" disabled={busy || !modelReady} onClick={() => void act(() => api.setOnboardingStep("input"))}>Continue to microphone and shortcut</button>
         </>
@@ -219,7 +220,7 @@ export function OnboardingTour({ status, info, onChange }: { status: OnboardingS
       {status.step === "practice" && (
         <>
           <p>Choose <strong>Prepare practice</strong>, then press <kbd>{shortcut}</kbd>, say <em>&quot;Write a friendly greeting for a new colleague&quot;</em>, and press the same shortcut again. You can also hold to talk. Press <kbd>Esc</kbd> to cancel.</p>
-          <p className="hint">Keep the practice field focused until the prompt appears. This exercise stays local and does not use connected tools or save its text to history.</p>
+          <p className="hint">Keep the practice field focused until the prompt appears. {external ? "This exercise uses your selected inference endpoint and may incur API charges." : "This exercise stays local."} It does not use connected tools or save its text to history.</p>
           {!inputReady && <p role="alert" className="error">The required input or model configuration changed. Go back to check it before trying again.</p>}
           {(!inputReady && (info.paste_permission === "required" || info.desktop_error || info.desktop_integration_enabled === false)) && <DesktopIntegration info={info} onChange={onChange} />}
           <button disabled={busy || active || !inputReady || !listening} onClick={() => void arm()}>Prepare practice</button>

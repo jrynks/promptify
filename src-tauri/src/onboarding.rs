@@ -40,11 +40,33 @@ struct ModelKey {
     speech: Option<String>,
     language: Option<String>,
     gpu: bool,
+    inference: Option<String>,
 }
 
 impl From<&AppSettings> for ModelKey {
     fn from(settings: &AppSettings) -> Self {
-        Self { speech: settings.stt_model.clone(), language: settings.llm_model.clone(), gpu: settings.use_gpu }
+        Self { speech: settings.stt_model.clone(), language: settings.llm_model.clone(), gpu: settings.use_gpu, inference: None }
+    }
+}
+
+impl ModelKey {
+    fn selected(settings: &AppSettings, inference: &crate::inference::InferenceManager) -> Self {
+        let mut key = Self::from(settings);
+        match inference.config() {
+            Ok(config) => match config.selection {
+                crate::inference::InferenceSelection::BundledLocal => {}
+                crate::inference::InferenceSelection::Connection { connection_id, model } => {
+                    let revision = config.connections.iter().find(|connection| connection.id == connection_id).map(|connection| connection.revision);
+                    key.language = Some(model.clone());
+                    key.inference = Some(format!("{connection_id}:{revision:?}:{model}"));
+                }
+            },
+            Err(error) => {
+                key.language = None;
+                key.inference = Some(format!("invalid:{error}"));
+            }
+        }
+        key
     }
 }
 
@@ -173,8 +195,12 @@ impl Onboarding {
     }
 
     pub fn ready(&self, settings: &AppSettings) -> bool {
+        self.ready_key(&ModelKey::from(settings))
+    }
+
+    fn ready_key(&self, key: &ModelKey) -> bool {
         let live = self.live.lock().unwrap();
-        live.model_key.as_ref() == Some(&ModelKey::from(settings))
+        live.model_key.as_ref() == Some(key)
             && matches!(live.speech, EngineStatus::Ready)
             && matches!(live.language, EngineStatus::Ready)
     }
@@ -186,6 +212,11 @@ impl Onboarding {
             _ => None,
         })
     }
+}
+
+pub fn engines_ready(state: &AppState, settings: &AppSettings) -> bool {
+    state.onboarding.ready_key(&ModelKey::selected(settings, &state.llm))
+        && inference_available(state, settings)
 }
 
 fn migrate(settings: &mut AppSettings, existed: bool, configured: bool) -> Result<(), String> {
@@ -249,11 +280,26 @@ pub fn models_installed(state: &AppState, settings: &AppSettings) -> bool {
     })
 }
 
+fn inference_available(state: &AppState, settings: &AppSettings) -> bool {
+    let speech = settings.stt_model.as_deref().and_then(|id| state.manifest.get(id))
+        .is_some_and(|entry| entry.kind == ModelKind::Stt && is_installed(&state.models_dir, entry));
+    if !speech {
+        return false;
+    }
+    match state.llm.config() {
+        Ok(config) => match config.selection {
+            crate::inference::InferenceSelection::BundledLocal => models_installed(state, settings),
+            crate::inference::InferenceSelection::Connection { .. } => state.llm.status().state == crate::inference::InferenceState::Ready,
+        },
+        Err(_) => false,
+    }
+}
+
 fn require_models(state: &AppState) -> Result<(), String> {
     available(state)?;
     let settings = state.settings.read().unwrap().clone();
-    if !models_installed(state, &settings) || !state.onboarding.ready(&settings) {
-        return Err("Install, select, and successfully load both models before continuing.".into());
+    if !engines_ready(state, &settings) {
+        return Err("Load the speech model and load bundled inference or test the selected inference connection before continuing.".into());
     }
     Ok(())
 }
@@ -267,7 +313,7 @@ fn configuration(state: &AppState) -> Result<Configuration, String> {
     crate::wayland_paste::require_ready()?;
     use promptify_core::pipeline::ContextProvider;
     crate::system_context::SystemContext.identify().map_err(|e| e.0)?;
-    let models = ModelKey::from(&*state.settings.read().unwrap());
+    let models = ModelKey::selected(&state.settings.read().unwrap(), &state.llm);
     let hotkeys = state.hotkeys.read().unwrap();
     if hotkeys.paused {
         return Err("Resume the Prompt shortcut before continuing.".into());
@@ -302,7 +348,7 @@ pub struct Status {
 fn snapshot(state: &AppState) -> Status {
     let settings = state.settings.read().unwrap().clone();
     let progress = settings.onboarding.clone().unwrap_or_default();
-    let installed = models_installed(state, &settings);
+    let installed = inference_available(state, &settings);
     let live = state.onboarding.live.lock().unwrap();
     Status {
         required: !progress.completed || live.startup_error.is_some(),
@@ -362,11 +408,11 @@ pub fn record_error(app: &AppHandle, message: &str) {
 pub fn load_engines(app: &AppHandle) {
     let state = app.state::<AppState>();
     let settings_snapshot = state.settings.read().unwrap().clone();
-    if state.onboarding.ready(&settings_snapshot) && models_installed(&state, &settings_snapshot) {
+    if engines_ready(&state, &settings_snapshot) {
         return;
     }
     invalidate(&state, Some("The model configuration changed. Run practice again after loading finishes."));
-    let key = ModelKey::from(&*state.settings.read().unwrap());
+    let key = ModelKey::selected(&state.settings.read().unwrap(), &state.llm);
     let generation = {
         let mut live = state.onboarding.live.lock().unwrap();
         live.load_generation += 1;
@@ -380,7 +426,7 @@ pub fn load_engines(app: &AppHandle) {
     let handle = app.clone();
     let result = std::thread::Builder::new().name("setup-model-loading".into()).spawn(move || {
         for speech in [true, false] {
-            if ModelKey::from(&*settings.read().unwrap()) != key {
+            if ModelKey::selected(&settings.read().unwrap(), &llm) != key {
                 return;
             }
             let selected = if speech { key.speech.is_some() } else { key.language.is_some() };
@@ -712,6 +758,31 @@ mod tests {
         }
         assert!(onboarding.ready(&settings));
         assert!(!onboarding.ready(&AppSettings { use_gpu: !settings.use_gpu, ..settings }));
+    }
+
+    #[test]
+    fn external_inference_identity_invalidates_stale_readiness() {
+        let settings = AppSettings::default();
+        let onboarding = Onboarding::default();
+        let key = ModelKey {
+            speech: Some("speech".into()),
+            language: Some("server-model".into()),
+            gpu: settings.use_gpu,
+            inference: Some("lm-studio:1:server-model".into()),
+        };
+        {
+            let mut live = onboarding.live.lock().unwrap();
+            live.model_key = Some(key.clone());
+            live.speech = EngineStatus::Ready;
+            live.language = EngineStatus::Ready;
+        }
+        assert!(onboarding.ready_key(&key));
+        let mut changed = key.clone();
+        changed.inference = Some("lm-studio:2:server-model".into());
+        assert!(!onboarding.ready_key(&changed));
+        changed = key;
+        changed.language = Some("another-model".into());
+        assert!(!onboarding.ready_key(&changed));
     }
 
     #[test]

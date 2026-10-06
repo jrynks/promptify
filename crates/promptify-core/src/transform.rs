@@ -148,6 +148,10 @@ impl TransformService {
         self.run_scheduled_with_options(queue_wait, transform, &RoutingOptions::default(), cancel, on_event)
     }
 
+    pub fn generator_snapshot(&self) -> Result<Option<Arc<dyn Generator>>, crate::pipeline::BackendError> {
+        self.generator.snapshot()
+    }
+
     pub fn run_scheduled_with_options(
         &self,
         queue_wait: Duration,
@@ -155,6 +159,18 @@ impl TransformService {
         options: &RoutingOptions,
         cancel: &CancelToken,
         on_event: &mut dyn FnMut(JobEvent<'_>),
+    ) -> Result<TransformReport, AdmitError> {
+        self.run_scheduled_with_generator(queue_wait, transform, options, cancel, on_event, None)
+    }
+
+    pub fn run_scheduled_with_generator(
+        &self,
+        queue_wait: Duration,
+        transform: &Transform<'_>,
+        options: &RoutingOptions,
+        cancel: &CancelToken,
+        on_event: &mut dyn FnMut(JobEvent<'_>),
+        pinned: Option<&dyn Generator>,
     ) -> Result<TransformReport, AdmitError> {
         if let Err(reason) = self.check_input(transform) {
             return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, quality: None, generation_elapsed_ms: 0, structure_repair_attempts: 0, mode: transform.mode, routing: None });
@@ -169,7 +185,20 @@ impl TransformService {
             });
         }
         let _permit = self.scheduler.acquire(cancel, Instant::now() + queue_wait)?;
-        Ok(self.run(transform, options, cancel, on_event))
+        let snapshot = if pinned.is_some() || (transform.mode == Mode::Dictation && transform.dictation_tone == DictationTone::CleanTranscript) {
+            None
+        } else {
+            match self.generator.snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(error) => return Ok(TransformReport {
+                    outcome: failed(FailReason::GenerationFailed, error.0),
+                    transcript: None, structure: None, quality: None, generation_elapsed_ms: 0,
+                    structure_repair_attempts: 0, mode: transform.mode, routing: None,
+                }),
+            }
+        };
+        let generator = pinned.or(snapshot.as_deref()).unwrap_or(self.generator.as_ref());
+        Ok(self.run(transform, options, cancel, on_event, generator))
     }
 
     /// Transcribes one finished chunk while the user is still speaking. Gives up rather than wait
@@ -192,9 +221,9 @@ impl TransformService {
     }
 
     /// Callers must hold a scheduler permit; use [`Self::run_scheduled`] unless already holding one.
-    fn run(&self, t: &Transform<'_>, options: &RoutingOptions, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>)) -> TransformReport {
+    fn run(&self, t: &Transform<'_>, options: &RoutingOptions, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>), generator: &dyn Generator) -> TransformReport {
         let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, quality: None, generation_elapsed_ms: 0, structure_repair_attempts: 0, mode: t.mode, routing: None };
-        report.outcome = self.stages(t, options, cancel, &mut report, on_event);
+        report.outcome = self.stages(t, options, cancel, &mut report, on_event, generator);
         report
     }
 
@@ -205,6 +234,7 @@ impl TransformService {
         cancel: &CancelToken,
         report: &mut TransformReport,
         on_event: &mut dyn FnMut(JobEvent<'_>),
+        generator: &dyn Generator,
     ) -> TransformOutcome {
         if cancel.is_cancelled() {
             return TransformOutcome::Cancelled;
@@ -271,7 +301,7 @@ impl TransformService {
         let profile = prepared.as_ref().unwrap_or(profile);
 
         if mode == Mode::Dictation {
-            return self.dictate(t, transcript, profile, report, cancel, on_event);
+            return self.dictate(t, transcript, profile, report, cancel, on_event, generator);
         }
                 let label = target_label(t.target);
                 let mut history = if !t.use_history {
@@ -303,7 +333,7 @@ impl TransformService {
                 let request = GenerationRequest { messages: &messages, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
                 let generation_started = Instant::now();
                 let mut forward = |token: &str| on_event(JobEvent::Token(token));
-                let generation = match self.generator.generate(&request, cancel, &mut forward) {
+                let generation = match generator.generate(&request, cancel, &mut forward) {
                     Ok(generation) => generation,
                     Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
                     Err(_) if Instant::now() >= deadline => {
@@ -335,6 +365,7 @@ impl TransformService {
                     return outcome;
                 };
                 let structure_result = self.check_structure(
+                    generator,
                     &request,
                     newlines,
                     text.clone(),
@@ -372,6 +403,7 @@ impl TransformService {
                 };
                 let generation_elapsed_ms = report.generation_elapsed_ms;
                 return self.review_and_correct(
+                    generator,
                     context,
                     text.clone(),
                     &request,
@@ -392,6 +424,7 @@ impl TransformService {
         report: &mut TransformReport,
         cancel: &CancelToken,
         on_event: &mut dyn FnMut(JobEvent<'_>),
+        generator: &dyn Generator,
     ) -> TransformOutcome {
         let cleaned = apply_spoken_commands(&remove_fillers(transcript));
         if t.dictation_tone == DictationTone::CleanTranscript {
@@ -414,7 +447,7 @@ impl TransformService {
         };
         let generation_started = Instant::now();
         let mut forward = |token: &str| on_event(JobEvent::Token(token));
-        let generation = match self.generator.generate(&request, cancel, &mut forward) {
+        let generation = match generator.generate(&request, cancel, &mut forward) {
             Ok(generation) if Instant::now() <= deadline => generation,
             Ok(_) => {
                 report.generation_elapsed_ms = elapsed_ms(generation_started);
@@ -458,6 +491,7 @@ impl TransformService {
         };
         let generation_elapsed_ms = report.generation_elapsed_ms;
         let outcome = self.review_and_correct(
+            generator,
             context,
             text.clone(),
             &request,
@@ -510,6 +544,7 @@ impl TransformService {
 
     fn review_and_correct(
         &self,
+        generator: &dyn Generator,
         context: ReviewContext<'_>,
         candidate: String,
         request: &GenerationRequest<'_>,
@@ -521,7 +556,7 @@ impl TransformService {
         validate: impl Fn(&str) -> Result<(), String>,
     ) -> TransformOutcome {
         let mut metrics = QualityReport { generation_elapsed_ms, ..Default::default() };
-        let first = self.review(&context, request.deadline, cancel, on_event);
+        let first = self.review(generator, &context, request.deadline, cancel, on_event);
         metrics.review_calls = 1;
         metrics.review_elapsed_ms = first.elapsed_ms;
         let response = match first.result {
@@ -571,7 +606,7 @@ impl TransformService {
         };
         let rewrite_started = Instant::now();
         let mut forward = |token: &str| on_event(JobEvent::Token(token));
-        let rewritten = self.generator.generate(&rewrite_request, cancel, &mut forward);
+        let rewritten = generator.generate(&rewrite_request, cancel, &mut forward);
         metrics.rewrite_calls = 1;
         metrics.rewrite_elapsed_ms = rewrite_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let rewritten = match rewritten {
@@ -613,7 +648,7 @@ impl TransformService {
             return TransformOutcome::ReviewOnly { text: candidate, status: QualityStatus::Rejected };
         }
         let second_context = ReviewContext { candidate: &rewritten, ..context };
-        let second = self.review(&second_context, request.deadline, cancel, on_event);
+        let second = self.review(generator, &second_context, request.deadline, cancel, on_event);
         metrics.review_calls = 2;
         metrics.review_elapsed_ms = metrics.review_elapsed_ms.saturating_add(second.elapsed_ms);
         match second.result {
@@ -644,6 +679,7 @@ impl TransformService {
 
     fn review(
         &self,
+        generator: &dyn Generator,
         context: &ReviewContext<'_>,
         deadline: Instant,
         cancel: &CancelToken,
@@ -666,7 +702,7 @@ impl TransformService {
                         deadline,
                     };
                     let mut discard = |_: &str| {};
-                    match self.generator.generate(&request, cancel, &mut discard) {
+                    match generator.generate(&request, cancel, &mut discard) {
                         Err(_) if cancel.is_cancelled() => Err(ReviewError::Cancelled),
                         Err(_) if Instant::now() >= deadline => Err(ReviewError::Deadline),
                         Err(_) => Err(ReviewError::Unavailable),
@@ -696,6 +732,7 @@ impl TransformService {
     /// insertion of an invalid draft.
     fn check_structure(
         &self,
+        generator: &dyn Generator,
         request: &GenerationRequest<'_>,
         newlines: NewlinePolicy,
         draft: String,
@@ -735,7 +772,7 @@ impl TransformService {
             let repair = vec![system, request.messages.last().expect("prompt has a user message").clone()];
             let repair_request = GenerationRequest { messages: &repair, stable_prefix: 0, ..*request };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
-            let generation = match self.generator.generate(&repair_request, cancel, &mut forward) {
+            let generation = match generator.generate(&repair_request, cancel, &mut forward) {
                 Ok(generation) => generation,
                 Err(_) if cancel.is_cancelled() => return Err(TransformOutcome::Cancelled),
                 Err(err) => {

@@ -1,8 +1,10 @@
 # Promptify
 
-Speak a rough request and get a clear, well-structured prompt pasted into the AI app you are using. Everything runs on your
-own computer: Whisper for speech, a local Qwen model for writing. No cloud AI services are used.
-No account or API key is needed.
+Speak a rough request and get a clear, well-structured prompt pasted into the AI app you are using.
+By default, everything runs on your own computer: Whisper for speech and a bundled local Qwen model for writing.
+No account or API key is needed for bundled inference. Optional **Inference** settings connect
+LM Studio, other compatible local servers, or API-key providers directly from the desktop.
+Speech recognition stays on-device regardless of the selected language-model backend.
 
 **Latest release: [v1.2.1](https://github.com/jrynks/promptify/releases/tag/v1.2.1)**.
 Download a Windows x64 installer or Linux `.deb`, `.rpm`, or AppImage, with SHA-256 checksums.
@@ -11,20 +13,63 @@ for hardware requirements and platform limitations.
 
 The feature overview below describes the current source. Quality review and styled dictation are
 unreleased development changes; the v1.2.1 installers do not include them.
+Configurable inference is also an unreleased source feature, not part of the v1.2.1 installers.
+
+## Inference: bundled models, LM Studio, and API keys
+
+Bundled models remain the default. Choose a different writer under **Settings -> Inference**;
+one explicit model handles prompt writing, structural repair, quality review, and styled dictation
+throughout each job. Selecting another model applies to subsequent jobs. **Clean transcript**
+does not call a language model.
+
+- **LM Studio:** start the server in LM Studio's Developer tab, make a text model available, and
+  add the LM Studio preset. Its default API base URL is `http://localhost:1234/v1`. Refresh the
+  model list or enter the exact model identifier, then test and select the model. If server
+  authentication is enabled, supply its API token; otherwise leave the token blank.
+  Promptify does not start LM Studio or download/load/unload its models. Discovered models may
+  not already be loaded when LM Studio uses just-in-time loading. A generation test can trigger
+  that loading.
+- **Other local servers:** use a custom OpenAI-compatible endpoint for Ollama, llama.cpp,
+  vLLM, or a compatible gateway. Model discovery is optional; manual identifiers are supported.
+  Protocol compatibility varies by server and model.
+- **API keys:** configure OpenAI, Anthropic, or Google with a provider key and model identifier.
+  Provider API usage is billed to your provider account. A ChatGPT or SuperGrok subscription
+  is not an API key; subscription OAuth is not supported in this release.
+- **Custom endpoints:** choose OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.
+  Supply the API **base URL**, not a full generation URL. Keep any gateway path prefix; select
+  the protocol separately.
+
+Tests use synthetic content, not history or focused screen text, and may incur provider charges.
+Listing models alone does not prove the selected model can generate text. There is no automatic
+provider fallback or inference retry, and adding a key does not automatically select its model.
+
+Credentials are stored in the OS credential store, never in inference settings JSON. If secure
+storage is locked or unavailable, resolve the displayed error; there is no plaintext fallback.
+Public endpoints require HTTPS. Loopback HTTP is supported; unencrypted LAN connections require
+explicit acknowledgment. Promptify does not bypass TLS verification or forward credentials through
+redirects. Local/LAN requests need no public tunnel or Promptify relay.
+
+**Privacy changes when you select external inference:** requests go directly to the configured
+endpoint. They can include your transcript, prompt instructions, admitted application context,
+opted-in focused text, enabled history context, and draft text used for review or correction.
+Audio stays on-device. History being stored locally does not mean it cannot enter a remote prompt.
+Provider retention and billing are governed by that provider's terms. Even a localhost endpoint
+can route upstream (for example, a server using remote model links); verify its configuration.
+Removing a connection or replacing its credentials invalidates its active sessions.
 
 - **Prompt mode** (`Ctrl+Alt+Space`): turns what you said into a prompt that fits the target app (ChatGPT, Claude,
   Gemini, Grok, Copilot, Perplexity, Cursor, VS Code, Claude Code, Codex CLI, terminals, image generators...).
   AI requests become a **task graph**, sized to their complexity: numbered steps, explicit dependencies (`after 1, 2`),
   bounded check-and-revise loops (`max N rounds`) and `Done when:` completion checks. **Every final prompt retains this
   structure**, including media, writing, tutoring, and role-play requests. The finished output is validated and,
-  if needed, repaired up to twice within the original deadline, then receives a local semantic quality review under
+  if needed, repaired up to twice within the original deadline, then receives a semantic quality review using the selected model under
   either rendering policy. One targeted correction and a second review are allowed. If review finds unresolved issues
   or cannot finish, the structurally valid text is offered for review/copy only and is never pasted automatically.
 - **Task-aware adaptation** (experimental, off by default): Settings -> **Prompt types** adapts the content to the
   identified tool/site, confirmed input surface, and requested task without removing the graph/loop mandate.
 - **Dictation mode** (`Ctrl+Alt+Shift+Space`): defaults to **Natural** tone, polishing grammar and flow while retaining
   your voice. General settings also offers Casual, Formal, Concise, Unhinged, and **Clean transcript**. Rewrite tones
-  use the selected local model and a fidelity review, so they may take longer; unapproved or unavailable rewrites
+  use the selected inference model and a fidelity review, so they may take longer; unapproved or unavailable rewrites
   remain review/copy-only. Clean transcript keeps deterministic filler removal and spoken editing commands without
   model inference. Say "new line", "new paragraph" or "scratch that" as their own sentence. Dictation never answers
   questions or executes instructions in the dictated text.
@@ -49,11 +94,12 @@ unreleased development changes; the v1.2.1 installers do not include them.
 - **Quality-first recommendations**: Models highlights the highest quality tier with confirmed RAM compatibility.
   Recommendations never automatically switch your selected models or download anything. Larger models may be slower.
 
-Settings has six sections: **General**, **Models**, **Prompt types**, **Your words**, **History**, and **Updates**.
+Settings includes **General**, **Models**, **Inference**, **Prompt types**, **Your words**, **History**, and **Updates**.
 Unvisited sections do not initialize their model/history/catalog work; visited sections retain unsaved edits.
 Answer mode, the Advanced playground, MCP, desktop HTTP APIs, phone pairing, LAN discovery, and relay support have
 been removed. Promptify has no external inference listener or connected-tool execution. Model downloads and update
-checks still use HTTPS; speech and prompt generation run locally through a child-process worker.
+checks still use HTTPS. Speech stays local; bundled prompt generation uses a child-process worker,
+while explicitly selected API/local-server inference uses outgoing requests to that endpoint.
 
 ## What's new in v1.2.1
 
@@ -255,10 +301,13 @@ a Git tag does not make an update available.
 
 On first launch, Promptify opens a required guided tour in Settings:
 
-1. **Models:** download and select a speech model and a prompt-writing model. Recommendations favor the highest
+1. **Models and inference:** download and select a speech model, then choose bundled prompt-writing inference
+   or configure and test a local server/API connection. Bundled model recommendations favor the highest
    quality tier with confirmed RAM compatibility. Larger models may take longer; smaller and multilingual
-   alternatives remain available. Recommendations never switch existing selections. Downloads can be cancelled and resumed; both selected models must load before
-   you continue. Loading failures offer a retry and, when appropriate, a CPU option.
+   alternatives remain available. Recommendations never switch existing selections. Downloads can be cancelled
+   and resumed. Speech and the selected inference backend must be ready before you continue.
+   A server/API connection does not require downloading a bundled prompt model.
+   Loading failures offer a retry and, for bundled inference, a CPU option.
 2. **General:** check the system-default microphone and Prompt shortcut. Refresh after connecting a microphone,
    allow microphone access in your operating system, and change the shortcut if another app has claimed it.
 3. **Practice:** prepare the practice field, use the Prompt shortcut, speak a request, and use the shortcut again
@@ -266,8 +315,10 @@ On first launch, Promptify opens a required guided tour in Settings:
    a preview, or an unsuccessful paste does not complete this check.
 4. **Finish setup:** unlock normal use after the real voice-to-prompt exercise succeeds and setup is saved.
 
-No account or API key is needed. Internet access is needed to download models; speech and prompt generation run
-locally afterward. The practice exercise does not save its text to history. A current
+No account or API key is needed for bundled models or an unauthenticated local server. Internet access is
+needed to download bundled models; bundled speech and prompt generation run locally afterward.
+An API provider still requires network access and may charge for the practice inference calls.
+The practice exercise does not save its text to history. A current
 graphics driver with Vulkan support is recommended; CPU loading is also supported.
 
 Closing Settings or quitting does not skip setup: the tour resumes when you return. Interrupted downloads can be
@@ -446,6 +497,7 @@ Errors that need user action keep their recovery controls nearby:
 | Microphone | Open system microphone settings; refresh microphone and shortcut detection |
 | Shortcuts / desktop access | Enable integration, retry focus detection, change shortcuts, resume paused shortcuts, retry or disable optional Ctrl+Shift hold; open macOS Accessibility or Input Monitoring settings when permission is needed |
 | Models | Download, resume, cancel, select or delete models; refresh model events; retry loading, use CPU fallback, or choose another model |
+| Inference | Select bundled/local-server/API inference; save credentials securely; discover, test, edit, or remove endpoint connections |
 | Failed results | Open General, Models or Prompt types as appropriate; dismiss any result; copy retained output and restore the previous clipboard |
 | History / vocabulary | Refresh history and its connection; edit invalid correction pairs; retry failed saves |
 | Prompt types | Retry loading; explicitly restore default routing when the routing settings need repair |
@@ -643,6 +695,7 @@ C++ and OpenMP redistributable DLLs into the application and creates an unsigned
 | Command | Purpose |
 | --- | --- |
 | `models`, `download <id>` | list or install models |
+| `inference` | show selected inference status without exposing credentials or endpoint URLs |
 | `transcribe <file.wav>`, `run <file.wav>` | speech only, or the full pipeline on a recording |
 | `live-sim <file.wav>` | replays a recording as if spoken; compares live chunks with one full pass |
 | `rewrite "<text>" [--process claude.exe] [--url URL] [--mode prompt\|dictation] [--auto]` | typed text through the pipeline |
@@ -660,6 +713,11 @@ prompt-prefix cache for comparison.
 `rewrite` and `run` accept `--rendering legacy|adaptive`, `--prompt-type ID`, and `--surface SURFACE`.
 Overrides require adaptive rendering and Prompt mode; unknown or proposed task IDs are rejected explicitly.
 `--model ID` selects an already installed language model for the current CLI run without saving that preference.
+Ordinary `rewrite` and `run` commands otherwise use the saved inference selection, including a configured
+LM Studio server or API provider. API requests may incur charges. The evaluation commands retain their
+documented bundled-local model contracts; they do not silently send cases to the selected API provider.
+Clean transcript does not require language-model credentials. Configure keys in the desktop's
+Inference settings, not command-line arguments.
 `route` defaults to adaptive rendering; `rewrite` and `run` retain the existing-profile default.
 Retired `mcp`, `serve`, and `remote` commands, `--mcp`/network options, and Answer mode fail explicitly before model loading.
 
@@ -752,7 +810,8 @@ treating structural validity as proof of quality; its raw evidence is
 ### Prompt types and adaptive routing
 
 Enable **Use task-aware prompt adaptation** in Settings -> **Prompt types**. This is local, opt-in rewriting:
-Promptify does not run the recipient's tools, upload assets, produce final SQL/formulas/lyrics, or call a cloud LLM.
+Promptify does not run the recipient's tools, upload assets, or produce final SQL/formulas/lyrics.
+Bundled inference is local; selecting an API provider explicitly permits its text inference calls.
 
 The bundled [catalog](crates/promptify-core/profiles/prompt-types.toml) contains **264 candidate types in 27 families**.
 It is a product taxonomy, not an exhaustive industry standard:
@@ -892,7 +951,7 @@ and total elapsed timings separately; there is no fixed onboarding completion-ti
    Ctrl+Shift+T in a browser must not start a recording.
 9. Settings -> Your words: add your own name and a correction, save, then dictate them.
 10. Models recommends compatible quality tiers without changing your selections or starting downloads.
-11. Update checks and explicit model downloads remain available; inference needs no network connection.
+11. Update checks and explicit model downloads remain available; bundled inference needs no network connection.
 
 ## Not done yet
 

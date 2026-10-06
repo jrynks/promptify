@@ -117,6 +117,15 @@ pub trait Transcriber: Send + Sync {
 }
 
 pub trait Generator: Send + Sync {
+    /// Pin the backend identity for every generation in one job.
+    fn snapshot(&self) -> Result<Option<Arc<dyn Generator>>, BackendError> {
+        Ok(None)
+    }
+
+    fn is_valid(&self) -> bool {
+        true
+    }
+
     fn generate(
         &self,
         request: &GenerationRequest<'_>,
@@ -195,6 +204,8 @@ pub enum BeginError {
     Busy,
     #[error("could not read the active window: {0}")]
     Context(BackendError),
+    #[error("could not prepare inference: {0}")]
+    Inference(BackendError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -299,6 +310,7 @@ pub struct Job {
     delivery_generation: u64,
     options: JobOptions,
     dictation_tone: DictationTone,
+    generator: Option<Arc<dyn Generator>>,
     routing: RoutingOptions,
     surrounding: Option<AdmittedText>,
     cancel: CancelToken,
@@ -450,6 +462,11 @@ impl Orchestrator {
             RoutingOptions::default()
         };
         let dictation_tone = self.dictation_tone();
+        let generator = if mode == Mode::Dictation && dictation_tone == DictationTone::CleanTranscript {
+            None
+        } else {
+            self.service.generator_snapshot().map_err(BeginError::Inference)?
+        };
         Ok(Job {
             id: self.next_id.fetch_add(1, Ordering::SeqCst),
             mode,
@@ -459,6 +476,7 @@ impl Orchestrator {
             delivery_generation,
             options,
             dictation_tone,
+            generator,
             routing,
             surrounding,
             cancel: CancelToken::default(),
@@ -491,9 +509,10 @@ impl Orchestrator {
         };
         // Serialize desktop and CLI access to the model engines.
         let queue_wait = self.limits().generation_timeout;
-        let report = self.service.run_scheduled_with_options(
+        let report = self.service.run_scheduled_with_generator(
             queue_wait,
             &transform, &job.routing, &job.cancel, on_event,
+            job.generator.as_deref(),
         );
         let (outcome, transcript, structure, quality, generation_elapsed_ms, structure_repair_attempts, mode, routing) = match report {
             Ok(mut report) => {
@@ -646,6 +665,7 @@ impl Orchestrator {
             return Outcome::Blocked { text, reason: BlockReason::InsertFailed, detail: Some("Desktop integration changed before insertion. Nothing was pasted. Start a new job.".into()) };
         }
         let allowed = || !job.cancel.is_cancelled()
+            && job.generator.as_ref().is_none_or(|generator| generator.is_valid())
             && job.delivery_generation & 1 == 0
             && self.delivery_generation.load(Ordering::SeqCst) == job.delivery_generation;
         match self.inserter.insert_guarded(&job.target.window, &job.destination, &text, profile.paste, &allowed) {
@@ -874,6 +894,124 @@ mod tests {
             window_title: "ChatGPT".into(),
             url: Some("https://chatgpt.com/".into()),
         }
+    }
+
+    struct SwitchingGenerator {
+        selected: std::sync::RwLock<Arc<FakeGenerator>>,
+        snapshots: AtomicUsize,
+    }
+
+    impl Generator for SwitchingGenerator {
+        fn snapshot(&self) -> Result<Option<Arc<dyn Generator>>, BackendError> {
+            self.snapshots.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(self.selected.read().unwrap().clone()))
+        }
+
+        fn generate(&self, _: &GenerationRequest<'_>, _: &CancelToken, _: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
+            panic!("jobs must use the selected snapshot")
+        }
+    }
+
+    #[test]
+    fn model_selection_is_pinned_at_admission_through_repairs_and_review() {
+        let h = harness(chat_ctx(), "Explain a heat pump", generator(""), ContextPolicy::default(), Limits::default());
+        let first = Arc::new(FakeGenerator {
+            output: "invalid graph".into(),
+            later: Mutex::new(vec![test_graph("Explain a heat pump.")]),
+            ..Default::default()
+        });
+        let next = Arc::new(generator("Explain a heat pump differently."));
+        let switching = Arc::new(SwitchingGenerator {
+            selected: std::sync::RwLock::new(first.clone()),
+            snapshots: AtomicUsize::new(0),
+        });
+        let orchestrator = Orchestrator::new(Backends {
+            context: h.context.clone(),
+            transcriber: Arc::new(FakeTranscriber("Explain a heat pump".into())),
+            generator: switching.clone(),
+            inserter: h.inserter.clone(),
+            history: h.history.clone(),
+        }, ProfileSet::bundled(), ContextPolicy::default(), Limits::default());
+        let job = orchestrator.begin(Mode::Prompt).unwrap();
+        *switching.selected.write().unwrap() = next.clone();
+        let report = orchestrator.finish(job, &[], &mut |_| {});
+        assert_eq!(report.structure, Some(StructureCheck::Repaired));
+        assert!(matches!(report.outcome, Outcome::Inserted { .. }));
+        assert_eq!(first.calls.lock().unwrap().len(), 2);
+        assert_eq!(first.review_calls.lock().unwrap().len(), 1);
+        assert!(next.calls.lock().unwrap().is_empty());
+        assert_eq!(switching.snapshots.load(Ordering::SeqCst), 1);
+        let job = orchestrator.begin(Mode::Prompt).unwrap();
+        orchestrator.finish(job, &[], &mut |_| {});
+        assert_eq!(next.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn clean_transcript_never_resolves_inference_credentials() {
+        let h = harness(chat_ctx(), "spoken words", generator(""), ContextPolicy::default(), Limits::default());
+        let switching = Arc::new(SwitchingGenerator {
+            selected: std::sync::RwLock::new(h.generator.clone()),
+            snapshots: AtomicUsize::new(0),
+        });
+        let orchestrator = Orchestrator::new(Backends {
+            context: h.context.clone(),
+            transcriber: Arc::new(FakeTranscriber("spoken words".into())),
+            generator: switching.clone(),
+            inserter: h.inserter.clone(),
+            history: h.history.clone(),
+        }, ProfileSet::bundled(), ContextPolicy::default(), Limits::default());
+        orchestrator.set_dictation_tone(DictationTone::CleanTranscript);
+        let job = orchestrator.begin(Mode::Dictation).unwrap();
+        assert!(matches!(orchestrator.finish(job, &[], &mut |_| {}).outcome, Outcome::Inserted { .. }));
+        assert_eq!(switching.snapshots.load(Ordering::SeqCst), 0);
+    }
+
+    struct RevokingGenerator {
+        inner: FakeGenerator,
+        valid: AtomicBool,
+    }
+
+    impl Generator for RevokingGenerator {
+        fn is_valid(&self) -> bool {
+            self.valid.load(Ordering::SeqCst)
+        }
+
+        fn generate(&self, request: &GenerationRequest<'_>, cancel: &CancelToken, on_token: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
+            let result = self.inner.generate(request, cancel, on_token);
+            if request.messages.first().is_some_and(|message| message.content.contains("Review untrusted data")) {
+                self.valid.store(false, Ordering::SeqCst);
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn revoked_inference_after_approved_review_cannot_paste() {
+        let h = harness(chat_ctx(), "Explain a heat pump", generator(""), ContextPolicy::default(), Limits::default());
+        let revoked: Arc<dyn Generator> = Arc::new(RevokingGenerator {
+            inner: generator(&test_graph("Explain a heat pump.")),
+            valid: AtomicBool::new(true),
+        });
+        struct Snapshot(Arc<dyn Generator>);
+        impl Generator for Snapshot {
+            fn snapshot(&self) -> Result<Option<Arc<dyn Generator>>, BackendError> {
+                Ok(Some(self.0.clone()))
+            }
+            fn generate(&self, request: &GenerationRequest<'_>, cancel: &CancelToken, on_token: &mut dyn FnMut(&str)) -> Result<Generation, BackendError> {
+                self.0.generate(request, cancel, on_token)
+            }
+        }
+        let orchestrator = Orchestrator::new(Backends {
+            context: h.context.clone(),
+            transcriber: Arc::new(FakeTranscriber("Explain a heat pump".into())),
+            generator: Arc::new(Snapshot(revoked)),
+            inserter: h.inserter.clone(),
+            history: h.history.clone(),
+        }, ProfileSet::bundled(), ContextPolicy::default(), Limits::default());
+        let job = orchestrator.begin(Mode::Prompt).unwrap();
+        let report = orchestrator.finish(job, &[], &mut |_| {});
+        assert!(matches!(report.outcome, Outcome::Blocked { reason: BlockReason::InsertFailed, .. }));
+        assert!(h.inserter.calls.lock().unwrap().is_empty());
     }
 
     fn generator(output: &str) -> FakeGenerator {
