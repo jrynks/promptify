@@ -342,7 +342,7 @@ fn deliver(app: &AppHandle, generation: u64, path: &str, event: PortalEvent<'_>,
     };
     if !valid { return; }
     let settings = state.settings.read().unwrap().clone();
-    let ready = state.onboarding.ready(&settings);
+    let ready = crate::onboarding::engines_ready(&state, &settings);
     let (event_path, id, down) = event.details();
     let id = id.to_owned();
     if event_path == path && !paused && down && !ready && !cancel && IDS[..2].contains(&id.as_str()) {

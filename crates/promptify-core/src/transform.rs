@@ -128,6 +128,10 @@ impl TransformService {
         self.run_scheduled_with_options(queue_wait, transform, &RoutingOptions::default(), cancel, on_event)
     }
 
+    pub fn generator_snapshot(&self) -> Result<Option<Arc<dyn Generator>>, crate::pipeline::BackendError> {
+        self.generator.snapshot()
+    }
+
     pub fn run_scheduled_with_options(
         &self,
         queue_wait: Duration,
@@ -135,6 +139,18 @@ impl TransformService {
         options: &RoutingOptions,
         cancel: &CancelToken,
         on_event: &mut dyn FnMut(JobEvent<'_>),
+    ) -> Result<TransformReport, AdmitError> {
+        self.run_scheduled_with_generator(queue_wait, transform, options, cancel, on_event, None)
+    }
+
+    pub fn run_scheduled_with_generator(
+        &self,
+        queue_wait: Duration,
+        transform: &Transform<'_>,
+        options: &RoutingOptions,
+        cancel: &CancelToken,
+        on_event: &mut dyn FnMut(JobEvent<'_>),
+        pinned: Option<&dyn Generator>,
     ) -> Result<TransformReport, AdmitError> {
         if let Err(reason) = self.check_input(transform) {
             return Ok(TransformReport { outcome: TransformOutcome::Failed { reason, detail: None }, transcript: None, structure: None, mode: transform.mode, routing: None });
@@ -149,7 +165,20 @@ impl TransformService {
             });
         }
         let _permit = self.scheduler.acquire(cancel, Instant::now() + queue_wait)?;
-        Ok(self.run(transform, options, cancel, on_event))
+        // Dictation never calls the language model, so it must not depend on its connection.
+        let snapshot = if pinned.is_some() || transform.mode == Mode::Dictation {
+            None
+        } else {
+            match self.generator.snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(error) => return Ok(TransformReport {
+                    outcome: failed(FailReason::GenerationFailed, error.0),
+                    transcript: None, structure: None, mode: transform.mode, routing: None,
+                }),
+            }
+        };
+        let generator = pinned.or(snapshot.as_deref()).unwrap_or(self.generator.as_ref());
+        Ok(self.run(transform, options, cancel, on_event, generator))
     }
 
     /// Transcribes one finished chunk while the user is still speaking. Gives up rather than wait
@@ -172,9 +201,9 @@ impl TransformService {
     }
 
     /// Callers must hold a scheduler permit; use [`Self::run_scheduled`] unless already holding one.
-    fn run(&self, t: &Transform<'_>, options: &RoutingOptions, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>)) -> TransformReport {
+    fn run(&self, t: &Transform<'_>, options: &RoutingOptions, cancel: &CancelToken, on_event: &mut dyn FnMut(JobEvent<'_>), generator: &dyn Generator) -> TransformReport {
         let mut report = TransformReport { outcome: TransformOutcome::Cancelled, transcript: None, structure: None, mode: t.mode, routing: None };
-        report.outcome = self.stages(t, options, cancel, &mut report, on_event);
+        report.outcome = self.stages(t, options, cancel, &mut report, on_event, generator);
         report
     }
 
@@ -185,6 +214,7 @@ impl TransformService {
         cancel: &CancelToken,
         report: &mut TransformReport,
         on_event: &mut dyn FnMut(JobEvent<'_>),
+        generator: &dyn Generator,
     ) -> TransformOutcome {
         if cancel.is_cancelled() {
             return TransformOutcome::Cancelled;
@@ -282,7 +312,7 @@ impl TransformService {
                 let stable_prefix = report.routing.as_ref().map_or_else(|| stable_prefix_len(profile), adaptive_prefix_len);
                 let request = GenerationRequest { messages: &messages, stable_prefix, max_new_tokens: self.limits.max_new_tokens, deadline };
                 let mut forward = |token: &str| on_event(JobEvent::Token(token));
-                let generation = match self.generator.generate(&request, cancel, &mut forward) {
+                let generation = match generator.generate(&request, cancel, &mut forward) {
                     Ok(generation) => generation,
                     Err(_) if cancel.is_cancelled() => return TransformOutcome::Cancelled,
                     Err(_) if Instant::now() > deadline => return TransformOutcome::Failed { reason: FailReason::TimedOut, detail: None },
@@ -306,7 +336,7 @@ impl TransformService {
                     return outcome;
                 };
                 if report.routing.is_some() || profile.structure != Structure::Flat {
-                    return match self.check_structure(&request, newlines, text, report.routing.as_ref().map(|policy| (policy, transcript, references.as_str())), cancel, on_event) {
+                    return match self.check_structure(generator, &request, newlines, text, report.routing.as_ref().map(|policy| (policy, transcript, references.as_str())), cancel, on_event) {
                         Ok((text, check)) => {
                             report.structure = Some(check);
                             TransformOutcome::Ready { text }
@@ -326,6 +356,7 @@ impl TransformService {
     /// insertion of an invalid draft.
     fn check_structure(
         &self,
+        generator: &dyn Generator,
         request: &GenerationRequest<'_>,
         newlines: NewlinePolicy,
         draft: String,
@@ -373,7 +404,7 @@ impl TransformService {
             }
             let repair_request = GenerationRequest { messages: &repair, stable_prefix: if adaptive.is_some() { 0 } else { request.stable_prefix }, ..*request };
             let mut forward = |token: &str| on_event(JobEvent::Token(token));
-            let generation = match self.generator.generate(&repair_request, cancel, &mut forward) {
+            let generation = match generator.generate(&repair_request, cancel, &mut forward) {
                 Ok(generation) => generation,
                 Err(_) if cancel.is_cancelled() => return Err(TransformOutcome::Cancelled),
                 Err(err) => {

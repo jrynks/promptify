@@ -11,27 +11,31 @@ use promptify_core::eval::{self, Expect};
 use promptify_core::history::{HistoryContext, HistoryLimits, HistoryLog, NewHistoryEntry};
 use promptify_core::models::{Manifest, ModelKind, is_installed};
 use promptify_core::pipeline::{
-    BackendError, Backends, CancelToken, ContextProvider, History, Inserter, JobEvent, Limits, Mode, Orchestrator, Outcome,
+    BackendError, Backends, CancelToken, ContextProvider, Generator, History, Inserter, JobEvent, Limits, Mode, Orchestrator, Outcome,
     Transcriber,
 };
 use promptify_core::profiles::{PasteChord, ProfileSet};
 use promptify_core::routing::{self, Rendering, RoutingOptions, Surface, TaskId};
 use promptify_lib::llm_client::{LlmWorker, worker_exe};
+use promptify_lib::inference::InferenceManager;
 use promptify_lib::settings::{self, SharedSettings};
 use promptify_lib::stt::WhisperEngine;
 use promptify_lib::{download, ensure_selection};
 
 const USAGE: &str = "usage:
   promptify-cli models
+  promptify-cli inference   (read-only inference selection/status; never prints secrets or endpoint URLs)
   promptify-cli download <model-id>...
   promptify-cli transcribe <file.wav>
   promptify-cli live-sim <file.wav>   (replays the file as if spoken; compares live chunks with one full pass)
-  promptify-cli run <file.wav> [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
-  promptify-cli rewrite <text> [--process NAME] [--url URL] [--title TITLE] [--mode prompt|dictation] [--auto]
+  promptify-cli run <file.wav> [--model ID] [--mode prompt|dictation] [--process NAME] [--url URL] [--title TITLE] [--no-history]
+  promptify-cli rewrite <text> [--model ID] [--process NAME] [--url URL] [--title TITLE] [--mode prompt|dictation] [--auto]
+      (run/rewrite use saved inference: configured API/local-server providers may transmit text and incur billing;
+       --model ID is an installed local-model override for this invocation only; dictation needs no inference)
   promptify-cli screen-text   (reads the focused text box of the foreground app after 3 s, as the app would)
   promptify-cli paste-smoke-test <unique-window-title> <text>   (pastes into the matching focused test window after 3 s)
   promptify-cli generated-paste-smoke-test <unique-window-title> <request>   (generates an adaptive prompt and pastes into the matching test input)
-  promptify-cli eval <cases.toml>
+  promptify-cli eval <cases.toml> [--model ID]   (local-only evaluation; never uses configured API/local-server providers)
   promptify-cli eval-adaptive <cases.toml> [--model ID]   (local model output contracts)
   promptify-cli eval-routing <cases.toml>   (classification only; no model needed)
   promptify-cli prompt-types   (list the bundled taxonomy and activation status)
@@ -83,12 +87,54 @@ impl History for NoHistory {
     }
 }
 
+fn needs_inference(mode: Mode) -> bool {
+    mode == Mode::Prompt
+}
+
+fn local_model_override(
+    manifest: &Manifest,
+    models_dir: &Path,
+    app_settings: &mut settings::AppSettings,
+    id: &str,
+) -> Result<(), String> {
+    let entry = manifest.get(id).filter(|entry| entry.kind == ModelKind::Llm)
+        .ok_or_else(|| format!("unknown language model: {id}"))?;
+    if !is_installed(models_dir, entry) {
+        return Err(format!("language model {id} is not installed"));
+    }
+    app_settings.llm_model = Some(id.to_owned());
+    Ok(())
+}
+
+fn ordinary_generator(
+    data_dir: PathBuf,
+    manifest: Manifest,
+    models_dir: PathBuf,
+    shared: SharedSettings,
+    local_override: Option<&str>,
+    inference_needed: bool,
+) -> Result<Arc<dyn Generator>, String> {
+    // Dictation never consults provider configuration, models or credentials.
+    if !inference_needed {
+        return Ok(Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared)));
+    }
+    if let Some(id) = local_override {
+        local_model_override(&manifest, &models_dir, &mut shared.write().unwrap(), id)?;
+        let worker = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
+        worker.preload().map_err(|error| error.0)?;
+        return Ok(worker);
+    }
+    let manager = Arc::new(InferenceManager::new(data_dir, manifest, models_dir, shared));
+    manager.preload().map_err(|error| error.0)?;
+    Ok(manager)
+}
+
 fn text_context(process: String, url: Option<String>, title: String) -> ActiveContext {
     ActiveContext { window: WindowIdentity { handle: 1, process_id: 1 }, process_name: process, window_title: title, url }
 }
 
 fn rewrite_text(
-    llm: &Arc<LlmWorker>,
+    llm: Arc<dyn Generator>,
     ctx: ActiveContext,
     text: &str,
 ) -> Result<promptify_core::pipeline::JobReport, String> {
@@ -96,7 +142,7 @@ fn rewrite_text(
 }
 
 fn rewrite_with(
-    llm: &Arc<LlmWorker>,
+    llm: Arc<dyn Generator>,
     ctx: ActiveContext,
     text: &str,
     mode: Mode,
@@ -109,7 +155,7 @@ fn rewrite_with(
     let backends = Backends {
         context: Arc::new(FixedContext(ctx)),
         transcriber: Arc::new(TextTranscriber(text.to_owned())),
-        generator: llm.clone(),
+        generator: llm,
         inserter: Arc::new(PrintInserter),
         history: Arc::new(NoHistory),
     };
@@ -237,12 +283,17 @@ fn finish_native_paste_test() -> Result<(), String> {
 }
 
 fn validate_retired_options(args: &[String]) -> Result<(), String> {
+    for option in ["--api-key", "--token", "--access-token", "--refresh-token", "--client-secret", "--authorization"] {
+        if args.iter().skip(1).any(|arg| arg == option || arg.starts_with(&format!("{option}="))) {
+            return Err("Credentials are not accepted on the command line. Configure inference securely in Settings.".into());
+        }
+    }
     if args.first().is_some_and(|command| ["mcp", "serve", "remote"].contains(&command.as_str())) {
-        return Err("MCP and external networking have been removed. Use the local rewrite or run commands.".into());
+        return Err("MCP and remote-control commands have been removed. Use rewrite or run with inference configured in Settings.".into());
     }
     for option in ["--mcp", "--api", "--relay", "--listen", "--advertise", "--offer-file", "--discoverable", "--identity", "--direct"] {
         if args.iter().skip(2).any(|arg| arg == option || arg.starts_with(&format!("{option}="))) {
-            return Err(format!("{option} is no longer supported; MCP and external networking have been removed."));
+            return Err(format!("{option} is no longer supported; configure inference in Settings instead."));
         }
     }
     if checked_flag(args.get(2..).unwrap_or_default(), "--mode")?.as_deref() == Some("answer")
@@ -334,20 +385,33 @@ fn run() -> Result<(), String> {
         println!("{}", serde_json::to_string_pretty(&score).map_err(|e| e.to_string())?);
         return if score.passed == score.total && score.macro_f1 >= 0.90 { Ok(()) } else { Err("routing evaluation failed".into()) };
     }
+    if args.first().is_some_and(|arg| arg == "inference") {
+        if args.len() != 1 {
+            return Err("usage: promptify-cli inference (read-only; configure inference in Settings)".into());
+        }
+        let data_dir = settings::app_data_dir();
+        let shared = Arc::new(RwLock::new(settings::load_checked(&data_dir)?.unwrap_or_default()));
+        let manager = InferenceManager::new(data_dir.clone(), Manifest::bundled(), settings::models_dir(&data_dir), shared);
+        println!("{}", serde_json::to_string_pretty(&manager.status()).map_err(|error| error.to_string())?);
+        return Ok(());
+    }
     let data_dir = settings::app_data_dir();
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let models_dir = settings::models_dir(&data_dir);
     let manifest = Manifest::bundled();
     let mut app_settings = settings::load(&data_dir);
-    if ensure_selection(&manifest, &models_dir, &mut app_settings) {
+    let model_override = if matches!(args.first().map(String::as_str), Some("rewrite" | "run" | "eval" | "eval-adaptive")) {
+        checked_flag(args.get(2..).unwrap_or_default(), "--model")?
+    } else {
+        None
+    };
+    if ensure_selection(&manifest, &models_dir, &mut app_settings) && model_override.is_none() {
         settings::save(&data_dir, &app_settings).map_err(|e| e.to_string())?;
     }
-    if matches!(args.first().map(String::as_str), Some("rewrite" | "run" | "eval" | "eval-adaptive"))
-        && let Some(id) = checked_flag(args.get(2..).unwrap_or_default(), "--model")?
+    if matches!(args.first().map(String::as_str), Some("eval" | "eval-adaptive"))
+        && let Some(id) = model_override.as_deref()
     {
-            let entry = manifest.get(&id).filter(|entry| entry.kind == ModelKind::Llm).ok_or_else(|| format!("unknown language model: {id}"))?;
-            if !is_installed(&models_dir, entry) { return Err(format!("language model {id} is not installed")); }
-            app_settings.llm_model = Some(id);
+        local_model_override(&manifest, &models_dir, &mut app_settings, id)?;
     }
 
     match args.first().map(String::as_str) {
@@ -473,12 +537,9 @@ fn run() -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             let shared: SharedSettings = Arc::new(RwLock::new(app_settings));
             let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), shared.clone()));
-            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, shared));
             let started = Instant::now();
             stt.preload().map_err(|e| e.0)?;
-            if mode == Mode::Prompt {
-                llm.preload().map_err(|e| e.0)?;
-            }
+            let llm = ordinary_generator(data_dir, manifest, models_dir, shared, model_override.as_deref(), needs_inference(mode))?;
             eprintln!("models loaded in {:.1?}", started.elapsed());
 
             let backends = Backends {
@@ -516,16 +577,13 @@ fn run() -> Result<(), String> {
                 flag(&args, "--url"),
                 flag(&args, "--title").unwrap_or_default(),
             );
-            let llm = Arc::new(LlmWorker::new(worker_exe(), manifest, models_dir, Arc::new(RwLock::new(app_settings))));
             let mode = match flag(&args, "--mode").as_deref() {
                 None | Some("prompt") => Mode::Prompt,
                 Some("dictation") => Mode::Dictation,
                 Some(other) => return Err(format!("unknown mode {other}")),
             };
-            if mode == Mode::Prompt {
-                llm.preload().map_err(|e| e.0)?;
-            }
-            let report = rewrite_with(&llm, ctx, &text, mode, args.iter().any(|a| a == "--auto"), routing_flags(&args)?)?;
+            let llm = ordinary_generator(data_dir, manifest, models_dir, Arc::new(RwLock::new(app_settings)), model_override.as_deref(), needs_inference(mode))?;
+            let report = rewrite_with(llm, ctx, &text, mode, args.iter().any(|a| a == "--auto"), routing_flags(&args)?)?;
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
         }
         Some("eval-adaptive") => {
@@ -547,7 +605,7 @@ fn run() -> Result<(), String> {
                     continue;
                 }
                 let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
-                let report = rewrite_with(&llm, ctx, &case.said, Mode::Prompt, false, case.options())?;
+                let report = rewrite_with(llm.clone(), ctx, &case.said, Mode::Prompt, false, case.options())?;
                 if let Outcome::Failed { reason, detail } = &report.outcome {
                     eprintln!("{} rejected ({reason:?}): {}", case.id, detail.as_deref().unwrap_or("no additional detail"));
                 }
@@ -578,7 +636,7 @@ fn run() -> Result<(), String> {
             let (mut graph_pass, mut graph_total, mut flat_pass, mut flat_total, mut repaired, mut roles) = (0, 0, 0, 0, 0, 0);
             for case in &cases {
                 let ctx = text_context(case.process.clone(), case.url.clone(), case.title.clone());
-                let report = rewrite_text(&llm, ctx, &case.said)?;
+                let report = rewrite_text(llm.clone(), ctx, &case.said)?;
                 let score = eval::score(case.expect, outcome_text(&report.outcome));
                 if report.structure == Some(promptify_core::pipeline::StructureCheck::Repaired) {
                     repaired += 1;
@@ -611,6 +669,44 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dictation_needs_no_model_or_credentials() {
+        assert!(needs_inference(Mode::Prompt));
+        assert!(!needs_inference(Mode::Dictation));
+        let shared = Arc::new(RwLock::new(settings::AppSettings::default()));
+        let generator = ordinary_generator(
+            PathBuf::from("unused-inference-data"),
+            Manifest::bundled(),
+            PathBuf::from("unused-inference-models"),
+            shared.clone(),
+            Some("not-an-installed-model"),
+            false,
+        ).unwrap();
+        let report = rewrite_with(
+            generator,
+            text_context("notepad.exe".into(), None, String::new()),
+            "Hello there.",
+            Mode::Dictation,
+            false,
+            RoutingOptions::default(),
+        ).unwrap();
+        assert!(outcome_text(&report.outcome).is_some_and(|text| text.contains("Hello there")));
+        assert!(shared.read().unwrap().llm_model.is_none());
+    }
+
+    #[test]
+    fn cli_credentials_are_rejected_without_echoing_values() {
+        for option in ["--api-key", "--token", "--access-token", "--refresh-token", "--client-secret", "--authorization"] {
+            for args in [
+                vec!["rewrite".into(), "hello".into(), option.into(), "secret-sentinel".into()],
+                vec!["inference".into(), format!("{option}=secret-sentinel")],
+            ] {
+                let error = validate_retired_options(&args).unwrap_err();
+                assert!(!error.contains("secret-sentinel"));
+            }
+        }
+    }
 
     #[test]
     fn retired_features_fail_before_model_loading() {

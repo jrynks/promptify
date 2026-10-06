@@ -13,12 +13,90 @@ const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_HISTORY_LISTED: usize = 200;
 static DESKTOP_INTEGRATION_CHANGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[tauri::command]
+pub fn inference_config(state: State<'_, AppState>) -> Result<crate::inference::InferenceConfig, String> {
+    state.llm.config()
+}
+
+#[tauri::command]
+pub fn inference_status(state: State<'_, AppState>) -> crate::inference::InferenceStatus {
+    state.llm.status()
+}
+
+fn inference_changed(app: &AppHandle) {
+    preload_engines(app);
+    if let Err(error) = app.emit_to("settings", "inference-changed", ()) {
+        log::warn!("could not notify settings of inference changes: {error}");
+    }
+}
+
+#[tauri::command]
+pub async fn save_inference_connection(app: AppHandle, input: crate::inference::ConnectionInput) -> Result<crate::inference::InferenceConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        onboarding::available(&state)?;
+        let config = state.llm.upsert_connection(input)?;
+        inference_changed(&app);
+        Ok(config)
+    }).await.map_err(|error| format!("Could not save inference connection: {error}"))?
+}
+
+#[tauri::command]
+pub async fn remove_inference_connection(app: AppHandle, id: String) -> Result<crate::inference::InferenceConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        onboarding::available(&state)?;
+        let config = state.llm.remove_connection(&id)?;
+        inference_changed(&app);
+        Ok(config)
+    }).await.map_err(|error| format!("Could not remove inference connection: {error}"))?
+}
+
+#[tauri::command]
+pub async fn select_inference(app: AppHandle, selection: crate::inference::InferenceSelection) -> Result<crate::inference::InferenceConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        onboarding::available(&state)?;
+        let config = state.llm.select(selection)?;
+        inference_changed(&app);
+        Ok(config)
+    }).await.map_err(|error| format!("Could not select inference: {error}"))?
+}
+
+#[tauri::command]
+pub async fn discover_inference_models(app: AppHandle, id: String) -> Result<Vec<crate::inference::DiscoveredModel>, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().llm.discover(&id))
+        .await.map_err(|error| format!("Could not discover inference models: {error}"))?
+}
+
+#[tauri::command]
+pub async fn test_inference_connection(app: AppHandle, id: String, model: String) -> Result<crate::inference::InferenceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let status = state.llm.test(&id, &model)?;
+        inference_changed(&app);
+        Ok(status)
+    }).await.map_err(|error| format!("Could not test inference connection: {error}"))?
+}
+
+#[tauri::command]
+pub async fn reset_inference(app: AppHandle) -> Result<crate::inference::InferenceConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let config = state.llm.reset()?;
+        state.controller.send(crate::controller::Command::Cancel);
+        inference_changed(&app);
+        Ok(config)
+    }).await.map_err(|error| format!("Could not reset inference: {error}"))?
+}
+
 #[derive(Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum RecoverySection {
     General,
     Models,
     Prompts,
+    Inference,
 }
 
 #[cfg(test)]
@@ -27,7 +105,7 @@ mod recovery_tests {
 
     #[test]
     fn recovery_targets_accept_only_fixed_sections() {
-        for section in ["general", "models", "prompts"] {
+        for section in ["general", "models", "prompts", "inference"] {
             assert!(serde_json::from_value::<RecoverySection>(serde_json::json!(section)).is_ok());
         }
         for section in ["microphone", "accessibility", "input_monitoring"] {
@@ -411,7 +489,7 @@ fn app_info_snapshot(state: &AppState) -> AppInfo {
         hotkey_errors: state.hotkeys.read().unwrap().errors(),
         prompt_hotkey_error: state.hotkeys.read().unwrap().prompt_error.clone(),
         hotkeys_paused: state.hotkeys.read().unwrap().paused,
-        engines_ready: state.onboarding.ready(&settings) && onboarding::models_installed(&state, &settings),
+        engines_ready: onboarding::engines_ready(&state, &settings),
         models_installed: onboarding::models_installed(&state, &settings),
         engine_error: state.onboarding.engine_error(),
         history_enabled: state.history.is_enabled(),
@@ -554,7 +632,6 @@ pub fn delete_model(app: AppHandle, state: State<'_, AppState>, id: String) -> R
             Err(e) => return Err(format!("could not delete: {e}")),
         }
     }
-    onboarding::invalidate(&state, Some("A model was removed. Check the models and try practice again."));
     let result = settings::update(&state.settings, &state.data_dir, |settings| {
         ensure_selection(&state.manifest, &state.models_dir, settings);
     });
@@ -575,6 +652,9 @@ pub fn select_model(app: AppHandle, state: State<'_, AppState>, id: String) -> R
             ModelKind::Llm => settings.llm_model = Some(id),
         }
     })?;
+    if entry.kind == ModelKind::Llm {
+        state.llm.select(crate::inference::InferenceSelection::BundledLocal)?;
+    }
     preload_engines(&app);
     Ok(())
 }

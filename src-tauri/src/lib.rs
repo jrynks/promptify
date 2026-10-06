@@ -18,6 +18,7 @@ mod destination_macos;
 #[cfg(target_os = "linux")]
 mod kwin;
 pub mod llm_client;
+pub mod inference;
 mod modifier_hook;
 pub mod onboarding;
 pub mod settings;
@@ -42,7 +43,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, WindowEvent};
 use crate::controller::Controller;
 use crate::download::Downloads;
 use crate::hotkeys::{HotkeyConfig, HotkeyState, Hotkeys};
-use crate::llm_client::LlmWorker;
+use crate::inference::InferenceManager;
 use crate::settings::{AppSettings, SharedSettings};
 use crate::stt::WhisperEngine;
 
@@ -58,7 +59,7 @@ pub struct AppState {
     pub history: Arc<HistoryLog>,
     pub downloads: Arc<Downloads>,
     pub stt: Arc<WhisperEngine>,
-    pub llm: Arc<LlmWorker>,
+    pub llm: Arc<InferenceManager>,
     pub onboarding: Arc<onboarding::Onboarding>,
     pub modifier_hook: std::sync::Mutex<Option<modifier_hook::Hook>>,
 }
@@ -129,6 +130,14 @@ pub fn run() {
             updates::install_update,
             updates::restart_after_update,
             commands::app_info,
+            commands::inference_config,
+            commands::inference_status,
+            commands::save_inference_connection,
+            commands::remove_inference_connection,
+            commands::select_inference,
+            commands::discover_inference_models,
+            commands::test_inference_connection,
+            commands::reset_inference,
             commands::retry_focus_detection,
             commands::open_recovery_settings,
             commands::open_data_folder,
@@ -202,7 +211,7 @@ pub fn run() {
             let history = Arc::new(history);
             let settings: SharedSettings = Arc::new(RwLock::new(loaded));
             let stt = Arc::new(WhisperEngine::new(manifest.clone(), models_dir.clone(), settings.clone()));
-            let llm = Arc::new(LlmWorker::new(llm_client::worker_exe(), manifest.clone(), models_dir.clone(), settings.clone()));
+            let llm = Arc::new(InferenceManager::new(data_dir.clone(), manifest.clone(), models_dir.clone(), settings.clone()));
 
             let backends = Backends {
                 context: Arc::new(system_context::SystemContext),
@@ -229,7 +238,11 @@ pub fn run() {
             let mut hotkey_state = HotkeyState { config: hotkey_config, hotkeys, prompt_error: None, dictation_error: None, paused: false };
             hotkeys::register_mode_hotkeys(&handle, &mut hotkey_state);
             let tray_hotkeys = hotkey_state.config.clone();
-            let engines_ready = [&settings.read().unwrap().stt_model, &settings.read().unwrap().llm_model].iter().all(|m| m.is_some());
+            let engines_ready = settings.read().unwrap().stt_model.is_some()
+                && llm.config().is_ok_and(|config| match config.selection {
+                    inference::InferenceSelection::BundledLocal => settings.read().unwrap().llm_model.is_some(),
+                    inference::InferenceSelection::Connection { .. } => true,
+                });
             app.manage(AppState {
                 orchestrator,
                 controller,

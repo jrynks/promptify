@@ -8,6 +8,7 @@ import { UpdateIndicator, UpdatesSettings, useUpdates } from "./Updates";
 import { PromptRoutingSettings } from "./PromptRouting";
 import "./settings.css";
 import { RecoveryButton } from "./RecoveryButton";
+import { Inference, useInference } from "./Inference";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
 
@@ -107,7 +108,7 @@ function ModifierHold({ info, onChange }: { info: AppInfo; onChange: () => void 
   );
 }
 
-function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange: () => void; guidedStep?: OnboardingStep }) {
+function Status({ info, onChange, guidedStep, external = false }: { info: AppInfo | null; onChange: () => void; guidedStep?: OnboardingStep; external?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   if (!info) return <p>Loading…</p>;
   const guided = guidedStep !== undefined;
@@ -115,7 +116,7 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
   return (
     <section className={`general${guidedStep === "input" ? " tour-target" : ""}`} hidden={guidedStep === "practice"} aria-label="General settings">
       <h2>General</h2>
-      <p className="hint">Hold a hotkey anywhere, say what you want, and Promptify writes it into the app you're using. Everything runs on this computer, and Promptify keeps running in the system tray when you close this window.</p>
+      <p className="hint">Hold a hotkey anywhere, say what you want, and Promptify writes it into the app you're using. {external ? "Speech recognition stays local; language-model work uses your selected endpoint." : "Speech recognition and bundled inference run on this computer."} Promptify keeps running in the system tray when you close this window.</p>
       {[...new Set(guided ? (info.prompt_hotkey_error ? [info.prompt_hotkey_error] : []) : info.hotkey_errors)].map((e) => (
         <p key={e} className="error">{e}</p>
       ))}
@@ -178,12 +179,12 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
             <input type="checkbox" checked={info.use_gpu} onChange={(e) => void api.setUseGpu(e.target.checked).then(() => { setError(null); onChange(); }, (reason) => setError(String(reason)))} />
             Use the GPU when available
           </label>
-          <div className="hint desc">{info.gpu_device ? `Prompt model running on ${info.gpu_device}` : "Prompt model running on the CPU"}</div>
+          <div className="hint desc">{external ? "GPU settings apply to bundled engines, not your selected inference server." : info.gpu_device ? `Prompt model running on ${info.gpu_device}` : "Prompt model running on the CPU"}</div>
         </dd>
       </dl>
       {!guided && !info.engines_ready && <div className="actions">
-        <RecoveryButton action={() => api.openRecoverySettings("models")}>Choose models</RecoveryButton>
-        {info.models_installed && info.engine_error && <>
+        <RecoveryButton action={() => api.openRecoverySettings(external ? "inference" : "models")}>{external ? "Check inference" : "Choose models"}</RecoveryButton>
+        {!external && info.models_installed && info.engine_error && <>
           <RecoveryButton action={api.retryModelLoading} onComplete={onChange}>Retry model loading</RecoveryButton>
           {info.use_gpu && <RecoveryButton action={() => api.setUseGpu(false)} onComplete={onChange}>Try loading on CPU</RecoveryButton>}
         </>}
@@ -193,7 +194,7 @@ function Status({ info, onChange, guidedStep }: { info: AppInfo | null; onChange
   );
 }
 
-function Models({ onChange, guided = false }: { onChange: () => void; guided?: boolean }) {
+function Models({ onChange, guided = false, external = false }: { onChange: () => void; guided?: boolean; external?: boolean }) {
   const [models, setModels] = useState<ModelStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, DownloadEvent>>({});
   const [error, setError] = useState<string | null>(null);
@@ -300,7 +301,7 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
       </p>
       </details>
       {group("stt", "Speech to text")}
-      {group("llm", "Prompt writer")}
+      {external ? <p className="hint">Your selected endpoint supplies the prompt writer. No bundled language-model download is required.</p> : group("llm", "Prompt writer")}
       {(listenerError || error) && <div role="alert"><p className="error">{listenerError || error}</p><button onClick={() => {
         setError(null);
         setListenerAttempt((value) => value + 1);
@@ -310,7 +311,7 @@ function Models({ onChange, guided = false }: { onChange: () => void; guided?: b
   );
 }
 
-function History({ info, onChange }: { info: AppInfo | null; onChange: () => void }) {
+function History({ info, onChange, external = false }: { info: AppInfo | null; onChange: () => void; external?: boolean }) {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [listenerError, setListenerError] = useState<string | null>(null);
@@ -347,6 +348,7 @@ function History({ info, onChange }: { info: AppInfo | null; onChange: () => voi
       <h2>History</h2>
       <p className="hint">
         Saved only on this device. Your past requests and the prompts you used teach Promptify your style, and your last prompt in the same app lets you follow up with things like “make it shorter”. Surrounding screen text and audio are never saved.
+        {external && " Enabled history context can be sent to your selected inference endpoint. Local storage does not mean inference context stays local."}
       </p>
       <label className="inline">
         <input type="checkbox" checked={info?.history_enabled ?? false} onChange={(e) => act(() => api.setHistoryEnabled(e.target.checked))} />
@@ -441,11 +443,12 @@ function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void 
   );
 }
 
-type Pane = "general" | "models" | "prompts" | "words" | "history" | "updates";
+type Pane = "general" | "models" | "inference" | "prompts" | "words" | "history" | "updates";
 
 const PANES: { id: Pane; label: string }[] = [
   { id: "general", label: "General" },
   { id: "models", label: "Models" },
+  { id: "inference", label: "Inference" },
   { id: "prompts", label: "Prompt types" },
   { id: "words", label: "Your words" },
   { id: "history", label: "History" },
@@ -456,6 +459,8 @@ const PANE_KEY = "promptify.settings.pane";
 
 function Settings() {
   const updates = useUpdates();
+  const inference = useInference();
+  const external = inference.config?.selection.kind === "connection";
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -511,9 +516,9 @@ function Settings() {
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | undefined;
-    void listen<"general" | "models" | "prompts">("open-settings-section", ({ payload }) => {
+    void listen<"general" | "models" | "inference" | "prompts">("open-settings-section", ({ payload }) => {
       if (disposed) return;
-      if (payload !== "general" && payload !== "models" && payload !== "prompts") {
+      if (payload !== "general" && payload !== "models" && payload !== "inference" && payload !== "prompts") {
         setLoadError("An invalid recovery section was requested. Retry the connection.");
         return;
       }
@@ -527,11 +532,11 @@ function Settings() {
     return () => { disposed = true; stop?.(); };
   }, [connectionAttempt]);
 
-  // Until models are installed nothing works, so the first view goes straight there.
+  // First-run recovery still requires a speech model, but not a bundled prompt model.
   useEffect(() => {
     if (info && firstInfo.current) {
       firstInfo.current = false;
-      if (!info.models_installed) setPane("models");
+      if (!info.models_installed && !info.engines_ready) setPane("models");
     }
   }, [info]);
 
@@ -542,7 +547,8 @@ function Settings() {
   };
 
   const badge = (id: Pane) => {
-    if (id === "models" && info && !info.models_installed) return <span className="badge">Set up</span>;
+    if (id === "models" && info && !info.models_installed && !info.engines_ready) return <span className="badge">Set up</span>;
+    if (id === "inference" && inference.status?.state === "error") return <span className="badge">!</span>;
     if (id === "general" && info && info.hotkey_errors.length > 0) return <span className="badge">!</span>;
     return null;
   };
@@ -558,10 +564,11 @@ function Settings() {
 
   // Keep visited panes mounted so edits survive switching; unvisited panes do no work.
   const panes: Record<Pane, React.ReactNode> = {
-    general: <Status info={info} onChange={refreshInfo} guidedStep={guided ? onboarding.step : undefined} />,
-    models: <Models onChange={refreshInfo} guided={guided} />,
+    general: <Status info={info} onChange={refreshInfo} guidedStep={guided ? onboarding.step : undefined} external={external} />,
+    models: <>{guided && <Inference state={inference} onChange={refreshInfo} guided />}<Models onChange={refreshInfo} guided={guided} external={external} /></>,
+    inference: <Inference state={inference} onChange={refreshInfo} />,
     words: <Words info={info} onChange={refreshInfo} />,
-    history: <History info={info} onChange={refreshInfo} />,
+    history: <History info={info} onChange={refreshInfo} external={external} />,
     prompts: <PromptRoutingSettings />,
     updates: <UpdatesSettings updates={updates} />,
   };
@@ -576,11 +583,11 @@ function Settings() {
             {badge(p.id)}
           </button>
         ))}
-        <p className="sidebar-foot hint">Prompt and Dictation.<br />Local models. No account.<br />Keeps running in the system tray.</p>
+        <p className="sidebar-foot hint">Prompt and Dictation.<br />{external ? "Local speech. Selected inference endpoint." : "Bundled local inference. No account."}<br />Keeps running in the system tray.</p>
       </nav>
       <main>
         <UpdateIndicator updates={updates} />
-        {guided && <OnboardingTour status={onboarding} info={info} onChange={refreshInfo} />}
+        {guided && <OnboardingTour status={onboarding} info={info} onChange={refreshInfo} external={external} />}
         {!onboarding.startup_error && visiblePanes.filter((p) => p.id === visiblePane || visited.includes(p.id)).map((p) => (
           <div key={p.id} className="settings-pane" hidden={visiblePane !== p.id}>
             {panes[p.id]}

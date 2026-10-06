@@ -199,8 +199,51 @@ export interface HistoryEntry {
   inserted: boolean;
 }
 
+export type InferenceProvider = "custom" | "lm_studio" | "openai" | "anthropic" | "google";
+export type InferenceProtocol = "openai_chat_completions" | "openai_responses" | "anthropic_messages";
+export type InferenceSelection = { kind: "bundled_local" } | { kind: "connection"; connection_id: string; model: string };
+export interface InferenceConnection {
+  id: string;
+  name: string;
+  provider: InferenceProvider;
+  base_url: string;
+  protocol: InferenceProtocol;
+  auth: "none" | "api_key";
+  model: string;
+  stream: boolean;
+  allow_insecure_lan: boolean;
+  consent_remote: boolean;
+  credential_present: boolean;
+  revision: number;
+}
+export interface InferenceConnectionInput extends Omit<InferenceConnection, "credential_present" | "revision"> {
+  secret: string | null;
+  remove_secret: boolean;
+}
+export interface InferenceConfig {
+  version: number;
+  revision: number;
+  selection: InferenceSelection;
+  connections: InferenceConnection[];
+}
+export interface InferenceStatus {
+  state: "configured" | "ready" | "error";
+  selection: InferenceSelection;
+  revision: number;
+  message: string | null;
+}
+export interface DiscoveredInferenceModel { id: string; name: string }
+
 export const api = {
-  openRecoverySettings: (section: "general" | "models" | "prompts") => invoke<void>("open_recovery_settings", { section }),
+  inferenceConfig: () => invoke<InferenceConfig>("inference_config"),
+  inferenceStatus: () => invoke<InferenceStatus>("inference_status"),
+  saveInferenceConnection: (input: InferenceConnectionInput) => invoke<InferenceConfig>("save_inference_connection", { input }),
+  removeInferenceConnection: (id: string) => invoke<InferenceConfig>("remove_inference_connection", { id }),
+  selectInference: (selection: InferenceSelection) => invoke<InferenceConfig>("select_inference", { selection }),
+  discoverInferenceModels: (id: string) => invoke<DiscoveredInferenceModel[]>("discover_inference_models", { id }),
+  testInferenceConnection: (id: string, model: string) => invoke<InferenceStatus>("test_inference_connection", { id, model }),
+  resetInference: () => invoke<InferenceConfig>("reset_inference"),
+  openRecoverySettings: (section: "general" | "models" | "inference" | "prompts") => invoke<void>("open_recovery_settings", { section }),
   openDataFolder: () => invoke<void>("open_data_folder"),
   openSystemSettings: (section: "microphone" | "accessibility" | "input_monitoring") => invoke<void>("open_system_settings", { section }),
   updateInfo: () => invoke<UpdateInfo>("update_info"),

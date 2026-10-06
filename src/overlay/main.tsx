@@ -8,7 +8,7 @@ type View =
   | { kind: "idle" }
   | { kind: "listening"; mode: string; profile: string; target: string; latched: boolean }
   | { kind: "working"; label: string }
-  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean; canRestore?: boolean; settings?: "general" | "models" | "prompts" };
+  | { kind: "result"; tone: "ok" | "warn" | "error"; title: string; body?: string; detail?: string; canCopy: boolean; canRestore?: boolean; settings?: "general" | "models" | "prompts" | "inference" };
 
 const BLOCK_MESSAGES: Record<string, string> = {
   focus_changed: "You switched windows, so nothing was pasted.",
@@ -48,7 +48,7 @@ function describe(outcome: Outcome, capped: boolean): View {
         title: FAIL_MESSAGES[outcome.reason] ?? "Something went wrong.",
         body: outcome.detail ?? undefined,
         canCopy: false,
-        settings: outcome.reason === "transcription_failed" || outcome.reason === "generation_failed" || outcome.reason === "timed_out" || outcome.reason === "empty_output" ? "models" : "general",
+        settings: outcome.reason === "transcription_failed" ? "models" : outcome.reason === "generation_failed" || outcome.reason === "timed_out" || outcome.reason === "empty_output" ? "inference" : "general",
       };
   }
 }
@@ -166,7 +166,7 @@ function Overlay() {
     }
   };
 
-  const openSettings = async (section: "general" | "models" | "prompts") => {
+  const openSettings = async (section: "general" | "models" | "prompts" | "inference") => {
     window.clearTimeout(hideTimer.current);
     setUiError(null);
     try {
@@ -292,7 +292,7 @@ function Overlay() {
             <div className="actions">
               {view.canCopy && <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>}
               {view.canRestore && <button disabled={restoring} onClick={() => void restoreClipboard()}>Restore previous clipboard</button>}
-              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
+              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "inference" ? "Inference settings" : view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
               {connectionFailed && <button onClick={() => { setUiError(null); setConnectionAttempt((value) => value + 1); }}>Retry overlay connection</button>}
               <button onClick={() => scheduleHide(0)}>Dismiss</button>
             </div>

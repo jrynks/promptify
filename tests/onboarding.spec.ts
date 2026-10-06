@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { AppInfo, ModelStatus, OnboardingStatus, OverlayEvent, PromptCatalog, Rendering, UpdateInfo } from "../src/api";
+import type { AppInfo, InferenceConfig, InferenceConnectionInput, InferenceStatus, ModelStatus, OnboardingStatus, OverlayEvent, PromptCatalog, Rendering, UpdateInfo } from "../src/api";
 
 interface Fixture {
   info: AppInfo;
@@ -10,6 +10,9 @@ interface Fixture {
   catalog: PromptCatalog;
   routingError?: string | null;
   updates: UpdateInfo;
+  inference: InferenceConfig;
+  inferenceStatus: InferenceStatus;
+  inferenceTestError?: string;
 }
 
 interface TestBridge {
@@ -20,6 +23,7 @@ interface TestBridge {
   practice: (event: OverlayEvent, attempt?: number) => void;
   lastRouting: unknown;
   overlaySizes: number[];
+  inferenceWrites: { input: Omit<InferenceConnectionInput, "secret">; hasSecret: boolean }[];
 }
 
 declare global {
@@ -58,6 +62,8 @@ function fixture(ready = false): Fixture {
       { id: "qwen3.5-4b-q4km", kind: "llm", tier: "balanced", display_name: "Qwen3.5 4B", size_bytes: 3013027808, license: "apache-2.0", min_ram_gb: 8, compatibility: { supported: true, total_ram_bytes: 8_000_000_000, reason: null }, installed: ready, selected: ready, downloading: false, partial_bytes: 0 },
     ],
     failures: {},
+    inference: { version: 1, revision: 0, selection: { kind: "bundled_local" }, connections: [] },
+    inferenceStatus: { state: ready ? "ready" : "configured", selection: { kind: "bundled_local" }, revision: 0, message: null },
     updates: {
       current_version: "1.1.1", check_on_startup: true, checking: false, checked: true,
       release: { version: "1.1.1", url: "https://github.com/jrynks/promptify/releases/tag/v1.1.1", update_available: false, install_error: null },
@@ -126,7 +132,7 @@ async function launch(page: Page, state = fixture(), path = "/") {
       initial.status.speech = initial.status.language = { state: "ready" };
     };
     window.onboardingTest = {
-      state: initial, calls: [], emit, lastRouting: null, overlaySizes: [],
+      state: initial, calls: [], emit, lastRouting: null, overlaySizes: [], inferenceWrites: [],
       change: (update) => { Object.assign(initial, update); changed(); },
       practice: (event, id = initial.status.practice.attempt_id ?? -1) => {
         const practice = initial.status.practice;
@@ -172,6 +178,57 @@ async function launch(page: Page, state = fixture(), path = "/") {
             }
             case "plugin:event|unlisten": listeners.delete(Number(args.eventId)); return;
             case "app_info": return structuredClone(initial.info);
+            case "inference_config": return structuredClone(initial.inference);
+            case "inference_status": return structuredClone(initial.inferenceStatus);
+            case "save_inference_connection": {
+              const { secret, ...input } = args.input as InferenceConnectionInput;
+              const old = initial.inference.connections.find((connection) => connection.id === input.id);
+              window.onboardingTest.inferenceWrites.push({ input: structuredClone(input), hasSecret: !!secret });
+              const connection = {
+                id: input.id, name: input.name, provider: input.provider, base_url: input.base_url,
+                protocol: input.protocol, auth: input.auth, model: input.model, stream: input.stream,
+                allow_insecure_lan: input.allow_insecure_lan, consent_remote: input.consent_remote,
+                credential_present: input.auth === "api_key" && !input.remove_secret && (!!secret || !!old?.credential_present),
+                revision: ++initial.inference.revision,
+              };
+              initial.inference.connections = [...initial.inference.connections.filter((item) => item.id !== connection.id), connection];
+              initial.inferenceStatus = { state: "configured", selection: initial.inference.selection, revision: initial.inference.revision, message: null };
+              emit("inference-changed", null);
+              return structuredClone(initial.inference);
+            }
+            case "select_inference":
+              initial.inference.selection = args.selection as InferenceConfig["selection"];
+              initial.inferenceStatus = { state: "configured", selection: initial.inference.selection, revision: ++initial.inference.revision, message: null };
+              if (initial.inference.selection.kind === "connection") {
+                initial.info.engines_ready = false;
+                initial.status.language = { state: "missing" };
+              } else if (initial.models.every((model) => model.installed)) ready();
+              emit("inference-changed", null); changed();
+              return structuredClone(initial.inference);
+            case "discover_inference_models": return [{ id: "discovered-text-model", name: "Discovered text model" }];
+            case "test_inference_connection":
+              if (initial.inferenceTestError) {
+                initial.inferenceStatus = { state: "error", selection: initial.inference.selection, revision: initial.inference.revision, message: initial.inferenceTestError };
+                emit("inference-changed", null);
+                return structuredClone(initial.inferenceStatus);
+              }
+              initial.inferenceStatus = { state: "ready", selection: initial.inference.selection, revision: initial.inference.revision, message: null };
+              if (initial.inference.selection.kind === "connection" && initial.inference.selection.connection_id === args.id && initial.inference.selection.model === args.model) {
+                initial.status.language = { state: "ready" };
+                initial.info.engines_ready = initial.status.speech.state === "ready";
+              }
+              emit("inference-changed", null); changed();
+              return structuredClone(initial.inferenceStatus);
+            case "remove_inference_connection":
+              if (initial.inference.selection.kind === "connection" && initial.inference.selection.connection_id === args.id) throw new Error("Select a replacement first");
+              initial.inference.connections = initial.inference.connections.filter((connection) => connection.id !== args.id);
+              emit("inference-changed", null);
+              return structuredClone(initial.inference);
+            case "reset_inference":
+              initial.inference = { version: 1, revision: initial.inference.revision + 1, selection: { kind: "bundled_local" }, connections: [] };
+              initial.inferenceStatus = { state: "configured", selection: initial.inference.selection, revision: initial.inference.revision, message: null };
+              emit("inference-changed", null);
+              return structuredClone(initial.inference);
             case "retry_focus_detection":
               initial.info.desktop_error = null;
               changed();
@@ -362,6 +419,147 @@ async function launchPractice(page: Page) {
   await page.getByRole("button", { name: "Prepare practice" }).click();
   await expect(page.locator("#setup-practice")).toBeFocused();
 }
+
+test("inference presets keep bundled default and require explicit remote context consent", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  await page.getByRole("button", { name: "Inference", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Selected:" })).toContainText("Bundled local");
+  for (const provider of ["OpenAI", "Anthropic", "Google"]) {
+    await page.getByRole("button", { name: provider, exact: true }).click();
+    await expect(page.getByLabel("API base URL")).toHaveValue(provider === "OpenAI" ? "https://api.openai.com/v1" : provider === "Anthropic" ? "https://api.anthropic.com/v1" : "https://generativelanguage.googleapis.com/v1beta/openai");
+    await page.getByLabel("Model ID", { exact: true }).fill("text-model");
+    await page.getByLabel("API key / token", { exact: true }).fill("mock-write-only-token");
+    await expect(page.getByRole("button", { name: "Save connection" })).toBeDisabled();
+    await expect(page.getByText(/transcripts, prompt instructions, permitted app\/context metadata/)).toBeVisible();
+    await page.getByLabel("I consent to sending this context to this endpoint.").check();
+    await expect(page.getByRole("button", { name: "Save connection" })).toBeEnabled();
+  }
+  await expect.poll(() => page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "test_inference_connection" || call === "save_inference_connection").length)).toBe(0);
+});
+
+test("inference keys are write-only, cleared after save, and cannot follow endpoint edits silently", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  await page.getByRole("button", { name: "Inference", exact: true }).click();
+  await page.getByRole("button", { name: "OpenAI", exact: true }).click();
+  await page.getByLabel("Model ID", { exact: true }).fill("text-model");
+  await page.getByLabel("API key / token", { exact: true }).fill("mock-write-only-token");
+  await page.getByLabel("I consent to sending this context to this endpoint.").check();
+  await page.getByRole("button", { name: "Save connection" }).click();
+  await expect(page.getByLabel("Replace saved API key / token (leave blank to keep)")).toHaveValue("");
+  await expect(page.getByText("Key saved (never displayed)", { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => JSON.stringify(window.onboardingTest.state.inference))).not.toContain("mock-write-only-token");
+  expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain("mock-write-only-token");
+  expect(await page.evaluate(() => window.onboardingTest.inferenceWrites[0].hasSecret)).toBe(true);
+  await page.getByLabel("API base URL").fill("https://gateway.example/v1");
+  await page.getByLabel("I consent to sending this context to this endpoint.").check();
+  await expect(page.getByRole("button", { name: "Save connection" })).toBeDisabled();
+  await expect(page.getByText(/cannot silently reuse a saved key/)).toBeVisible();
+  await page.getByLabel("Remove saved key / token").check();
+  await expect(page.getByRole("button", { name: "Save connection" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save connection" }).click();
+  await expect(page.getByText("No key saved", { exact: false })).toBeVisible();
+});
+
+test("inference LAN HTTP requires both context consent and unencrypted transit acknowledgment", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  await launch(page, state);
+  await page.getByRole("button", { name: "Inference", exact: true }).click();
+  await page.getByRole("button", { name: "Add custom model" }).click();
+  await page.getByLabel("API base URL").fill("http://192.168.1.20:1234/v1");
+  await page.getByLabel("Protocol", { exact: true }).selectOption("openai_responses");
+  await page.getByLabel("Model ID", { exact: true }).fill("lan-text-model");
+  await page.getByLabel("I consent to sending this context to this endpoint.").check();
+  await expect(page.getByRole("button", { name: "Save connection" })).toBeDisabled();
+  await expect(page.getByText(/LAN HTTP is unencrypted/)).toBeVisible();
+  await page.getByLabel("I understand and allow unencrypted LAN HTTP.").check();
+  await page.getByRole("button", { name: "Save connection" }).click();
+  expect(await page.evaluate(() => window.onboardingTest.inferenceWrites[0].input)).toMatchObject({ protocol: "openai_responses", auth: "none", consent_remote: true, allow_insecure_lan: true });
+});
+
+test("guided inference supports LM Studio discovery and selected-model test without bundled LLM download", async ({ page }) => {
+  const state = fixture();
+  state.status.speech = { state: "ready" };
+  state.models[0].installed = state.models[0].selected = true;
+  await launch(page, state);
+  await expect(page.getByRole("heading", { name: "Speech and inference" })).toBeVisible();
+  await page.getByRole("button", { name: "LM Studio", exact: true }).click();
+  await expect(page.getByLabel("API base URL")).toHaveValue("http://localhost:1234/v1");
+  await expect(page.getByLabel("Authentication")).toHaveValue("none");
+  await page.getByLabel("Model ID", { exact: true }).fill("manual-text-model");
+  await page.getByRole("button", { name: "Save connection" }).click();
+  await page.getByRole("button", { name: "Refresh models", exact: true }).first().click();
+  await page.getByLabel("Discovered model").selectOption("discovered-text-model");
+  await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeDisabled();
+  await page.getByRole("button", { name: "Save connection" }).click();
+  await page.getByRole("button", { name: "Use LM Studio", exact: true }).click();
+  await expect(page.getByText("No bundled language-model download is required.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeDisabled();
+  await expect(page.getByText(/Tests send tiny synthetic, non-sensitive content/)).toBeVisible();
+  await page.getByRole("button", { name: "Test LM Studio", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeEnabled();
+  expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toMatchObject({ kind: "connection", model: "discovered-text-model" });
+  expect(await page.evaluate(() => window.onboardingTest.calls.filter((call) => call === "download_model"))).toEqual([]);
+  await expect(page.getByRole("button", { name: "Remove LM Studio" })).toBeDisabled();
+  await page.getByLabel("Model ID", { exact: true }).fill("replacement-model");
+  await page.getByRole("button", { name: "Save connection" }).click();
+  await expect(page.getByRole("button", { name: "Use LM Studio", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Use LM Studio", exact: true }).click();
+  expect(await page.evaluate(() => window.onboardingTest.state.inference.selection)).toMatchObject({ model: "replacement-model" });
+});
+
+test("inference editor preserves pane edits and errors while disabling concurrent actions", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.failures.save_inference_connection = "Credential store is locked. Unlock it and try again.";
+  state.delays = { save_inference_connection: 500 };
+  await launch(page, state);
+  await page.getByRole("button", { name: "Inference", exact: true }).click();
+  await page.getByRole("button", { name: "Add custom model" }).click();
+  await page.getByLabel("API base URL").fill("http://localhost:8000/v1");
+  await page.getByLabel("Protocol", { exact: true }).selectOption("anthropic_messages");
+  await page.getByLabel("Authentication").selectOption("api_key");
+  await page.getByLabel("API key / token", { exact: true }).fill("mock-transient-token");
+  await page.getByLabel("Model ID", { exact: true }).fill("persistent-model");
+  await page.getByRole("button", { name: "General", exact: true }).click();
+  await page.getByRole("button", { name: "Inference", exact: true }).click();
+  await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("persistent-model");
+  await page.getByRole("button", { name: "Save connection" }).click();
+  await expect(page.getByLabel("API base URL")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "LM Studio", exact: true })).toBeDisabled();
+  await expect(page.getByRole("alert").filter({ hasText: "Credential store is locked" })).toBeVisible();
+  await expect(page.getByLabel("Model ID", { exact: true })).toHaveValue("persistent-model");
+  await expect(page.getByLabel("API key / token", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("API base URL")).toBeEnabled();
+});
+
+test("inference recovery navigation and external history disclosures are available", async ({ page }) => {
+  const state = fixture(true);
+  state.status.required = false;
+  state.info.models_installed = false;
+  state.inference.connections = [{
+    id: "remote", name: "Hosted model", provider: "custom", base_url: "https://example.com/v1",
+    protocol: "openai_chat_completions", auth: "none", model: "text-model", stream: true,
+    allow_insecure_lan: false, consent_remote: true, credential_present: false, revision: 1,
+  }];
+  state.inference.selection = { kind: "connection", connection_id: "remote", model: "text-model" };
+  state.inferenceStatus = { state: "ready", selection: state.inference.selection, revision: 1, message: null };
+  await launch(page, state);
+  await expect(page.getByText(/language-model work uses your selected endpoint/)).toBeVisible();
+  await page.evaluate(() => window.onboardingTest.emit("open-settings-section", "inference"));
+  await expect(page.getByRole("heading", { name: "Inference", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await expect(page.getByText(/Local storage does not mean inference context stays local/)).toBeVisible();
+  await page.getByRole("button", { name: "Inference", exact: true }).click();
+  await page.evaluate(() => { window.onboardingTest.state.inferenceTestError = "Selected model unavailable. Check server loading."; });
+  await page.getByRole("button", { name: "Test Hosted model", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Selected model unavailable" }).first()).toBeVisible();
+  await expect(page.getByText(/Synthetic test completed/)).toHaveCount(0);
+});
 
 test("update indicator installs only after the user clicks and then offers restart", async ({ page }) => {
   const state = fixture(true);
@@ -631,7 +829,7 @@ test("installed unsupported models retain selection and deletion controls", asyn
 test("fresh setup overrides remembered tabs and excludes optional features", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("promptify.settings.pane", "advanced"));
   await launch(page);
-  await expect(page.getByRole("heading", { name: "Local models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Speech and inference" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Prompt types", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Advanced", exact: true })).toHaveCount(0);
@@ -651,7 +849,7 @@ test("balanced downloads unlock input checks only when both engines are ready", 
 
 test("fresh profile with cached models still requires onboarding", async ({ page }) => {
   await launch(page, fixture(true));
-  await expect(page.getByRole("heading", { name: "Local models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Speech and inference" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to microphone and shortcut" })).toBeEnabled();
 });
 
@@ -893,7 +1091,7 @@ test("IPC failures do not fall through to ordinary settings", async ({ page }) =
   await expect(page.getByRole("navigation")).toHaveCount(0);
   await page.evaluate(() => { delete window.onboardingTest.state.failures.onboarding_status; });
   await page.getByRole("button", { name: "Retry connection" }).click();
-  await expect(page.getByRole("heading", { name: "Local models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Speech and inference" })).toBeVisible();
 });
 
 test("a failed setup refresh disarms practice when the field is unmounted", async ({ page }) => {
@@ -929,7 +1127,7 @@ test("the tour fits the minimum window and supports dark mode", async ({ page },
   await page.setViewportSize({ width: 640, height: 480 });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await launch(page);
-  await expect(page.getByRole("heading", { name: "Local models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Speech and inference" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(640);
   await page.screenshot({ path: testInfo.outputPath("onboarding-minimum-window.png"), fullPage: true });
 });
@@ -1101,7 +1299,7 @@ test("simplified settings retire remembered tabs and defer unvisited panes", asy
   await launch(page, state);
   await expect(page.getByRole("heading", { name: "General", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation").getByRole("button")).toHaveText([
-    "General", "Models", "Prompt types", "Your words", "History", "Updates",
+    "General", "Models", "Inference", "Prompt types", "Your words", "History", "Updates",
   ]);
   await expect(page.getByText("Answer", { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => window.onboardingTest.calls.filter((command) =>
@@ -1321,16 +1519,16 @@ test.describe("native overlay sizing", () => {
     await expect(page.locator(".pill")).toHaveCount(0);
   });
 
-  test("generation failures link to models and remain dismissible", async ({ page }) => {
+  test("generation failures link to inference and remain dismissible", async ({ page }) => {
     await openOverlay(page);
     await emitOverlay(page, {
       type: "finished", capped: false,
       report: { job_id: 2, profile_id: "generic", elapsed_ms: 100, history_saved: false, structure: null,
         outcome: { kind: "failed", reason: "generation_failed", detail: "Model unavailable" } },
     });
-    await expect(page.getByRole("button", { name: "Model settings", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Inference settings", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Model settings", exact: true }).click();
+    await page.getByRole("button", { name: "Inference settings", exact: true }).click();
     expect(await page.evaluate(() => window.onboardingTest.calls.includes("open_recovery_settings"))).toBe(true);
   });
 
