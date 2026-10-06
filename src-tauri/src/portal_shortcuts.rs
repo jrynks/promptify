@@ -346,8 +346,7 @@ fn deliver(app: &AppHandle, generation: u64, path: &str, event: PortalEvent<'_>,
     let (event_path, id, down) = event.details();
     let id = id.to_owned();
     if event_path == path && !paused && down && !ready && !cancel && IDS[..2].contains(&id.as_str()) {
-        crate::onboarding::record_error(app, "The speech and language engines are not ready. Finish setup before using shortcuts.");
-        crate::tray::show_settings(app);
+        crate::onboarding::show_engine_recovery(app);
         return;
     }
     let Some(command) = event_command(event, path, paused, ready || cancel, cancel) else { return };

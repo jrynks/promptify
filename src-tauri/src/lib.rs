@@ -19,6 +19,7 @@ mod destination_macos;
 mod kwin;
 pub mod llm_client;
 pub mod inference;
+pub mod jev;
 mod modifier_hook;
 pub mod onboarding;
 pub mod settings;
@@ -123,6 +124,10 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle_shortcut).build())
         .invoke_handler(tauri::generate_handler![
+            jev::jev_status,
+            jev::save_jev_key,
+            jev::delete_jev_key,
+            jev::set_jev_enabled,
             updates::update_info,
             updates::check_for_updates,
             updates::set_update_checks,
@@ -136,6 +141,7 @@ pub fn run() {
             commands::remove_inference_connection,
             commands::select_inference,
             commands::discover_inference_models,
+            commands::discover_inference_draft,
             commands::test_inference_connection,
             commands::reset_inference,
             commands::retry_focus_detection,
@@ -221,6 +227,7 @@ pub fn run() {
                 history: history.clone(),
             };
             let orchestrator = Arc::new(Orchestrator::new(backends, ProfileSet::bundled(), ContextPolicy::default(), Limits::default()));
+            orchestrator.set_prompt_reviewer(Arc::new(jev::JevReviewer::new(settings.clone())));
             commands::apply_text_settings(&orchestrator, &settings.read().unwrap());
             let routing = match settings::load_routing(&data_dir) {
                 Ok(rendering) => settings::RoutingState { rendering, error: None },

@@ -101,6 +101,7 @@ pub fn emit(app: &AppHandle, event: OverlayEvent) {
         OverlayEvent::Stage { stage: Stage::Transcribing } => Some("transcribing\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Generating } => Some("writing prompt\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Revising } => Some("revising prompt\u{2026}"),
+        OverlayEvent::Stage { stage: Stage::Reviewing } => Some("reviewing prompt with Jev\u{2026}"),
         OverlayEvent::Stage { stage: Stage::Inserting } => Some("pasting\u{2026}"),
         OverlayEvent::Finished { .. } | OverlayEvent::Error { .. } | OverlayEvent::Cancelled => Some("ready"),
         OverlayEvent::Level { .. } | OverlayEvent::Partial { .. } | OverlayEvent::Transcript { .. } | OverlayEvent::Token { .. } | OverlayEvent::Routing { .. } => None,

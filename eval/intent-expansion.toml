@@ -1,0 +1,66 @@
+# Live regression plus held-out subjects. Structural/detail checks are necessary,
+# not a substitute for reading the outputs for faithful, useful expansion.
+[[case]]
+id = "ie01"
+said = "Can you think of any other ways to improve prompt quality"
+process = "code"
+url = ""
+surface = "code_chat"
+task_type = "general.request"
+form = "graph"
+required = ["prompt quality"]
+
+[[case]]
+id = "ie02"
+said = "Can you think of any other ways to improve prompt quality"
+process = "code"
+url = ""
+surface = "code_chat"
+task_type = "general.request"
+form = "graph"
+required = ["prompt quality"]
+
+[[case]]
+id = "ie03"
+said = "Can you think of any other ways to improve prompt quality"
+process = "code"
+url = ""
+surface = "code_chat"
+task_type = "general.request"
+form = "graph"
+required = ["prompt quality"]
+
+[[case]]
+id = "ie04"
+said = "Any other ways to make our weekly meetings more useful?"
+task_type = "general.request"
+form = "graph"
+required = ["meeting"]
+
+[[case]]
+id = "ie05"
+said = "What else could make the garden easier to maintain without removing the pond?"
+task_type = "general.request"
+form = "graph"
+required = ["garden", "pond"]
+
+[[case]]
+id = "ie06"
+said = "Suggest alternatives to daily status calls, but keep the Friday demo."
+task_type = "general.request"
+form = "graph"
+required = ["Friday", "demo"]
+
+[[case]]
+id = "ie07"
+said = "Help me improve prompt quality. We already tried examples and a reviewer; suggest different approaches."
+task_type = "general.request"
+form = "graph"
+required = ["prompt quality", "examples", "reviewer"]
+
+[[case]]
+id = "ie08"
+said = "Suggest ways to improve prompt quality, no wait, focus on speech recognition accuracy instead."
+task_type = "general.request"
+form = "graph"
+required = ["speech recognition"]

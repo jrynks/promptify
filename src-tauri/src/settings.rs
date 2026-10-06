@@ -31,6 +31,7 @@ pub struct AppSettings {
     pub llm_model: Option<String>,
     pub history_enabled: bool,
     pub check_updates_on_startup: bool,
+    pub jev_enabled: bool,
     pub prompt_hotkey: Option<String>,
     pub dictation_hotkey: Option<String>,
     #[serde(skip_serializing, rename = "answer_hotkey")]
@@ -73,6 +74,7 @@ impl Default for AppSettings {
             llm_model: None,
             history_enabled: true,
             check_updates_on_startup: true,
+            jev_enabled: false,
             prompt_hotkey: None,
             dictation_hotkey: None,
             retired_answer_hotkey: None,

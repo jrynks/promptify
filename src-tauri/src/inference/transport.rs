@@ -567,6 +567,34 @@ impl Parser {
         })
     }
 }
+fn discovery_endpoint(c: &InferenceConnection) -> Result<(reqwest::Url, bool), BackendError> {
+    let mut url = endpoint(c, "models").map_err(BackendError)?;
+    // The Anthropic metadata route is filtered; only the VS Code catalogue includes all vendors.
+    if c.provider == Provider::Custom
+        && let Some(prefix) = url.path().strip_suffix("/api/openai/v1/models")
+            .or_else(|| url.path().strip_suffix("/api/anthropic/v1/models"))
+    {
+        let path = format!("{prefix}/api/v1/lm/chatModels");
+        url.set_path(&path);
+        return Ok((url, true));
+    }
+    Ok((url, false))
+}
+
+fn discovered_models(value: &Value, maestro: bool) -> Result<Vec<DiscoveredModel>, BackendError> {
+    let models = if maestro { value } else { &value["data"] }.as_array()
+        .ok_or_else(|| error("Endpoint does not support model discovery. Enter a model manually."))?;
+    models.iter()
+        // Maestro's generation proxy selects only the copilot vendor, not recursive custom endpoints.
+        .filter(|model| !maestro || model["vendor"].as_str() == Some("copilot"))
+        .map(|model| {
+            let id = model["id"].as_str().filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| error("Invalid model discovery response: missing model identifier."))?;
+            let name = model[if maestro { "name" } else { "display_name" }].as_str().unwrap_or(id);
+            Ok(DiscoveredModel { id: id.into(), name: name.into() })
+        }).collect()
+}
+
 pub fn discover(
     c: InferenceConnection,
     secret: Option<String>,
@@ -575,12 +603,15 @@ pub fn discover(
     std::thread::spawn(move||{
         tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_|error("Could not start inference runtime."))?.block_on(async {
             let work=async {
-                let response=authorize(client(&c)?.get(endpoint(&c,"models").map_err(BackendError)?).timeout(Duration::from_secs(15)),&c,secret.as_deref())?
+                let (url, maestro) = discovery_endpoint(&c)?;
+                let request = client(&c)?.get(url).timeout(Duration::from_secs(15));
+                // Maestro's catalogue is outside LLM-key authentication; do not disclose that key.
+                let request = if maestro { request } else { authorize(request, &c, secret.as_deref())? };
+                let response=request
                     .send().await.map_err(|_|error("Cannot discover models. Check server/port or enter a model manually."))?;
                 check_status(&response)?;
                 let value:Value=serde_json::from_slice(&bounded_body(response).await?).map_err(|_|error("Invalid model discovery response."))?;
-                let models=value["data"].as_array().ok_or_else(||error("Endpoint does not support model discovery. Enter a model manually."))?;
-                Ok(models.iter().filter_map(|v|v["id"].as_str().map(|id|DiscoveredModel{id:id.into(),name:id.into()})).collect())
+                discovered_models(&value, maestro)
             };
             tokio::pin!(work);
             let mut interval=tokio::time::interval(Duration::from_millis(20));

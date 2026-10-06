@@ -70,6 +70,12 @@ pub async fn discover_inference_models(app: AppHandle, id: String) -> Result<Vec
 }
 
 #[tauri::command]
+pub async fn discover_inference_draft(app: AppHandle, input: crate::inference::ConnectionInput) -> Result<Vec<crate::inference::DiscoveredModel>, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().llm.discover_draft(input))
+        .await.map_err(|error| format!("Could not discover inference models: {error}"))?
+}
+
+#[tauri::command]
 pub async fn test_inference_connection(app: AppHandle, id: String, model: String) -> Result<crate::inference::InferenceStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();

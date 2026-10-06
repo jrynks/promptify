@@ -16,6 +16,7 @@ use crate::pipeline::{
 use crate::profiles::{NewlinePolicy, Profile, ProfileSet};
 use crate::prompt::{ChatMessage, PromptRequest, Role, adaptive_prefix_len, build_adaptive_messages, build_prompt_messages, choose_mode, stable_prefix_len};
 use crate::routing::{self, Rendering, ResolvedPromptPolicy, RoutingOptions};
+use crate::review::{PromptReviewer, ReviewDecision, ReviewRequest};
 use crate::live::{ChunkPolicy, has_speech};
 use crate::sanitize::sanitize_output;
 use crate::scheduler::{AdmitError, EngineScheduler};
@@ -50,6 +51,8 @@ pub enum TransformOutcome {
     Ready { text: String },
     /// Cut off by the token or length limit; shown to the user but never pasted automatically.
     Truncated { text: String },
+    /// A valid draft is available, but an opted-in quality review did not approve it.
+    ReviewRequired { text: String, detail: String },
     NoSpeech,
     Cancelled,
     Failed { reason: FailReason, detail: Option<String> },
@@ -75,6 +78,7 @@ pub struct TransformService {
     limits: Limits,
     scheduler: EngineScheduler,
     vocabulary: std::sync::RwLock<Vocabulary>,
+    reviewer: std::sync::RwLock<Option<Arc<dyn PromptReviewer>>>,
 }
 
 impl TransformService {
@@ -93,12 +97,17 @@ impl TransformService {
             limits,
             scheduler: EngineScheduler::new(),
             vocabulary: Default::default(),
+            reviewer: Default::default(),
         }
     }
 
     /// Replacements the user set for speech recognition mistakes; applied to every spoken transcript.
     pub fn set_vocabulary(&self, vocabulary: Vocabulary) {
         *self.vocabulary.write().unwrap_or_else(|p| p.into_inner()) = vocabulary.sanitized();
+    }
+
+    pub fn set_prompt_reviewer(&self, reviewer: Arc<dyn PromptReviewer>) {
+        *self.reviewer.write().unwrap_or_else(|p| p.into_inner()) = Some(reviewer);
     }
 
     pub fn profiles(&self) -> &ProfileSet {
@@ -339,16 +348,101 @@ impl TransformService {
                     return match self.check_structure(generator, &request, newlines, text, report.routing.as_ref().map(|policy| (policy, transcript, references.as_str())), cancel, on_event) {
                         Ok((text, check)) => {
                             report.structure = Some(check);
-                            TransformOutcome::Ready { text }
+                            self.review_prompt(generator, &request, transcript, newlines, text, report, references.as_str(), cancel, on_event)
                         }
                         Err(outcome) => outcome,
                     };
                 }
-                return TransformOutcome::Ready { text };
+                return self.review_prompt(generator, &request, transcript, newlines, text, report, references.as_str(), cancel, on_event);
             }
         };
 
         finish_output(&raw, finish, profile.newlines, self.limits.max_output_chars)
+    }
+
+    fn review_prompt(
+        &self,
+        generator: &dyn Generator,
+        generation_request: &GenerationRequest<'_>,
+        transcript: &str,
+        newlines: NewlinePolicy,
+        mut text: String,
+        report: &mut TransformReport,
+        references: &str,
+        cancel: &CancelToken,
+        on_event: &mut dyn FnMut(JobEvent<'_>),
+    ) -> TransformOutcome {
+        let reviewer = self.reviewer.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let Some(reviewer) = reviewer.filter(|reviewer| reviewer.enabled()) else {
+            return TransformOutcome::Ready { text };
+        };
+        let deadline = generation_request.deadline;
+        for round in 0..=1 {
+            if cancel.is_cancelled() {
+                return TransformOutcome::Cancelled;
+            }
+            if Instant::now() >= deadline {
+                return TransformOutcome::ReviewRequired { text, detail: "The quality review deadline was reached. Review or copy the draft; it was not pasted.".into() };
+            }
+            on_event(JobEvent::Stage(Stage::Reviewing));
+            let decision = reviewer.review(&ReviewRequest { transcript, draft: &text, deadline }, cancel);
+            if cancel.is_cancelled() {
+                return TransformOutcome::Cancelled;
+            }
+            if Instant::now() >= deadline {
+                return TransformOutcome::ReviewRequired { text, detail: "The quality review deadline was reached. Review or copy the draft; it was not pasted.".into() };
+            }
+            let issues = match decision {
+                Ok(ReviewDecision::Approved) => return TransformOutcome::Ready { text },
+                Ok(ReviewDecision::Skipped) => return TransformOutcome::ReviewRequired {
+                    text, detail: "Quality review was disabled during this request. Review or copy this draft, or start a new request.".into(),
+                },
+                Ok(ReviewDecision::Uncertain { detail }) => return TransformOutcome::ReviewRequired { text, detail },
+                Err(error) => return TransformOutcome::ReviewRequired { text, detail: error.0 },
+                Ok(ReviewDecision::Revise { issues }) => issues,
+            };
+            if round == 1 || issues.is_empty() {
+                return TransformOutcome::ReviewRequired {
+                    text, detail: format!("Quality review did not approve this draft. Review or copy it; nothing was pasted. {}", issues.join(" ")),
+                };
+            }
+            on_event(JobEvent::Stage(Stage::Revising));
+            let mut messages = generation_request.messages.to_vec();
+            messages.push(ChatMessage { role: Role::Assistant, content: text.clone() });
+            messages.push(ChatMessage {
+                role: Role::User,
+                content: format!(
+                    "Revise the complete prompt to address these review findings:\n{}\nPreserve the original request, all supplied details, and the mandatory task graph, explicit dependencies, bounded refinement loop and verifiable completion criteria. Add useful methods and checks, not new restrictions. Output only the revised prompt.",
+                    issues.join("\n")
+                ),
+            });
+            let request = GenerationRequest { messages: &messages, ..*generation_request };
+            let generation = generator.generate(&request, cancel, &mut |token| on_event(JobEvent::Token(token)));
+            if cancel.is_cancelled() {
+                return TransformOutcome::Cancelled;
+            }
+            if Instant::now() >= deadline {
+                return TransformOutcome::ReviewRequired { text, detail: "The quality rewrite deadline was reached. The previous draft is available for manual review only.".into() };
+            }
+            let generation = match generation {
+                Ok(generation) => generation,
+                Err(error) => return TransformOutcome::ReviewRequired { text, detail: format!("Quality rewrite failed: {}. The previous draft is available for manual review only.", error.0) },
+            };
+            let outcome = finish_output(&generation.text, generation.finish, newlines, self.limits.max_output_chars);
+            let TransformOutcome::Ready { text: revised } = outcome else {
+                return TransformOutcome::ReviewRequired { text, detail: "Quality rewrite was empty or incomplete. The previous draft is available for manual review only.".into() };
+            };
+            // A quality rewrite must pass the same hard checks as the original generation.
+            let validation = match &report.routing {
+                Some(policy) => routing::validate_rewrite_with_context(policy, transcript, references, &revised),
+                None => validate_graph(&revised).map(|_| ()).map_err(|error| error.to_string()),
+            };
+            if validation.is_err() {
+                return TransformOutcome::ReviewRequired { text, detail: "Quality rewrite failed prompt validation. The previous valid graph is available for manual review only.".into() };
+            }
+            text = revised;
+        }
+        unreachable!("the second review always returns")
     }
 
     /// Validates the sanitized draft and runs at most `max_structure_repairs`
@@ -503,6 +597,7 @@ mod tests {
     struct EchoGenerator {
         delay: Duration,
         calls: Mutex<Vec<Vec<ChatMessage>>>,
+        outputs: Mutex<std::collections::VecDeque<Result<Generation, BackendError>>>,
         active: AtomicUsize,
         peak: AtomicUsize,
     }
@@ -514,7 +609,7 @@ mod tests {
             self.calls.lock().unwrap().push(req.messages.to_vec());
             std::thread::sleep(self.delay);
             self.active.fetch_sub(1, Ordering::SeqCst);
-            Ok(Generation { text: FINISHED.into(), finish: FinishReason::Stop })
+            self.outputs.lock().unwrap().pop_front().unwrap_or_else(|| Ok(Generation { text: FINISHED.into(), finish: FinishReason::Stop }))
         }
     }
 
@@ -559,6 +654,141 @@ mod tests {
         let profile = f.service.profiles().resolve(target);
         let transform = Transform { input: Input::Text(text), mode: Mode::Prompt, profile, target, surrounding: None, use_history, auto_mode: false };
         f.service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(5), &mut |_| {}).unwrap()
+    }
+
+    struct ScriptedReviewer {
+        enabled: bool,
+        decisions: Mutex<std::collections::VecDeque<Result<ReviewDecision, BackendError>>>,
+        requests: Mutex<Vec<(String, String, Instant)>>,
+        delay: Duration,
+        cancel: bool,
+    }
+
+    impl PromptReviewer for ScriptedReviewer {
+        fn enabled(&self) -> bool { self.enabled }
+
+        fn review(&self, request: &ReviewRequest<'_>, cancel: &CancelToken) -> Result<ReviewDecision, BackendError> {
+            self.requests.lock().unwrap().push((request.transcript.into(), request.draft.into(), request.deadline));
+            std::thread::sleep(self.delay);
+            if self.cancel { cancel.cancel(); }
+            self.decisions.lock().unwrap().pop_front().expect("unexpected extra quality review")
+        }
+    }
+
+    fn reviewer(decisions: Vec<Result<ReviewDecision, BackendError>>) -> ScriptedReviewer {
+        ScriptedReviewer { enabled: true, decisions: Mutex::new(decisions.into()), requests: Mutex::default(), delay: Duration::ZERO, cancel: false }
+    }
+
+    #[test]
+    fn review_is_optional_and_never_used_for_dictation() {
+        let f = fixture(Duration::ZERO);
+        let target = ActiveContext::default();
+        let disabled = Arc::new(ScriptedReviewer { enabled: false, ..reviewer(vec![]) });
+        f.service.set_prompt_reviewer(disabled.clone());
+        assert!(matches!(run_text(&f, &target, "suggest improvements", false).outcome, TransformOutcome::Ready { .. }));
+        assert!(disabled.requests.lock().unwrap().is_empty());
+
+        let enabled = Arc::new(reviewer(vec![]));
+        f.service.set_prompt_reviewer(enabled.clone());
+        for auto_mode in [false, true] {
+            let transform = Transform {
+                input: Input::Text("plain speech"), mode: if auto_mode { Mode::Prompt } else { Mode::Dictation },
+                profile: f.service.profiles().resolve(&target), target: &target,
+                surrounding: None, use_history: false, auto_mode,
+            };
+            let result = f.service.run_scheduled(&transform, &CancelToken::default(), Duration::from_secs(1), &mut |_| {}).unwrap();
+            assert_eq!(result.mode, Mode::Dictation);
+            assert!(matches!(result.outcome, TransformOutcome::Ready { .. }));
+        }
+        assert!(enabled.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn review_approval_preserves_graph_and_only_shares_request_and_draft() {
+        let f = fixture(Duration::ZERO);
+        let backend = Arc::new(reviewer(vec![Ok(ReviewDecision::Approved)]));
+        f.service.set_prompt_reviewer(backend.clone());
+        let target = ActiveContext::default();
+        let result = run_text(&f, &target, "suggest improvements", true);
+        assert_eq!(result.outcome, TransformOutcome::Ready { text: FINISHED.into() });
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!((&*requests[0].0, &*requests[0].1), ("suggest improvements", FINISHED));
+        assert_eq!(f.generator.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn review_rewrites_once_then_requires_approval() {
+        for second in [
+            ReviewDecision::Approved,
+            ReviewDecision::Revise { issues: vec!["Preserve the request.".into()] },
+        ] {
+            let f = fixture(Duration::ZERO);
+            let backend = Arc::new(reviewer(vec![
+                Ok(ReviewDecision::Revise { issues: vec!["Remove invented restrictions.".into()] }),
+                Ok(second.clone()),
+            ]));
+            f.service.set_prompt_reviewer(backend.clone());
+            let result = run_text(&f, &ActiveContext::default(), "suggest improvements", false);
+            assert_eq!(matches!(result.outcome, TransformOutcome::Ready { .. }), second == ReviewDecision::Approved);
+            if second != ReviewDecision::Approved {
+                assert!(matches!(result.outcome, TransformOutcome::ReviewRequired { .. }));
+            }
+            let requests = backend.requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].2, requests[1].2, "all passes share the original deadline");
+            let calls = f.generator.calls.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert!(calls[1].last().unwrap().content.contains("Remove invented restrictions."));
+            assert!(calls[1].last().unwrap().content.contains("mandatory task graph"));
+        }
+    }
+
+    #[test]
+    fn unavailable_uncertain_or_disabled_review_never_approves_or_retries() {
+        for decision in [
+            Err(BackendError("Jev authentication failed.".into())),
+            Ok(ReviewDecision::Uncertain { detail: "Jev is uncertain.".into() }),
+            Ok(ReviewDecision::Skipped),
+            Ok(ReviewDecision::Revise { issues: vec![] }),
+        ] {
+            let f = fixture(Duration::ZERO);
+            f.service.set_prompt_reviewer(Arc::new(reviewer(vec![decision])));
+            assert!(matches!(run_text(&f, &ActiveContext::default(), "suggest improvements", false).outcome,
+                TransformOutcome::ReviewRequired { ref text, ref detail } if text == FINISHED && !detail.is_empty()));
+            assert_eq!(f.generator.calls.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn failed_quality_rewrite_keeps_previous_draft_for_manual_review_only() {
+        for output in [
+            Ok(Generation { text: "Not a graph".into(), finish: FinishReason::Stop }),
+            Ok(Generation { text: FINISHED.into(), finish: FinishReason::Length }),
+            Err(BackendError("worker unavailable".into())),
+        ] {
+            let f = fixture(Duration::ZERO);
+            *f.generator.outputs.lock().unwrap() = [
+                Ok(Generation { text: FINISHED.into(), finish: FinishReason::Stop }), output,
+            ].into();
+            let backend = Arc::new(reviewer(vec![Ok(ReviewDecision::Revise { issues: vec!["Improve checks.".into()] })]));
+            f.service.set_prompt_reviewer(backend.clone());
+            assert!(matches!(run_text(&f, &ActiveContext::default(), "suggest improvements", false).outcome,
+                TransformOutcome::ReviewRequired { ref text, .. } if text == FINISHED));
+            assert_eq!(backend.requests.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn cancelled_and_late_reviews_cannot_authorize_output() {
+        let f = fixture(Duration::ZERO);
+        f.service.set_prompt_reviewer(Arc::new(ScriptedReviewer { cancel: true, ..reviewer(vec![Ok(ReviewDecision::Approved)]) }));
+        assert_eq!(run_text(&f, &ActiveContext::default(), "suggest improvements", false).outcome, TransformOutcome::Cancelled);
+
+        let mut f = fixture(Duration::ZERO);
+        f.service.limits.generation_timeout = Duration::from_millis(20);
+        f.service.set_prompt_reviewer(Arc::new(ScriptedReviewer { delay: Duration::from_millis(30), ..reviewer(vec![Ok(ReviewDecision::Approved)]) }));
+        assert!(matches!(run_text(&f, &ActiveContext::default(), "suggest improvements", false).outcome, TransformOutcome::ReviewRequired { .. }));
     }
 
     #[test]

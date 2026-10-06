@@ -58,6 +58,7 @@ pub struct InferenceConnection {
     pub auth: AuthMode,
     pub model: String,
     pub stream: bool,
+    /// Legacy persisted preference; HTTP no longer requires a separate acknowledgment.
     pub allow_insecure_lan: bool,
     pub consent_remote: bool,
     pub credential_present: bool,
@@ -86,11 +87,31 @@ pub struct ConnectionInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct VerifiedInference {
+    pub connection_id: String,
+    pub model: String,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InferenceConfig {
     pub version: u32,
     pub revision: u64,
     pub selection: InferenceSelection,
     pub connections: Vec<InferenceConnection>,
+    /// Successful explicit tests contain no credentials and apply only to this connection revision.
+    #[serde(default)]
+    pub verified: Vec<VerifiedInference>,
+}
+impl InferenceConfig {
+    pub fn is_verified(&self, connection: &InferenceConnection, model: &str) -> bool {
+        self.verified.iter().any(|tested| {
+            tested.connection_id == connection.id
+                && tested.model == model
+                && tested.revision == connection.revision
+        })
+    }
 }
 impl Default for InferenceConfig {
     fn default() -> Self {
@@ -99,6 +120,7 @@ impl Default for InferenceConfig {
             revision: 0,
             selection: Default::default(),
             connections: vec![],
+            verified: vec![],
         }
     }
 }

@@ -17,6 +17,7 @@ const BLOCK_MESSAGES: Record<string, string> = {
   insert_failed: "Couldn't paste into the app.",
   surface_unconfirmed: "AI input not confirmed. Review and copy this prompt.",
   graph_unsupported: "This graph needs a capable AI assistant. Review before copying.",
+  quality_review: "Prompt generated; review needed before pasting.",
 };
 
 const FAIL_MESSAGES: Record<string, string> = {
@@ -36,7 +37,7 @@ function describe(outcome: Outcome, capped: boolean): View {
       return { kind: "result", tone: "ok", title: "Paste sent" + note, detail: "Check the destination: sending a paste does not verify that the application received it. Generated text stays on the clipboard until you restore it after checking.", canCopy: true, canRestore: true };
     case "blocked":
       return { kind: "result", tone: "warn", title: BLOCK_MESSAGES[outcome.reason] + note, body: outcome.text, detail: outcome.detail ?? undefined, canCopy: true,
-        settings: outcome.reason === "surface_unconfirmed" || outcome.reason === "graph_unsupported" ? "prompts" : outcome.reason === "output_truncated" ? "models" : "general" };
+        settings: outcome.reason === "surface_unconfirmed" || outcome.reason === "graph_unsupported" ? "prompts" : outcome.reason === "output_truncated" || outcome.reason === "quality_review" ? "models" : "general" };
     case "no_speech":
       return { kind: "result", tone: "warn", title: "Didn't catch any speech.", canCopy: false };
     case "cancelled":
@@ -56,7 +57,8 @@ function describe(outcome: Outcome, capped: boolean): View {
 const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing…",
   generating: "Writing your prompt…",
-  revising: "Checking the prompt's format…",
+  revising: "Refining your prompt…",
+  reviewing: "Checking prompt quality with Jev…",
   inserting: "Pasting…",
 };
 
@@ -292,7 +294,7 @@ function Overlay() {
             <div className="actions">
               {view.canCopy && <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>}
               {view.canRestore && <button disabled={restoring} onClick={() => void restoreClipboard()}>Restore previous clipboard</button>}
-              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "inference" ? "Inference settings" : view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
+              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "inference" || view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
               {connectionFailed && <button onClick={() => { setUiError(null); setConnectionAttempt((value) => value + 1); }}>Retry overlay connection</button>}
               <button onClick={() => scheduleHide(0)}>Dismiss</button>
             </div>

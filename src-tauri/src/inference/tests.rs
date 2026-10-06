@@ -126,6 +126,662 @@ fn server(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
     (format!("http://{address}/v1"), thread)
 }
 const CHAT: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"é OK\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+const DRAFT_MODELS: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"data\":[{\"id\":\"actual-model-id\"}]}";
+
+const TEST_FAILURE: &str =
+    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+#[test]
+fn connection_edit_input_contract_and_prompt_writer_guidance() {
+    let dir = TestDir::new();
+    let m = manager(&dir, Arc::new(MemoryCredentials::default()));
+    m.upsert_connection(input("http://127.0.0.1:9/v1")).unwrap();
+    select(&m);
+    let config = serde_json::to_value(m.config().unwrap()).unwrap();
+    assert_eq!(config["verified"], serde_json::json!([]));
+    let mut edit = config["connections"][0].clone();
+    assert!(edit.get("verified").is_none());
+    edit["secret"] = serde_json::Value::Null;
+    edit["remove_secret"] = serde_json::json!(false);
+    assert!(serde_json::from_value::<ConnectionInput>(edit.clone()).is_err());
+    edit.as_object_mut().unwrap().remove("credential_present");
+    assert!(serde_json::from_value::<ConnectionInput>(edit.clone()).is_err());
+    edit.as_object_mut().unwrap().remove("revision");
+    let parsed = serde_json::from_value::<ConnectionInput>(edit.clone()).unwrap();
+    m.upsert_connection(parsed).unwrap();
+    assert!(
+        m.preload()
+            .unwrap_err()
+            .0
+            .contains("Models > Prompt writer")
+    );
+    edit["verified"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<ConnectionInput>(edit).is_err());
+    let mut authenticated = input("http://127.0.0.1:9/v1");
+    authenticated.auth = AuthMode::ApiKey;
+    m.upsert_connection(authenticated).unwrap();
+    assert!(!m.configured().unwrap());
+    assert!(m.status().message.unwrap().contains("credential missing"));
+    assert!(
+        m.test("test", "exact-model")
+            .unwrap_err()
+            .contains("Models > Prompt writer")
+    );
+}
+
+fn gated_tests(
+    responses: Vec<&'static str>,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<usize>,
+    Vec<std::sync::mpsc::Sender<()>>,
+    std::thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (releases, waits): (Vec<_>, Vec<_>) =
+        responses.iter().map(|_| std::sync::mpsc::channel()).unzip();
+    let thread = std::thread::spawn(move || {
+        let mut workers = Vec::new();
+        for (index, (response, wait)) in responses.into_iter().zip(waits).enumerate() {
+            let (mut socket, _) = listener.accept().unwrap();
+            let started = started_tx.clone();
+            workers.push(std::thread::spawn(move || {
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut buf = [0; 4096];
+                    let n = socket.read(&mut buf).unwrap();
+                    assert_ne!(n, 0);
+                    bytes.extend_from_slice(&buf[..n]);
+                    if let Some(pos) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..pos]).to_ascii_lowercase();
+                        let len = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")
+                                    .and_then(|length| length.trim().parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= pos + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                started.send(index).unwrap();
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                // An edited connection may have already revoked and closed the transport.
+                let _ = socket.write_all(response.as_bytes());
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    });
+    (url, started_rx, releases, thread)
+}
+
+#[test]
+fn verification_survives_restart_reselection_switch_back_and_unrelated_edits() {
+    let (url, thread) = server(CHAT);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    let mut c = input(&url);
+    c.auth = AuthMode::ApiKey;
+    c.secret = Some("synthetic-persistent-key".into());
+    m.upsert_connection(c.clone()).unwrap();
+    select(&m);
+    assert_eq!(
+        m.test("test", "exact-model").unwrap().state,
+        StatusState::Ready
+    );
+    thread.join().unwrap();
+    drop(m);
+    let m = manager(&dir, store.clone());
+    assert_eq!(m.status().state, StatusState::Ready);
+    m.preload().unwrap();
+    let revision = m.config().unwrap().connections[0].revision;
+    for _ in 0..3 {
+        select(&m);
+        assert_eq!(m.status().state, StatusState::Ready);
+    }
+    c.secret = None;
+    m.upsert_connection(c.clone()).unwrap();
+    c.name = "Renamed connection".into();
+    m.upsert_connection(c).unwrap();
+    assert_eq!(m.config().unwrap().connections[0].revision, revision);
+    assert_eq!(store.values.lock().unwrap().len(), 1);
+    let mut other = input("http://127.0.0.1:9/v1");
+    other.id = "other".into();
+    m.upsert_connection(other).unwrap();
+    assert_eq!(m.status().state, StatusState::Ready);
+    m.select(InferenceSelection::Connection {
+        connection_id: "other".into(),
+        model: "exact-model".into(),
+    })
+    .unwrap();
+    assert_eq!(m.status().state, StatusState::Configured);
+    m.select(InferenceSelection::BundledLocal).unwrap();
+    select(&m);
+    m.remove_connection("other").unwrap();
+    assert_eq!(m.status().state, StatusState::Ready);
+    m.select(InferenceSelection::Connection {
+        connection_id: "test".into(),
+        model: "different-model".into(),
+    })
+    .unwrap();
+    assert_eq!(m.status().state, StatusState::Configured);
+    assert!(m.preload().is_err());
+    select(&m);
+    assert_eq!(m.status().state, StatusState::Ready);
+    let disk = std::fs::read_to_string(dir.0.join("inference.json")).unwrap();
+    assert!(!disk.contains("synthetic-persistent-key"));
+    assert!(
+        !std::fs::read_to_string(dir.0.join("inference.json.bak"))
+            .unwrap()
+            .contains("synthetic-persistent-key")
+    );
+    drop(m);
+    let restarted = manager(&dir, store.clone());
+    assert_eq!(restarted.status().state, StatusState::Ready);
+    store.values.lock().unwrap().clear();
+    assert_eq!(restarted.status().state, StatusState::Error);
+    assert!(restarted.preload().is_err());
+}
+
+#[test]
+fn relevant_edits_invalidate_persisted_verification() {
+    for edit in 0..10 {
+        let (url, thread) = server(CHAT);
+        let dir = TestDir::new();
+        let store = Arc::new(MemoryCredentials::default());
+        let m = manager(&dir, store.clone());
+        let mut c = input(&url);
+        c.auth = AuthMode::ApiKey;
+        c.secret = Some("synthetic-original-key".into());
+        m.upsert_connection(c.clone()).unwrap();
+        select(&m);
+        assert_eq!(
+            m.test("test", "exact-model").unwrap().state,
+            StatusState::Ready
+        );
+        thread.join().unwrap();
+        let revision = m.config().unwrap().connections[0].revision;
+        c.secret = None;
+        match edit {
+            0 => {
+                c.base_url.push_str("/changed");
+                c.secret = Some("synthetic-new-endpoint-key".into());
+            }
+            1 => {
+                c.provider = Provider::Custom;
+                c.secret = Some("synthetic-new-provider-key".into());
+            }
+            2 => {
+                c.protocol = Protocol::OpenaiResponses;
+                c.secret = Some("synthetic-new-protocol-key".into());
+            }
+            3 => c.model = "different-model".into(),
+            4 => c.stream = false,
+            5 => c.consent_remote = true,
+            6 => c.secret = Some("synthetic-replaced-key".into()),
+            7 => c.remove_secret = true,
+            8 => c.auth = AuthMode::None,
+            9 => c.secret = Some("synthetic-original-key".into()),
+            _ => unreachable!(),
+        }
+        m.upsert_connection(c).unwrap();
+        assert!(m.config().unwrap().connections[0].revision > revision);
+        assert!(m.config().unwrap().verified.is_empty());
+        assert_ne!(m.status().state, StatusState::Ready);
+        assert!(m.preload().is_err());
+        drop(m);
+        let restarted = manager(&dir, store);
+        assert!(restarted.config().unwrap().verified.is_empty());
+        assert_ne!(restarted.status().state, StatusState::Ready);
+        assert!(restarted.preload().is_err());
+    }
+}
+
+#[test]
+fn legacy_sidecar_migrates_without_discarding_connections_or_backups() {
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    m.upsert_connection(input("http://127.0.0.1:9/v1")).unwrap();
+    select(&m);
+    let mut legacy = serde_json::to_value(m.config().unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("verified");
+    let bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+    std::fs::write(dir.0.join("inference.json"), &bytes).unwrap();
+    drop(m);
+    let m = manager(&dir, store.clone());
+    assert_eq!(m.config().unwrap().connections.len(), 1);
+    assert_eq!(m.status().state, StatusState::Configured);
+    assert_eq!(std::fs::read(dir.0.join("inference.json")).unwrap(), bytes);
+    select(&m);
+    assert_eq!(
+        std::fs::read(dir.0.join("inference.json.bak")).unwrap(),
+        bytes
+    );
+    let mut invalid = serde_json::to_value(m.config().unwrap()).unwrap();
+    invalid["verified"] = serde_json::json!([
+        {"connection_id":"test", "model":"exact-model", "revision":999}
+    ]);
+    let invalid = serde_json::to_vec(&invalid).unwrap();
+    std::fs::write(dir.0.join("inference.json"), &invalid).unwrap();
+    assert!(manager(&dir, store).config().is_err());
+    assert_eq!(
+        std::fs::read(dir.0.join("inference.json")).unwrap(),
+        invalid
+    );
+}
+
+#[test]
+fn failed_explicit_retry_durably_clears_previous_success() {
+    let (url, started, releases, thread) = gated_tests(vec![CHAT, TEST_FAILURE]);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = Arc::new(manager(&dir, store.clone()));
+    m.upsert_connection(input(&url)).unwrap();
+    select(&m);
+    for (index, expected) in [StatusState::Ready, StatusState::Error]
+        .into_iter()
+        .enumerate()
+    {
+        let tester = m.clone();
+        let test = std::thread::spawn(move || tester.test("test", "exact-model"));
+        assert_eq!(started.recv_timeout(Duration::from_secs(5)).unwrap(), index);
+        assert_eq!(
+            manager(&dir, store.clone()).status().state,
+            StatusState::Configured
+        );
+        releases[index].send(()).unwrap();
+        let result = test.join().unwrap().unwrap();
+        assert_eq!(result.state, expected);
+        if expected == StatusState::Error {
+            assert!(result.message.is_some());
+            assert_eq!(m.status().state, StatusState::Configured);
+            assert!(m.preload().is_err());
+        }
+    }
+    thread.join().unwrap();
+    assert_eq!(manager(&dir, store).status().state, StatusState::Configured);
+}
+
+#[test]
+fn older_concurrent_success_cannot_override_newer_failure() {
+    let (url, started, releases, thread) = gated_tests(vec![CHAT, TEST_FAILURE]);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = Arc::new(manager(&dir, store.clone()));
+    m.upsert_connection(input(&url)).unwrap();
+    select(&m);
+    let tester = m.clone();
+    let older = std::thread::spawn(move || tester.test("test", "exact-model"));
+    assert_eq!(started.recv_timeout(Duration::from_secs(5)).unwrap(), 0);
+    let tester = m.clone();
+    let newer = std::thread::spawn(move || tester.test("test", "exact-model"));
+    assert_eq!(started.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+    releases[1].send(()).unwrap();
+    assert_eq!(newer.join().unwrap().unwrap().state, StatusState::Error);
+    releases[0].send(()).unwrap();
+    assert!(older.join().unwrap().unwrap_err().contains("superseded"));
+    thread.join().unwrap();
+    assert_eq!(m.status().state, StatusState::Configured);
+    assert_eq!(manager(&dir, store).status().state, StatusState::Configured);
+}
+
+#[test]
+fn test_cannot_verify_an_edited_connection_or_report_unpersisted_success() {
+    for persistence_failure in [false, true] {
+        let (url, started, releases, thread) = gated_tests(vec![CHAT]);
+        let dir = TestDir::new();
+        let store = Arc::new(MemoryCredentials::default());
+        let m = Arc::new(manager(&dir, store.clone()));
+        m.upsert_connection(input(&url)).unwrap();
+        select(&m);
+        let tester = m.clone();
+        let test = std::thread::spawn(move || tester.test("test", "exact-model"));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        if persistence_failure {
+            std::fs::create_dir(dir.0.join("inference.json.new")).unwrap();
+        } else {
+            let mut edited = input(&url);
+            edited.model = "edited-model".into();
+            m.upsert_connection(edited).unwrap();
+        }
+        releases[0].send(()).unwrap();
+        let error = test.join().unwrap().unwrap_err();
+        assert!(error.contains(if persistence_failure {
+            "Cannot stage"
+        } else {
+            "changed"
+        }));
+        thread.join().unwrap();
+        assert_eq!(m.status().state, StatusState::Configured);
+        assert_eq!(manager(&dir, store).status().state, StatusState::Configured);
+        if persistence_failure {
+            std::fs::remove_dir(dir.0.join("inference.json.new")).unwrap();
+        }
+    }
+}
+
+#[test]
+fn retry_invalidation_persistence_failure_aborts_before_transport() {
+    let (url, thread) = server(CHAT);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    m.upsert_connection(input(&url)).unwrap();
+    select(&m);
+    assert_eq!(
+        m.test("test", "exact-model").unwrap().state,
+        StatusState::Ready
+    );
+    thread.join().unwrap();
+    std::fs::create_dir(dir.0.join("inference.json.new")).unwrap();
+    assert!(
+        m.test("test", "exact-model")
+            .unwrap_err()
+            .contains("Cannot stage")
+    );
+    assert_eq!(m.status().state, StatusState::Ready);
+    assert_eq!(manager(&dir, store).status().state, StatusState::Ready);
+    std::fs::remove_dir(dir.0.join("inference.json.new")).unwrap();
+}
+
+#[test]
+fn agent_maestro_discovery_uses_metadata_route_without_changing_generation() {
+    for protocol in [
+        Protocol::OpenaiChatCompletions,
+        Protocol::OpenaiResponses,
+        Protocol::AnthropicMessages,
+    ] {
+        for authenticated in [false, true] {
+            let (url, server) = server(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n[{\"id\":\"gpt-6-astra\",\"name\":\"GPT-6 Astra\",\"vendor\":\"copilot\"},{\"id\":\"grok-4.7\",\"name\":\"Grok 4.7\",\"vendor\":\"copilot\"},{\"id\":\"claude-sonnet-5\",\"name\":\"Claude Sonnet 5\",\"vendor\":\"copilot\"},{\"id\":\"recursive\",\"vendor\":\"customendpoint\"},{\"id\":\"cli-only\",\"vendor\":\"copilotcli\"}]",
+            );
+            let dir = TestDir::new();
+            let m = manager(&dir, Arc::new(MemoryCredentials::default()));
+            let route = if protocol == Protocol::AnthropicMessages {
+                "anthropic"
+            } else {
+                "openai"
+            };
+            let mut c = input(&format!(
+                "{}/gateway/api/{route}/v1/",
+                url.trim_end_matches("/v1")
+            ));
+            c.provider = Provider::Custom;
+            c.protocol = protocol;
+            if authenticated {
+                c.auth = AuthMode::ApiKey;
+                c.secret = Some("synthetic-maestro-key".into());
+            }
+            m.upsert_connection(c.clone()).unwrap();
+            let models = if protocol == Protocol::OpenaiChatCompletions {
+                c.model.clear();
+                m.discover_draft(c).unwrap()
+            } else {
+                m.discover("test").unwrap()
+            };
+            assert_eq!(
+                models
+                    .iter()
+                    .map(|model| model.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["gpt-6-astra", "grok-4.7", "claude-sonnet-5"]
+            );
+            assert_eq!(models[0].name, "GPT-6 Astra");
+            let sent = server.join().unwrap().to_ascii_lowercase();
+            assert!(sent.starts_with("get /gateway/api/v1/lm/chatmodels "));
+            assert!(!sent.contains("anthropic-version:"));
+            assert!(!sent.contains("synthetic-maestro-key"));
+            assert!(!sent.contains("authorization:"));
+            let saved = m.config().unwrap().connections.remove(0);
+            assert_eq!(saved.protocol, protocol);
+            assert_eq!(
+                config::endpoint(&saved, "chat/completions").unwrap().path(),
+                format!("/gateway/api/{route}/v1/chat/completions")
+            );
+        }
+    }
+}
+
+#[test]
+fn draft_discovery_before_save_without_name_or_model_is_read_only() {
+    let (url, server) = server(DRAFT_MODELS);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    let before = serde_json::to_string(&m.config().unwrap()).unwrap();
+    let mut c = input(&format!("  {url}  "));
+    c.name.clear();
+    c.model.clear();
+    let discovered = m.discover_draft(c).unwrap();
+    assert_eq!(discovered[0].id, "actual-model-id");
+    let sent = server.join().unwrap();
+    assert!(sent.starts_with("GET /v1/models "));
+    assert!(!sent.to_ascii_lowercase().contains("authorization:"));
+    assert!(!sent.contains("Synthetic"));
+    assert_eq!(serde_json::to_string(&m.config().unwrap()).unwrap(), before);
+    assert!(store.values.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+    assert!(m.config().unwrap().verified.is_empty());
+    assert!(m.local_workers.lock().unwrap().is_empty());
+}
+
+#[test]
+fn draft_discovery_explicit_secret_is_ephemeral() {
+    let (url, server) = server(DRAFT_MODELS);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    let mut c = input(&url);
+    c.auth = AuthMode::ApiKey;
+    c.secret = Some("synthetic-draft-only".into());
+    assert_eq!(m.discover_draft(c).unwrap()[0].id, "actual-model-id");
+    assert!(
+        server
+            .join()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("authorization: bearer synthetic-draft-only")
+    );
+    assert!(store.values.lock().unwrap().is_empty());
+    assert!(m.config().unwrap().connections.is_empty());
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+}
+
+#[test]
+fn draft_discovery_reuses_saved_secret_only_for_exact_normalized_identity() {
+    let (url, server) = server(DRAFT_MODELS);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    let mut saved = input(&url);
+    saved.auth = AuthMode::ApiKey;
+    saved.secret = Some("synthetic-saved-only".into());
+    m.upsert_connection(saved.clone()).unwrap();
+    let before = std::fs::read(dir.0.join("inference.json")).unwrap();
+    let credentials = store.values.lock().unwrap().clone();
+    saved.secret = None;
+    saved.name.clear();
+    saved.model.clear();
+    for changed in 0..6 {
+        let mut draft = saved.clone();
+        match changed {
+            0 => draft.id = "different-id".into(),
+            1 => draft.base_url = format!("{url}/different-path"),
+            2 => draft.protocol = Protocol::OpenaiResponses,
+            3 => draft.provider = Provider::Custom,
+            4 => draft.remove_secret = true,
+            _ => draft.base_url = "http://127.0.0.1:1/v1".into(),
+        }
+        assert!(
+            m.discover_draft(draft)
+                .unwrap_err()
+                .contains("new API credential")
+        );
+    }
+    saved.base_url = format!("  {url}/  ");
+    assert_eq!(m.discover_draft(saved).unwrap()[0].id, "actual-model-id");
+    assert!(
+        server
+            .join()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("authorization: bearer synthetic-saved-only")
+    );
+    assert_eq!(std::fs::read(dir.0.join("inference.json")).unwrap(), before);
+    assert_eq!(*store.values.lock().unwrap(), credentials);
+    assert!(m.config().unwrap().verified.is_empty());
+}
+
+#[test]
+fn draft_discovery_endpoint_change_uses_explicit_new_key_only() {
+    let (url, server) = server(DRAFT_MODELS);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    let mut saved = input("http://127.0.0.1:1/v1");
+    saved.auth = AuthMode::ApiKey;
+    saved.secret = Some("synthetic-old-key".into());
+    m.upsert_connection(saved.clone()).unwrap();
+    let before = std::fs::read(dir.0.join("inference.json")).unwrap();
+    let credentials = store.values.lock().unwrap().clone();
+    saved.base_url = url;
+    saved.secret = Some("synthetic-new-key".into());
+    m.discover_draft(saved).unwrap();
+    let sent = server.join().unwrap().to_ascii_lowercase();
+    assert!(sent.contains("authorization: bearer synthetic-new-key"));
+    assert!(!sent.contains("synthetic-old-key"));
+    assert_eq!(std::fs::read(dir.0.join("inference.json")).unwrap(), before);
+    assert_eq!(*store.values.lock().unwrap(), credentials);
+}
+
+#[test]
+fn draft_discovery_auth_none_never_sends_saved_or_supplied_key() {
+    let (url, server) = server(DRAFT_MODELS);
+    let dir = TestDir::new();
+    let store = Arc::new(MemoryCredentials::default());
+    let m = manager(&dir, store.clone());
+    let mut saved = input(&url);
+    saved.auth = AuthMode::ApiKey;
+    saved.secret = Some("synthetic-old-key".into());
+    m.upsert_connection(saved.clone()).unwrap();
+    saved.auth = AuthMode::None;
+    saved.secret = Some("synthetic-ignored-key".into());
+    m.discover_draft(saved).unwrap();
+    let sent = server.join().unwrap().to_ascii_lowercase();
+    assert!(!sent.contains("authorization:"));
+    assert!(!sent.contains("synthetic-"));
+    assert_eq!(store.values.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn draft_discovery_validates_semantics_and_bounds_before_transport() {
+    let dir = TestDir::new();
+    let m = manager(&dir, Arc::new(MemoryCredentials::default()));
+    for url in [
+        "file:///tmp/models",
+        "http://key@localhost/v1",
+        "http://localhost/v1?key=no",
+        "http://localhost/v1#fragment",
+        "not-a-url",
+        "http://remote.example/v1",
+    ] {
+        assert!(m.discover_draft(input(url)).is_err());
+    }
+    for invalid in 0..10 {
+        let mut c = input("http://localhost:1/v1");
+        match invalid {
+            0 => c.id.clear(),
+            1 => c.id = "invalid/id".into(),
+            2 => c.id = "a".repeat(129),
+            3 => c.name = "a".repeat(1025),
+            4 => c.model = "a".repeat(1025),
+            5 => c.base_url = "a".repeat(8193),
+            6 => c.secret = Some("a".repeat(8193)),
+            7 => c.secret = Some("bad\nkey".into()),
+            8 => {
+                c.secret = Some("key".into());
+                c.remove_secret = true;
+            }
+            _ => {
+                c.provider = Provider::Google;
+                c.protocol = Protocol::OpenaiResponses;
+            }
+        }
+        let error = m.discover_draft(c).unwrap_err();
+        assert!(!error.contains("Cannot discover models"), "{error}");
+    }
+    let mut c = input("http://localhost:1/v1");
+    c.auth = AuthMode::ApiKey;
+    assert!(
+        m.discover_draft(c)
+            .unwrap_err()
+            .contains("new API credential")
+    );
+    assert!(m.config().unwrap().connections.is_empty());
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+}
+
+#[test]
+fn draft_discovery_google_chat_compatibility_and_shared_base_normalization() {
+    assert_eq!(
+        connection_base_url(Provider::LmStudio, "  "),
+        "http://localhost:1234/v1"
+    );
+    assert_eq!(
+        connection_base_url(Provider::Custom, "  http://localhost/v1  "),
+        "http://localhost/v1"
+    );
+    let (url, server) = server(DRAFT_MODELS);
+    let dir = TestDir::new();
+    let m = manager(&dir, Arc::new(MemoryCredentials::default()));
+    let mut c = input(&url);
+    c.provider = Provider::Google;
+    c.name.clear();
+    c.model.clear();
+    assert_eq!(m.discover_draft(c).unwrap()[0].id, "actual-model-id");
+    assert!(server.join().unwrap().starts_with("GET /v1/models "));
+    assert!(m.config().unwrap().connections.is_empty());
+}
+
+#[test]
+fn draft_discovery_unsupported_and_empty_listing_do_not_block_manual_save() {
+    for response in [
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"data\":[]}",
+    ] {
+        let (url, server) = server(response);
+        let dir = TestDir::new();
+        let m = manager(&dir, Arc::new(MemoryCredentials::default()));
+        let mut c = input(&url);
+        c.model.clear();
+        let result = m.discover_draft(c.clone());
+        if response.ends_with("{}") {
+            assert!(result.unwrap_err().contains("Enter a model manually"));
+        } else {
+            assert!(result.unwrap().is_empty());
+        }
+        assert!(server.join().unwrap().starts_with("GET /v1/models "));
+        c.model = "manual-model".into();
+        m.upsert_connection(c).unwrap();
+        assert_eq!(
+            m.config().unwrap().selection,
+            InferenceSelection::BundledLocal
+        );
+        assert!(m.config().unwrap().verified.is_empty());
+    }
+}
+
 #[test]
 fn absent_invalid_and_newer_sidecar() {
     let dir = TestDir::new();
@@ -371,17 +1027,31 @@ fn endpoint_policy_and_gateway_prefix() {
         "/gateway/v1/chat/completions"
     );
     for url in [
-        "http://example.com/v1",
+        "ftp://example.com/v1",
         "https://key@example.com/v1",
         "https://example.com/v1?key=x",
         "https://example.com/v1#x",
-        "http://192.168.1.2/v1",
     ] {
         c.base_url = url.into();
         assert!(config::endpoint(&c, "models").is_err());
     }
-    c.allow_insecure_lan = true;
-    assert!(config::endpoint(&c, "models").is_ok());
+    for url in [
+        "http://example.com/v1",
+        "http://agent-maestro:8080/gateway/v1",
+        "http://agent-maestro.local:8080/v1",
+        "http://192.168.1.2/v1",
+        "http://[fd00::2]:8080/v1",
+    ] {
+        c.base_url = url.into();
+        assert!(!c.allow_insecure_lan);
+        assert!(config::endpoint(&c, "models").is_ok(), "{url}");
+        c.consent_remote = false;
+        assert!(
+            config::endpoint(&c, "models").is_err(),
+            "remote data disclosure still applies: {url}"
+        );
+        c.consent_remote = true;
+    }
     c.base_url = "http://[::1]:1234/v1".into();
     c.consent_remote = false;
     assert!(config::endpoint(&c, "models").is_ok());

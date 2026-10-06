@@ -121,6 +121,12 @@ main {
 .settings-group td.actions { width: 160px; white-space: normal; }
 .settings-group td.actions > * { margin: 4px 0 4px 8px; }
 .model-compatibility { margin: 16px 0; }
+.model-flow { display: flex; flex-wrap: wrap; gap: 12px 32px; padding-left: 20px; }
+.model-flow li { padding-right: 8px; }
+.model-flow span { display: block; font-size: 12px; margin-top: 4px; }
+.settings-pane h2[id] { scroll-margin-top: 16px; }
+.settings-pane h2[id]:focus { outline: none; }
+.settings-pane h2[id]:focus-visible { outline: 2px solid Highlight; outline-offset: 4px; }
 
 .inference-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .inference-options button[aria-pressed="true"] { outline: 2px solid Highlight; }

@@ -13,6 +13,7 @@ pub mod pipeline;
 pub mod prefix_cache;
 pub mod profiles;
 pub mod prompt;
+pub mod review;
 pub mod routing;
 pub mod sanitize;
 pub mod scheduler;
