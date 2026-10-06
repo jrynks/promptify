@@ -25,7 +25,7 @@ patterns = ["\\b(?:explain|what is|what are|how does|why does)\\b"]
 instructions = "Ask for an accurate explanation at the user's level, with useful examples and uncertainty where needed."
 examples = ["Explain how a heat pump works", "What is photosynthesis", "How does inflation work", "Why does the moon have phases"]
 negatives = ["Explain this Python function", "Teach me calculus interactively"]
-rewrite = "Explain how a heat pump works.\nStep 1: Explain how it transfers heat, defining needed terms and using a practical example.\nStep 2 (after 1): Check the explanation for technical accuracy and consistency between the mechanism and example.\nLoop: if Step 2 fails the accuracy or consistency checks, return to Step 1 to correct the mechanism and example; then recheck Step 2 (max 2 rounds).\nDone when: heat transfer is explained accurately, needed terms are defined and the example matches the mechanism. Stop on passing checks; at the limit report uncertainty."
+rewrite = "Explain how a heat pump works.\nStep 1: Explain how a heat pump works in clear language, using a practical example and defining any necessary technical terms.\nStep 2 (after 1): Check that the explanation is accurate, understandable at the requested level, and clear about uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "info.how_to"
@@ -131,7 +131,7 @@ instructions = "Specify the research question, source quality and recency if giv
 examples = ["Research recent battery technology", "Find reliable sources on urban transport", "Look up current electric car prices", "Search the web for public transit funding"]
 negatives = ["Answer only from the attached document", "Synthesize these studies"]
 suppresses = ["info.explain"]
-rewrite = "Research recent battery technology.\nStep 1: Research reliable recent sources and summarize battery findings with citations, distinguishing established results from uncertainty.\nStep 2 (after 1): Verify source support, recency and treatment of contradictory findings.\nLoop: if Step 2 fails the source support or recency checks, return to Step 1 to replace weak evidence and update the findings; then recheck Step 2 (max 2 rounds).\nDone when: findings are traceable to reliable recent sources and disagreements are explicit. Stop on passing checks; at the limit report evidence gaps."
+rewrite = "Research recent battery technology.\nStep 1: Research recent battery technology using reliable, current sources. Compare the key findings, cite the evidence, and distinguish established results from uncertainty.\nStep 2 (after 1): Check source support, requested scope, citations, contradictions, and any remaining uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "research.literature"
@@ -157,7 +157,7 @@ instructions = "Request answers grounded only in the named sources, with traceab
 examples = ["Answer only from the attached document", "Based on the provided sources explain the warranty", "Use only these documents to answer my question", "Ask this document what the refund policy is"]
 negatives = ["Research current tax rules on the web", "Write a summary of this article"]
 suppresses = ["info.explain", "research.web"]
-rewrite = "Answer only from the attached document.\nStep 1: Answer my question using only the document, citing supporting passages; request missing material and abstain where it provides no answer.\nStep 2 (after 1): Verify each claim against its cited passage and check that no outside evidence was used.\nLoop: if Step 2 fails the document-only support checks, return to Step 1 to remove unsupported claims and correct citations; then recheck Step 2 (max 2 rounds).\nDone when: each answer claim has document support and missing evidence is identified. Stop on passing checks; at the limit report unsupported items."
+rewrite = "Answer only from the attached document.\nStep 1: Answer my question using only the document I attach. Cite the supporting passages where possible, and say when the document does not contain the answer. Ask for the document or question if either is missing.\nStep 2 (after 1): Check source support, requested scope, citations, contradictions, and any remaining uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "research.synthesize"
@@ -173,7 +173,7 @@ instructions = "Ask for an evidence synthesis across the supplied sources, retai
 examples = ["Synthesize these studies", "Reconcile the findings of these reports", "Combine the evidence from these interviews", "Compare the findings across these sources"]
 negatives = ["Summarize one article in three bullets", "Research available project tools"]
 suppresses = ["summary.brief", "research.web"]
-rewrite = "Synthesize these studies.\nStep 1: Synthesize findings, methods, agreements and disagreements from the supplied studies with traceable references.\nStep 2 (after 1): Verify that the synthesis preserves evidence quality, conflicting findings and source limitations.\nLoop: if Step 2 fails the evidence or disagreement checks, return to Step 1 to correct the synthesis using the studies; then recheck Step 2 (max 2 rounds).\nDone when: conclusions trace to the studies and disagreements and limitations remain visible. Stop on passing checks; at the limit report evidence gaps."
+rewrite = "Synthesize these studies.\nStep 1: Synthesize the studies I provide, identifying common findings, disagreements, evidence quality, and limitations. Keep claims tied to their sources and do not invent missing evidence.\nStep 2 (after 1): Check source support, requested scope, citations, contradictions, and any remaining uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "research.fact_check"
@@ -258,7 +258,7 @@ patterns = ["\\b(?:summari[sz]e|summary|summarization|tl[;:]?dr)\\b"]
 instructions = "Ask for a faithful summary of the referenced source. Preserve its scope, qualifications, requested length and audience. Do not supply the summary yourself."
 examples = ["Summarize this article in three bullets", "Give me a summary of this chapter", "I need a TLDR of this post", "Summarize the attached report"]
 negatives = ["Summarize this meeting", "Create an executive summary"]
-rewrite = "Summarize this article in three bullets.\nStep 1: Write three bullets preserving the article's main findings and qualifications without adding facts.\nStep 2 (after 1): Compare each bullet with the article and verify coverage and the requested bullet count.\nLoop: if Step 2 fails the fidelity or bullet-count checks, return to Step 1 to correct omissions, unsupported claims or formatting; then recheck Step 2 (max 2 rounds).\nDone when: three bullets faithfully cover the main findings and qualifications. Stop on passing checks; at the limit report unresolved source gaps."
+rewrite = "Summarize this article in three bullets.\nStep 1: Summarize this article in three bullet points. Preserve its key findings and qualifications without adding facts that are not in the article.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "summary.executive"
@@ -274,7 +274,7 @@ instructions = "Request a decision-focused executive summary grounded in the sou
 examples = ["Create an executive summary", "Summarize this report for my boss", "Write a summary for the board", "Summarize these findings for leadership"]
 negatives = ["Summarize this meeting", "Write an email to my boss"]
 suppresses = ["summary.brief", "writing.draft"]
-rewrite = "Create an executive summary.\nStep 1: Summarize the supplied material's key findings, decision implications, risks and unresolved questions.\nStep 2 (after 1): Verify that the summary's implications and qualifications follow from the source.\nLoop: if Step 2 fails the source fidelity or decision relevance checks, return to Step 1 to revise unsupported implications or missing qualifications; then recheck Step 2 (max 2 rounds).\nDone when: the summary is decision-focused and source-grounded, with risks and unresolved questions explicit. Stop on passing checks; at the limit report gaps."
+rewrite = "Create an executive summary.\nStep 1: Create an executive summary of the material I provide, emphasizing key findings, decisions, risks, and unresolved questions. Keep it grounded in the source.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "summary.meeting"
@@ -290,7 +290,7 @@ instructions = "Request meeting notes grounded in the transcript, separating dis
 examples = ["Summarize this meeting", "Write meeting notes from the transcript", "Recap our conference call", "Give me notes from the discussion"]
 negatives = ["Write a meeting invitation email", "Summarize this article"]
 suppresses = ["summary.brief", "writing.draft"]
-rewrite = "Summarize this meeting.\nStep 1: Separate discussion, decisions, open questions and actions from the supplied meeting material without inventing attendees or commitments.\nStep 2 (after 1): Compare the notes with the source and verify that proposals are not mislabeled as decisions.\nLoop: if Step 2 fails the coverage or decision-fidelity checks, return to Step 1 to correct omissions and mislabeled items; then recheck Step 2 (max 2 rounds).\nDone when: the notes faithfully separate discussion, decisions, questions and actions. Stop on passing checks; at the limit report source ambiguities."
+rewrite = "Summarize this meeting.\nStep 1: Summarize the meeting from the material I provide. Separate the main discussion, decisions, open questions, and actions without inventing attendees or commitments.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "summary.actions"
@@ -306,7 +306,7 @@ instructions = "Request action items with explicitly stated owners and deadlines
 examples = ["Extract action items from these notes", "List the assigned tasks from the meeting", "Identify follow-ups in this transcript", "Pull out action items with owners and deadlines"]
 negatives = ["Plan a project with tasks", "Summarize the article"]
 suppresses = ["summary.brief", "summary.meeting", "extract.fields"]
-rewrite = "Extract action items from these notes.\nStep 1: Extract commitments with source references, including owners and deadlines only when stated; mark missing values unknown and distinguish suggestions.\nStep 2 (after 1): Verify that actions, owners and deadlines match the notes and no commitment is invented.\nLoop: if Step 2 fails the commitment or provenance checks, return to Step 1 to correct the extracted items and unknown values; then recheck Step 2 (max 2 rounds).\nDone when: actions have source support, suggestions are distinguished and missing owners or deadlines remain unknown. Stop on passing checks; at the limit report ambiguity."
+rewrite = "Extract action items from these notes.\nStep 1: Extract action items from these notes. Include owners and deadlines only when stated; otherwise mark them as unknown. Distinguish commitments from suggestions.\nStep 2 (after 1): Compare the summary against the source and verify coverage, requested length, and absence of invented facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "summary.decisions"
@@ -381,7 +381,7 @@ patterns = ["\\b(?:extract (?:the |these |all )?(?:fields|names|dates|amounts|en
 instructions = "Specify the required fields and schema, source references, provenance and null/unknown policy. Ask the destination to extract only supported values, without inventing missing information."
 examples = ["Extract the fields from these invoices", "Extract names and dates from this text", "Parse this invoice into structured data", "Convert these records into JSON"]
 negatives = ["Extract action items from this meeting", "Classify support tickets"]
-rewrite = "Extract the fields from these invoices.\nStep 1: Extract fields into my supplied schema with source references and its missing-value policy; request the schema if absent instead of inventing fields.\nStep 2 (after 1): Verify field coverage, schema conformity and each value against its invoice.\nLoop: if Step 2 fails the schema or source-value checks, return to Step 1 to correct values, provenance or missing-value handling; then recheck Step 2 (max 2 rounds).\nDone when: extracted fields conform to my schema and values have invoice support or explicit missing status. Stop on passing checks; at the limit report gaps."
+rewrite = "Extract the fields from these invoices.\nStep 1: Extract the requested fields from these invoices into the schema I provide. Use null for missing values and retain source references. Ask for the schema if it is not available; do not invent fields or values.\nStep 2 (after 1): Check the requested fields, schema, source support, and explicit handling of missing values.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "extract.entities"
@@ -436,7 +436,7 @@ patterns = ["\\b(?:classify|categorize|categorise|label (?:the |these )?(?:ticke
 instructions = "Specify the allowed labels and their meanings, single- or multi-label policy, and unknown/ambiguous handling. Preserve a user-supplied taxonomy rather than inventing categories."
 examples = ["Classify these support tickets by topic", "Categorize the customer messages", "Label these records using my taxonomy", "Tag these posts by category"]
 negatives = ["Extract dates from text", "Summarize these tickets"]
-rewrite = "Classify these support tickets by topic.\nStep 1: Use my supplied topic labels and definitions, requesting them if missing; mark ambiguous or unmatched tickets instead of inventing categories.\nStep 2 (after 1): Verify ticket coverage and label consistency with the definitions.\nLoop: if Step 2 fails the coverage or label-consistency checks, return to Step 1 to correct assignments and ambiguous cases; then recheck Step 2 (max 2 rounds).\nDone when: tickets use supported topic labels and unmatched or ambiguous cases are explicit. Stop on passing checks; at the limit report unresolved classifications."
+rewrite = "Classify these support tickets by topic.\nStep 1: Classify these support tickets by topic using the labels and definitions I provide. Mark ambiguous or unmatched tickets explicitly rather than inventing categories.\nStep 2 (after 1): Check that the supplied labels and definitions are followed and ambiguous cases are identified.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "classify.intent"
@@ -512,7 +512,7 @@ instructions = "Request the text for the user's purpose, audience and constraint
 examples = ["Draft an article about urban gardens", "Write an essay about renewable energy", "Compose a paragraph for our introduction", "Write a video script for a product tutorial"]
 negatives = ["Write an email to the team", "Write a Python function"]
 exclude = ["\\b(?:python|shell|bash|powershell|javascript)\\s+script\\b"]
-rewrite = "Draft an article about urban gardens.\nStep 1: Draft the article using supplied facts and audience details without inventing examples, statistics or quotations.\nStep 2 (after 1): Review topic coverage, clarity and support for factual claims.\nLoop: if Step 2 fails the topic or factual-support checks, return to Step 1 to revise unclear passages and unsupported claims; then recheck Step 2 (max 2 rounds).\nDone when: the article addresses urban gardens clearly and its factual claims are supported. Stop on passing checks; at the limit report missing evidence."
+rewrite = "Draft an article about urban gardens.\nStep 1: Draft an article about urban gardens. Use the facts and audience details I provide, keep the writing clear and engaging, and do not invent local examples, names, statistics, or quotations.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "writing.outline"
@@ -547,7 +547,7 @@ patterns = ["\\b(?:shorten|condense|make (?:it|this|that|the text) (?:shorter|co
 instructions = "Ask for a shorter version while preserving key meaning, named facts, numbers and commitments. Preserve a requested length rather than making one up."
 examples = ["Shorten this paragraph", "Condense the draft", "Make it shorter", "Cut this down without losing the key facts"]
 negatives = ["Summarize this report", "Expand the introduction"]
-rewrite = "Shorten this paragraph.\nStep 1: Make the paragraph more concise without losing its meaning, key facts or commitments.\nStep 2 (after 1): Compare with the original for reduced length and preservation of meaning, names and numbers.\nLoop: if Step 2 fails the concision or meaning-preservation checks, return to Step 1 to restore missing details and remove redundancy; then recheck Step 2 (max 2 rounds).\nDone when: the paragraph is shorter while preserving meaning, facts and commitments. Stop on passing checks; at the limit report unresolved tradeoffs."
+rewrite = "Shorten this paragraph.\nStep 1: Shorten this paragraph while preserving its meaning, key details, names, numbers, and commitments. Do not add new information.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "writing.proofread"
@@ -562,7 +562,7 @@ patterns = ["\\b(?:proofread|fix (?:the |my )?(?:grammar|spelling)|correct (?:th
 instructions = "Request spelling and grammar corrections with minimal changes to meaning, voice and commitments. Use the specified language variant."
 examples = ["Proofread my draft", "Fix the grammar in this paragraph", "Correct spelling in this letter", "Check my spelling"]
 negatives = ["Debug the parser", "Change the tone to friendly"]
-rewrite = "Proofread my draft.\nStep 1: Correct spelling, grammar and punctuation with minimal changes to meaning and voice.\nStep 2 (after 1): Compare the changes with the draft and check remaining errors and unintended meaning changes.\nLoop: if Step 2 fails the correctness or minimal-change checks, return to Step 1 to correct missed errors and restore altered meaning; then recheck Step 2 (max 2 rounds).\nDone when: language errors are corrected without changing meaning or voice. Stop on passing checks; at the limit report ambiguities."
+rewrite = "Proofread my draft.\nStep 1: Proofread my draft for spelling, grammar, and punctuation. Preserve its meaning and voice, and avoid unnecessary rewrites.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "writing.clarity"
@@ -587,7 +587,7 @@ patterns = ["\\b(?:change (?:the )?tone|make (?:it|this|that) (?:warmer|friendli
 instructions = "Request the stated tone while preserving facts, obligations, promises and intent. Do not invent a relationship or change what the user is committing to."
 examples = ["Change the tone to friendly", "Make this more formal", "Rewrite this in a professional tone", "Make it warmer without changing the facts"]
 negatives = ["Proofread the letter", "Summarize the report"]
-rewrite = "Change the tone to friendly.\nStep 1: Rewrite the supplied text with friendly wording while preserving facts, boundaries and commitments.\nStep 2 (after 1): Compare the rewrite with the original for friendliness and unchanged meaning or promises.\nLoop: if Step 2 fails the tone or commitment-preservation checks, return to Step 1 to revise the wording and restore altered commitments; then recheck Step 2 (max 2 rounds).\nDone when: the tone is friendly and facts, boundaries and commitments are unchanged. Stop on passing checks; at the limit report unresolved tensions."
+rewrite = "Change the tone to friendly.\nStep 1: Rewrite the text in a friendly tone while preserving its facts, meaning, and commitments. Do not invent details or change what is being promised.\nStep 2 (after 1): Review the text against the user's purpose and constraints, preserving meaning and all supplied facts.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "writing.audience"
@@ -653,7 +653,7 @@ instructions = "Request an email using the stated recipient, purpose, facts and 
 examples = ["Write an email asking for the meeting notes", "Draft an email to our supplier", "Compose a thank you email", "Create an email requesting a refund"]
 negatives = ["Reply to this email", "Summarize this email"]
 suppresses = ["writing.draft"]
-rewrite = "Write an email asking for the meeting notes.\nStep 1: Draft a polite, direct request for the meeting notes without inventing names, deadlines or commitments; do not send it.\nStep 2 (after 1): Verify that the request is clear and the draft contains no invented facts or obligations.\nLoop: if Step 2 fails the request-clarity or factual-fidelity checks, return to Step 1 to revise the request and remove unsupported details; then recheck Step 2 (max 2 rounds).\nDone when: the email clearly asks for meeting notes without invented facts or commitments. Stop on passing checks; at the limit report issues."
+rewrite = "Write an email asking for the meeting notes.\nStep 1: Write a concise email asking for the meeting notes. Keep the tone polite and direct; do not invent recipient names, deadlines, or commitments.\nStep 2 (after 1): Review the draft for the requested purpose, tone, recipient, and preservation of facts and commitments.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "communication.reply"
@@ -669,7 +669,7 @@ instructions = "Request a reply grounded in the referenced thread and the user's
 examples = ["Reply to this email politely declining", "Respond to their invitation", "Draft a response to the customer", "Reply with a request for clarification"]
 negatives = ["Write a new email", "Summarize this conversation"]
 suppresses = ["communication.email", "writing.draft"]
-rewrite = "Reply to this email politely declining.\nStep 1: Draft a polite decline grounded in the email's context without assuming it is an invitation or inventing excuses; do not send it.\nStep 2 (after 1): Verify that the reply declines clearly, preserves the thread context and adds no commitments.\nLoop: if Step 2 fails the decline or context-preservation checks, return to Step 1 to correct the reply and remove invented details; then recheck Step 2 (max 2 rounds).\nDone when: the reply politely declines what the email requests without invented excuses or commitments. Stop on passing checks; at the limit report ambiguities."
+rewrite = "Reply to this email politely declining.\nStep 1: Draft a polite reply declining the invitation in this email. Preserve the context and do not invent an excuse, commitment, or personal detail.\nStep 2 (after 1): Review the draft for the requested purpose, tone, recipient, and preservation of facts and commitments.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "communication.brief"
@@ -864,7 +864,7 @@ patterns = ["\\b(?:brainstorm|come up with ideas|generate (?:some |several |crea
 instructions = "Ask for varied, concrete ideas against the user's brief and constraints. Preserve requested breadth and selection criteria without choosing the ideas yourself."
 examples = ["Brainstorm ideas for a science fair", "Come up with ideas for a community event", "Generate creative ideas for our campaign", "Give me ideas for a short film"]
 negatives = ["Write a story about a lighthouse", "Research science fair safety"]
-rewrite = "Brainstorm ideas for a science fair.\nStep 1: Propose varied science-fair ideas with clear concepts, without assuming budget or participant age.\nStep 2 (after 1): Check that ideas are distinct, science-focused and consistent with supplied constraints.\nLoop: if Step 2 fails the distinctness or brief checks, return to Step 1 to replace repetitive or unsuitable ideas; then recheck Step 2 (max 2 rounds).\nDone when: the ideas are distinct, understandable and fit the science-fair brief. Stop on passing checks; at the limit report unresolved constraints."
+rewrite = "Brainstorm ideas for a science fair.\nStep 1: Brainstorm varied ideas for a science fair. Keep them practical and distinct, and explain the core concept of each without assuming a budget or participant age.\nStep 2 (after 1): Review the result against the stated creative brief and audience without imposing new numeric or factual constraints.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "creative.naming"
@@ -890,7 +890,7 @@ instructions = "Request original creative writing with the given premise, audien
 examples = ["Write a story about a lighthouse", "Create a short fictional tale", "Tell a story about a curious robot", "Draft a science fiction story"]
 negatives = ["Create a video of a lighthouse", "Write a product launch plan"]
 suppresses = ["writing.draft"]
-rewrite = "Write a story about a lighthouse.\nStep 1: Write an original lighthouse story without imposing an unstated length, viewpoint or genre.\nStep 2 (after 1): Review lighthouse relevance and consistency of the setting, characters and narrative.\nLoop: if Step 2 fails the subject or narrative-consistency checks, return to Step 1 to revise contradictions or irrelevant passages; then recheck Step 2 (max 2 rounds).\nDone when: the lighthouse is integral to a coherent original story. Stop on passing checks; at the limit report unresolved narrative issues."
+rewrite = "Write a story about a lighthouse.\nStep 1: Write an original story about a lighthouse. Develop a coherent setting and engaging narrative without adding a fixed word count, viewpoint, or other constraints I did not request.\nStep 2 (after 1): Review the result against the stated creative brief and audience without imposing new numeric or factual constraints.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "creative.plot"
@@ -986,7 +986,7 @@ instructions = "Ask the destination to conduct a practice interview in the speci
 examples = ["Run a mock interview for a developer job", "Practice a job interview with me", "Interview me for a data analyst role", "Simulate a technical interview"]
 negatives = ["Summarize an interview transcript", "Write interview questions for a survey"]
 conversational = true
-rewrite = "Run a mock interview with me for a developer job.\nStep 1: Ask a developer-job interview question without assuming seniority or stack, wait for my response and offer relevant feedback.\nStep 2 (after 1): Verify role fit and that feedback is grounded in my response before continuing as I direct.\nLoop: if Step 2 fails the role-fit or feedback checks, return to Step 1 to revise the question or feedback for the current turn without answering for me; then recheck Step 2 (max 2 rounds).\nDone when: the current turn fits developer-job practice, feedback uses my response and the interaction waits for me. Stop correcting on passing checks; report unresolved issues at the limit. Continue only as I direct, without a fixed total question count."
+rewrite = "Run a mock interview with me for a developer job.\nStep 1: Prepare an appropriate interview question using the role and goals I supplied.\nStep 2 (after 1): Ask one question at a time, wait for my response, and give useful feedback before continuing as I direct.\nLoop: if the current question or feedback needs improvement, return to Step 1 (max 2 rounds).\nDone when: The current turn fits the requested role and the practice goal is met or I choose to stop."
 
 [[task]]
 id = "roleplay.language"
@@ -1063,7 +1063,7 @@ examples = ["Tutor me in algebra", "Teach me calculus interactively", "Help me l
 negatives = ["Explain what algebra is", "Write a lesson plan"]
 conversational = true
 suppresses = ["info.explain"]
-rewrite = "Tutor me in algebra.\nStep 1: Present an algebra question or hint using my stated level and responses, wait for my answer and adapt rather than giving every solution.\nStep 2 (after 1): Check mathematical correctness and whether the current hint addresses my demonstrated difficulty.\nLoop: if Step 2 fails the correctness or learner-fit checks, return to Step 1 to correct the explanation or adapt the hint; then recheck Step 2 (max 2 rounds).\nDone when: the current turn is mathematically sound, addresses my difficulty and leaves room for my response. Stop correcting on passing checks; report remaining difficulty at the limit. Continue tutoring at my pace without a fixed total question count."
+rewrite = "Tutor me in algebra using hints and guided practice.\nStep 1: Choose an appropriate explanation or practice question based on my stated goals and responses.\nStep 2 (after 1): Present one question or hint at a time, wait for my response, and adapt without giving every solution immediately.\nLoop: if the current explanation or hint is not helpful, return to Step 1 (max 2 rounds).\nDone when: The current concept is understood or I choose to pause; any remaining difficulty is made explicit."
 
 [[task]]
 id = "learning.lesson"
@@ -1169,7 +1169,7 @@ instructions = "Ask for options compared against the user's criteria and constra
 examples = ["Compare these options for our team", "Explain the tradeoffs of renting versus buying", "Help me choose between these approaches", "List the pros and cons of these alternatives"]
 negatives = ["Explain photosynthesis", "Synthesize these research findings"]
 suppresses = ["info.explain"]
-rewrite = "Compare these options for our team.\nStep 1: Compare the supplied options against our stated criteria, explaining tradeoffs and uncertainty without inventing prices or weights.\nStep 2 (after 1): Verify consistent comparison criteria and evidence for the tradeoffs.\nLoop: if Step 2 fails the consistency or evidence checks, return to Step 1 to repair uneven comparisons and unsupported reasoning; then recheck Step 2 (max 2 rounds).\nDone when: each option is compared fairly using the team's stated criteria and uncertainty is explicit. Stop on passing checks; at the limit report evidence gaps."
+rewrite = "Compare these options for our team.\nStep 1: Compare these options for our team against the criteria and constraints I provide. Explain the tradeoffs, risks, and uncertainties, and give a justified recommendation without inventing prices or requirements.\nStep 2 (after 1): Check that the reasoning and recommendation follow from the supplied criteria and acknowledge uncertainty.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "reasoning.decision_matrix"
@@ -1275,7 +1275,7 @@ instructions = "Request a scoped project plan with deliverables, dependencies, i
 examples = ["Create a project plan for the rollout", "Make a launch plan for our product", "Plan the migration of our service", "Plan out the website project"]
 negatives = ["Write a launch announcement email", "Explain project management"]
 suppresses = ["writing.draft"]
-rewrite = "Create a project plan for the rollout.\nStep 1: Organize rollout deliverables, dependencies, risks and completion checks using supplied scope and constraints, leaving missing dates and resources open.\nStep 2 (after 1): Verify scope coverage and dependency consistency without assuming unstated resources.\nLoop: if Step 2 fails the scope or dependency checks, return to Step 1 to revise the plan and unresolved prerequisites; then recheck Step 2 (max 2 rounds).\nDone when: rollout deliverables have consistent dependencies and verifiable completion checks without invented dates or resources. Stop on passing checks; at the limit report planning gaps."
+rewrite = "Create a project plan for the rollout.\nStep 1: Identify the scope, deliverables, constraints, and missing information.\nStep 2 (after 1): Organize the work with dependencies, review checkpoints, and verifiable completion criteria.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The plan covers the requested scope, dependencies, checkpoints, and completion criteria without invented dates or resources."
 
 [[task]]
 id = "planning.breakdown"
@@ -1481,7 +1481,7 @@ instructions = "Request implementation of the stated behavior in the named codeb
 examples = ["Implement retry support for the client", "Write a Python function to parse dates", "Build an API endpoint for search", "Add a feature to export records"]
 negatives = ["Explain this Python function", "Build a React component"]
 suppresses = ["writing.draft"]
-rewrite = "Implement retry support for the client.\nStep 1: Inspect client behavior and implement scoped retry support using existing patterns and relevant tests, clarifying essential behavior rather than inventing limits or delays.\nStep 2 (after 1): Run relevant checks and verify retries preserve existing client behavior.\nLoop: if Step 2 fails the retry or compatibility checks, return to Step 1 to correct the implementation and regression coverage; then recheck Step 2 (max 2 rounds).\nDone when: retry support meets the agreed behavior and relevant regression checks pass. Stop on passing checks; at the limit report failures and unverified behavior."
+rewrite = "Implement retry support for the client.\nStep 1: Inspect the existing client behavior, relevant code, and tests.\nStep 2 (after 1): Make a scoped implementation using existing patterns and run relevant tests.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: Retry support meets the request, existing behavior is preserved, and relevant checks pass or remaining failures are reported."
 
 [[task]]
 id = "code.explain"
@@ -1497,7 +1497,7 @@ instructions = "Request an explanation of the referenced code's purpose, flow, a
 examples = ["Explain this Python function", "Walk me through the code", "What does this module do", "Explain the algorithm in this class"]
 negatives = ["Implement a function", "Explain how a heat pump works"]
 suppresses = ["info.explain"]
-rewrite = "Explain this Python function.\nStep 1: Explain purpose, control flow, assumptions and relevant edge cases using the supplied code; do not modify it.\nStep 2 (after 1): Trace each explanation claim to the function and verify described edge behavior.\nLoop: if Step 2 fails the code-fidelity checks, return to Step 1 to correct inaccurate descriptions or missing branches; then recheck Step 2 (max 2 rounds).\nDone when: the explanation matches the function's actual flow and assumptions without code changes. Stop on passing checks; at the limit report uncertainty."
+rewrite = "Explain this Python function.\nStep 1: Explain this Python function's purpose, control flow, assumptions, and relevant edge cases. Use the code I provide and do not modify it.\nStep 2 (after 1): Check the result against the user's stated requirements.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "code.debug"
@@ -1512,7 +1512,7 @@ patterns = ["\\bdebug\\b", "\\b(?:fix|diagnose|investigate|reproduce)\\b.*\\b(?:
 instructions = "Ask the agent to reproduce the issue, identify the root cause from evidence, make a scoped fix, and verify with a regression test. Preserve exact errors and expected behavior."
 examples = ["Debug the checkout crash", "Fix the bug in login", "Diagnose this exception", "Investigate the parser error"]
 negatives = ["Fix the formula in cell A1", "Explain how this function works"]
-rewrite = "Debug the checkout crash.\nStep 1: Reproduce the crash, diagnose the cause from code and evidence, and apply a scoped fix with regression coverage.\nStep 2 (after 1): Run relevant tests and verify the original crash no longer reproduces.\nLoop: if Step 2 fails the crash reproduction or regression checks, return to Step 1 to correct the fix using the failure evidence; then recheck Step 2 (max 2 rounds).\nDone when: the original checkout crash is resolved and relevant regression tests pass. Stop on passing checks; at the limit report failures and unverified behavior."
+rewrite = "Debug the checkout crash.\nStep 1: Reproduce the crash and identify its root cause from the code and available evidence.\nStep 2 (after 1): Apply a minimal fix and add or run a relevant regression test.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The checkout issue is addressed, relevant checks pass, and any unverified behavior is reported honestly."
 
 [[task]]
 id = "code.refactor"
@@ -1527,7 +1527,7 @@ patterns = ["\\b(?:refactor|restructure (?:the |this )?(?:code|module|function)|
 instructions = "Request a scoped refactor that preserves observable behavior and public contracts. Use existing patterns and verify with relevant tests; do not change unrelated features."
 examples = ["Refactor the payment module", "Restructure this code for clarity", "Split the module into smaller functions", "Refactor this service without changing behavior"]
 negatives = ["Explain this module", "Review this diff"]
-rewrite = "Refactor the payment module while preserving its behavior.\nStep 1: Inspect responsibilities, contracts and tests, then refactor within scope using existing patterns.\nStep 2 (after 1): Run relevant tests and compare observable behavior and contracts with the original.\nLoop: if Step 2 fails the behavior-preservation checks, return to Step 1 to correct regressions and contract changes; then recheck Step 2 (max 2 rounds).\nDone when: the scoped refactor preserves payment behavior and public contracts with passing relevant checks. Stop on passing checks; at the limit report verification gaps."
+rewrite = "Refactor the payment module while preserving its behavior.\nStep 1: Inspect the module's responsibilities, public contracts, and tests.\nStep 2 (after 1): Improve its structure using existing patterns and run the relevant checks.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The refactor is scoped, public behavior is preserved, and verification results are reported."
 
 [[task]]
 id = "code.review"
@@ -1542,7 +1542,7 @@ patterns = ["\\b(?:review|audit|inspect)\\b.*\\b(?:code|diff|pull request|pr|pat
 instructions = "Request an evidence-based code review of the supplied change, prioritizing correctness and actionable findings with locations. Do not modify files unless asked."
 examples = ["Review this diff for bugs", "Audit the code for correctness", "Inspect this pull request", "Review the patch before merging"]
 negatives = ["Refactor the module", "Proofread the proposal"]
-rewrite = "Review this diff for bugs.\nStep 1: Identify concrete correctness bugs or regressions with code locations and supporting reasoning; do not modify code.\nStep 2 (after 1): Verify each finding against the diff and relevant behavior, removing speculative or unsupported claims.\nLoop: if Step 2 fails the finding-evidence checks, return to Step 1 to revise unsupported findings or investigate missing evidence; then recheck Step 2 (max 2 rounds).\nDone when: findings are actionable and evidence-backed, or no supported bugs are found, without code changes. Stop on passing checks; at the limit report review limitations."
+rewrite = "Review this diff for bugs.\nStep 1: Review this diff for concrete correctness bugs and regressions. Give actionable findings with code locations and supporting reasoning. Do not modify the code unless I ask.\nStep 2 (after 1): Check the result against the user's stated requirements.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "code.optimize"
@@ -1628,7 +1628,7 @@ instructions = "Request unit tests in the existing framework covering stated beh
 examples = ["Add unit tests for checkout", "Write unit tests for this function", "Generate unit tests for the parser", "Create unit tests covering empty input"]
 negatives = ["Explain what unit tests are", "Debug the checkout crash"]
 suppresses = ["code.implement"]
-rewrite = "Add unit tests for checkout.\nStep 1: Inspect checkout behavior and add focused tests for expected behavior, boundaries and regressions in the existing framework.\nStep 2 (after 1): Run the tests and verify they assert checkout behavior rather than implementation accidents.\nLoop: if Step 2 fails the test or coverage checks, return to Step 1 to correct assertions and missing cases without hiding failures; then recheck Step 2 (max 2 rounds).\nDone when: checkout tests cover the relevant behavior and pass in the existing framework. Stop on passing checks; at the limit report failures."
+rewrite = "Add unit tests for checkout.\nStep 1: Inspect checkout behavior and the existing test framework.\nStep 2 (after 1): Add focused tests for expected behavior and edge cases, then run them.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The tests cover the requested behavior and pass, or failures are explicitly reported."
 
 [[task]]
 id = "testing.integration"
@@ -1684,7 +1684,7 @@ instructions = "Ask for CI failure diagnosis using relevant logs and changes, a 
 examples = ["Fix the CI failure", "Diagnose the build pipeline failure", "Investigate why continuous integration is broken", "CI is failing after the last change"]
 negatives = ["Explain continuous integration", "Fix the checkout crash"]
 suppresses = ["code.debug"]
-rewrite = "Fix the CI failure.\nStep 1: Inspect failing logs and relevant changes, identify the cause and make a minimal correction without bypassing checks.\nStep 2 (after 1): Rerun affected checks and confirm the original failure is resolved.\nLoop: if Step 2 fails the affected CI checks, return to Step 1 to correct the cause using the new logs; then recheck Step 2 (max 2 rounds).\nDone when: affected checks pass and the original CI failure is resolved without disabling validation. Stop on passing checks; at the limit report failures or inability to rerun."
+rewrite = "Fix the CI failure.\nStep 1: Read the failing check's logs and relevant changes to identify the cause.\nStep 2 (after 1): Make a minimal correction and rerun the affected checks.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The affected checks pass or remaining failures and verification limits are reported."
 
 [[task]]
 id = "operations.logs"
@@ -1740,7 +1740,7 @@ instructions = "Ask the SQL assistant for a read-only query matching the questio
 examples = ["Write a SQL query for active customers", "Generate a query for monthly revenue", "Create SQL to list overdue invoices", "Build a query joining the supplied tables"]
 negatives = ["Explain this SQL query", "Fix a spreadsheet formula"]
 suppresses = ["code.implement", "writing.draft"]
-rewrite = "Write a SQL query for active customers.\nStep 1: Write a read-only query using my supplied schema, dialect and definition of active; request essential missing details rather than inventing identifiers.\nStep 2 (after 1): Verify dialect, schema references, active-customer filtering and relevant null or duplicate handling without executing changes.\nLoop: if Step 2 fails the schema or result checks, return to Step 1 to correct the query; then recheck Step 2 (max 2 rounds).\nDone when: the query is read-only and selects active customers using supported schema and dialect. Stop on passing checks; at the limit report missing information or unverified behavior."
+rewrite = "Write a SQL query for active customers.\nStep 1: Write a read-only SQL query for active customers using the schema and SQL dialect I provide. State assumptions and handle missing values appropriately. Ask for missing schema details rather than inventing table or column names.\nStep 2 (after 1): Check that the requested query matches the supplied dialect, schema, and intended result without invented identifiers.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "database.explain"
@@ -1846,7 +1846,7 @@ instructions = "Ask the spreadsheet AI for a formula using the supplied cells, c
 examples = ["Create a formula for profit margin", "Write an Excel formula using these columns", "Generate an XLOOKUP for the inventory", "I need a formula to count matching rows"]
 negatives = ["Fix the formula in A1", "Explain this formula"]
 suppresses = ["writing.draft", "code.implement"]
-rewrite = "Create a formula for profit margin.\nStep 1: Propose a profit-margin formula using my supplied application and references; request missing references instead of inventing cells.\nStep 2 (after 1): Verify the calculation, reference validity and blank or zero-denominator behavior.\nLoop: if Step 2 fails the calculation or reference checks, return to Step 1 to correct the formula and error handling; then recheck Step 2 (max 2 rounds).\nDone when: the formula computes profit margin using supported references and handles relevant errors explicitly. Stop on passing checks; at the limit report missing references or verification gaps."
+rewrite = "Create a formula for profit margin.\nStep 1: Create a formula for profit margin using the workbook, columns, and spreadsheet application I specify. Handle blank values and division by zero appropriately, and explain the formula. Ask for missing references instead of inventing them.\nStep 2 (after 1): Check that the proposed formula matches the stated references and expected calculation, including relevant error cases.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "spreadsheet.explain_formula"
@@ -1872,7 +1872,7 @@ instructions = "Request diagnosis of the supplied formula, error and expected re
 examples = ["Fix the formula in cell A1", "Debug this XLOOKUP error", "Repair the spreadsheet formula", "Diagnose why the formula returns an error"]
 negatives = ["Write a new formula", "Fix the parser exception"]
 suppresses = ["code.debug", "spreadsheet.formula"]
-rewrite = "Fix the formula in cell A1.\nStep 1: Diagnose A1 using its supplied expression, error and intended result; request essential missing context and propose a correction.\nStep 2 (after 1): Verify that the correction preserves the intended calculation and valid references and resolves the stated error.\nLoop: if Step 2 fails the formula or error-resolution checks, return to Step 1 to revise the correction using the failure details; then recheck Step 2 (max 2 rounds).\nDone when: the A1 correction resolves the stated error without changing the intended calculation. Stop on passing checks; at the limit report missing context or verification gaps."
+rewrite = "Fix the formula in cell A1.\nStep 1: Diagnose and fix the formula in cell A1 using its current expression, error, and expected result. Preserve the intended calculation and explain the correction. Ask for any essential missing context.\nStep 2 (after 1): Check that the proposed formula matches the stated references and expected calculation, including relevant error cases.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "spreadsheet.cleanup"
@@ -1958,7 +1958,7 @@ instructions = "Ask for exploratory analysis of the supplied data, including qua
 examples = ["Analyze our churn data", "Explore this dataset for trends", "Investigate sales patterns in the data", "Do exploratory data analysis on this file"]
 negatives = ["Summarize a news article", "Generate a SQL query"]
 suppresses = ["info.explain"]
-rewrite = "Analyze our churn data.\nStep 1: Inspect data quality and churn definitions, then analyze patterns using an explained method that separates association from causation.\nStep 2 (after 1): Verify conclusions against the supplied data, method and stated assumptions.\nLoop: if Step 2 fails the data-support or method checks, return to Step 1 to correct the analysis and unsupported conclusions; then recheck Step 2 (max 2 rounds).\nDone when: findings trace to the supplied data and method, with quality issues and limitations explicit. Stop on passing checks; at the limit report unresolved analysis issues."
+rewrite = "Analyze our churn data.\nStep 1: Analyze our churn data for patterns and possible contributing factors. Check data quality, explain the method, distinguish association from causation, and report limitations without inventing findings.\nStep 2 (after 1): Check that conclusions follow from the data and method, with assumptions and limitations stated explicitly.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "analysis.describe"
@@ -2094,7 +2094,7 @@ instructions = "Request a presentation tailored to the audience and purpose, wit
 examples = ["Create a presentation for the board", "Make a slide deck about our product", "Build slides for a training session", "Draft a presentation from this outline"]
 negatives = ["Write an email to the board", "Summarize this slide deck"]
 suppresses = ["writing.draft", "code.implement"]
-rewrite = "Create a presentation for the board.\nStep 1: Create a coherent presentation using my supplied content and objectives without inventing figures, sources or a slide count.\nStep 2 (after 1): Verify objective coverage, board relevance and factual support.\nLoop: if Step 2 fails the coverage or factual-support checks, return to Step 1 to revise the presentation and unsupported claims; then recheck Step 2 (max 2 rounds).\nDone when: the presentation covers my objectives coherently with supported content for the board. Stop on passing checks; at the limit report gaps."
+rewrite = "Create a presentation for the board.\nStep 1: Create a presentation for the board using the content and objectives I provide. Build a clear narrative with decision-relevant information, and do not invent figures, sources, or a slide count.\nStep 2 (after 1): Review the artifact against the requested content, audience, narrative, and constraints.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "artifact.source_to_slides"
@@ -2190,7 +2190,7 @@ instructions = "Ask the UI builder to implement the requested component, preserv
 examples = ["Build a React component for sign in", "Create a reusable search widget", "Implement a dialog component", "Write a tab component with keyboard support"]
 negatives = ["Explain this component", "Generate an image of a dashboard"]
 suppresses = ["code.implement", "writing.draft"]
-rewrite = "Build a React component for sign in.\nStep 1: Inspect project conventions and implement the React sign-in component with relevant coverage using the supplied interface, without inventing authentication endpoints.\nStep 2 (after 1): Run checks and verify supported sign-in states, keyboard access and behavior.\nLoop: if Step 2 fails the interaction or accessibility checks, return to Step 1 to correct the component and affected coverage; then recheck Step 2 (max 2 rounds).\nDone when: the React sign-in component integrates with the supplied interface and relevant checks pass. Stop on passing checks; at the limit report unsupported integration or verification gaps."
+rewrite = "Build a React component for sign in.\nStep 1: Inspect the existing stack, design conventions, and authentication interface.\nStep 2 (after 1): Implement the requested component with relevant states, keyboard accessibility, and tests.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The sign-in component meets the request and relevant checks pass or verification limits are explained."
 
 [[task]]
 id = "ui.page"
@@ -2207,7 +2207,7 @@ examples = ["Build a landing page for the product", "Create a web page with a co
 negatives = ["Generate an image of a web page", "Summarize this web page"]
 suppresses = ["code.implement", "writing.draft"]
 exclude = ["\\b(?:image|picture|photo) of\\b"]
-rewrite = "Build a landing page for the product.\nStep 1: Review supplied content and project conventions, then implement the page with relevant coverage without inventing product claims or a stack.\nStep 2 (after 1): Verify content fidelity, layout, interactions and accessibility.\nLoop: if Step 2 fails the content or behavior checks, return to Step 1 to correct the page and affected checks; then recheck Step 2 (max 2 rounds).\nDone when: the page preserves supplied product content and relevant layout and interaction checks pass. Stop on passing checks; at the limit report verification gaps."
+rewrite = "Build a landing page for the product.\nStep 1: Review the supplied content, design requirements, and existing project conventions.\nStep 2 (after 1): Implement the responsive page and check its interactions and accessibility.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The requested page works across relevant layouts without invented product claims, and checks are reported."
 
 [[task]]
 id = "ui.site"
@@ -2423,7 +2423,7 @@ instructions = "Request translation into the specified language and locale while
 examples = ["Translate this into French", "Translate the paragraph to Spanish", "I need a translation of this into German", "Translate this email without changing the names"]
 negatives = ["Teach me French interactively", "Write a new email"]
 suppresses = ["writing.draft"]
-rewrite = "Translate this into French.\nStep 1: Translate the supplied text into French, preserving meaning, names, numbers and formatting; flag ambiguity instead of inventing context.\nStep 2 (after 1): Compare with the original for meaning, terminology and factual fidelity.\nLoop: if Step 2 fails the meaning or fidelity checks, return to Step 1 to correct mistranslations or inconsistent terminology; then recheck Step 2 (max 2 rounds).\nDone when: the French translation preserves original meaning, names, numbers and formatting with ambiguity explicit. Stop on passing checks; at the limit report unresolved translation issues."
+rewrite = "Translate this into French.\nStep 1: Translate this into French, preserving its meaning, names, numbers, and formatting. Keep technical terminology consistent and flag any ambiguity rather than inventing context.\nStep 2 (after 1): Check that the translation preserves meaning, names, numbers, terminology, and requested formatting.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The request is fulfilled faithfully, with verification or remaining limitations reported."
 
 [[task]]
 id = "language.localize"
@@ -2589,7 +2589,7 @@ instructions = "Request media creation using a capable AI assistant's available 
 examples = ["Generate an image of a fox", "Draw a picture of a lighthouse", "Create a watercolor illustration of a forest", "Design a logo for a cafe"]
 negatives = ["Create an image parser", "Write a video script"]
 exclude = ["\\b(?:image|picture|photo|logo)\\s+(?:parser|editor|component|gallery|script|prompt|api)\\b"]
-rewrite = "Generate an image of a fox.\nStep 1: Use available image tools to create a fox without adding unstated visual requirements.\nStep 2 (after 1): Inspect the result for the fox subject and any supplied visual constraints.\nLoop: if Step 2 fails the subject or visual-constraint checks, return to Step 1 to correct the generation instructions and regenerate; then recheck Step 2 (max 2 rounds).\nDone when: the image depicts a fox and preserves supplied constraints. Stop on passing checks; report unavailable tools or unverified criteria rather than claiming success at the limit."
+rewrite = "Generate an image of a fox.\nStep 1: Use available image-generation tools to create the requested subject, preserving supplied visual constraints and leaving unspecified details open.\nStep 2 (after 1): Review the result against the described subject, style, motion, and constraints; report any unavailable tool or verification capability honestly.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The requested image meets the stated requirements, or unavailable capabilities and unmet criteria are reported."
 
 [[task]]
 id = "visual.image_edit"
@@ -2675,7 +2675,7 @@ instructions = "Request media creation using a capable AI assistant's available 
 examples = ["Create a short video of waves", "Generate a cinematic clip of a lighthouse", "Make an animation of a bouncing ball", "Produce a video of a forest"]
 negatives = ["Create a video script", "Build a video player"]
 exclude = ["\\b(?:video|clip|film|animation)\\s+(?:script|outline|plan|editor|player|prompt|api|summary)\\b"]
-rewrite = "Create a short video of waves.\nStep 1: Use available video tools to generate waves with a short duration without imposing an unstated numeric timing.\nStep 2 (after 1): Inspect the result for waves, motion and the requested short format.\nLoop: if Step 2 fails the subject or format checks, return to Step 1 to correct the generation instructions and regenerate; then recheck Step 2 (max 2 rounds).\nDone when: a short video shows waves in motion without invented timing constraints. Stop on passing checks; report unavailable tools or unverified criteria rather than claiming success at the limit."
+rewrite = "Create a short video of waves.\nStep 1: Use available video-generation tools to create the requested waves and motion, preserving supplied constraints without inventing a duration.\nStep 2 (after 1): Review the result against the described subject, style, motion, and constraints; report any unavailable tool or verification capability honestly.\nLoop: if the completion criteria are not met, return to Step 2 (max 2 rounds).\nDone when: The requested video meets the stated requirements, or unavailable capabilities and unmet criteria are reported."
 
 [[task]]
 id = "visual.image_to_video"

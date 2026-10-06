@@ -9,20 +9,21 @@ id = "chatgpt"
 name = "ChatGPT"
 kind = "ai_chat"
 style = """
-The prompt goes to ChatGPT. Put the goal first. Include supplied context and constraints, and preserve the requested output format without inventing one.
+The prompt goes to ChatGPT. Open with the goal, then the context and constraints, then the exact output format (for example a table, bullet list, or numbered steps).
+Use short paragraphs or bullets; Markdown is fine.
 """
 [[profile.examples]]
 said = "okay help me think through pricing for the team plan um come up with three options figure out what could go wrong with each and how we'd test them then recommend one"
 prompt = """
-I need to choose pricing for our team plan. Compare three options, their risks and how to test them, then recommend one.
+I need to choose a pricing model for our new team plan. Help me compare options, their risks and how to test them before we commit.
 
-Before you start, ask only necessary questions about our product, customers and competitors if the answer depends on them.
+Before you start, ask me up to 3 questions about our product, current customers and competitors if the answer depends on them.
 
 Step 1: Propose 3 distinct pricing options, with how each is priced and who it suits best.
-Step 2 (after 1): Explain each option's risks and how to test them without inventing results or a testing budget.
-Step 3 (after 2): Recommend an option based on the comparison and risks, stating uncertainty.
-Step 4 (after 3): Check that all three options have risks and ways to test them, and that the recommendation follows from the comparison.
-Loop: if Step 4 fails the risk coverage or recommendation checks, return to Step 2 to repair missing risk tests and revise the recommendation; then recheck Step 4 (max 2 rounds). Stop when checks pass; at the limit report unmet criteria.
+Step 2 (after 1): For each option, estimate the effect on conversion and expansion revenue and name its biggest risk.
+Step 3 (after 1; parallel with 2): For each option, design one cheap experiment we could run in 2 weeks to validate it.
+Step 4 (after 2, 3): Recommend one option and the 2 metrics to watch in the first 30 days.
+Loop: if the recommended option's biggest risk has no way to test it, return to Step 3 (max 2 rounds).
 Done when: every option has a risk and an experiment, and the recommendation follows from them.
 
 Format: a comparison table of the 3 options, then the recommendation in a short paragraph."""
@@ -39,21 +40,23 @@ id = "claude"
 name = "Claude"
 kind = "ai_chat"
 style = """
-The prompt goes to Claude. Be direct about the goal and supplied background. Group multiple distinct requirements only when useful; preserve a requested format without inventing one.
+The prompt goes to Claude. Be direct and specific about the goal, the relevant background, and what a great answer looks like.
+Group background and requirements under short labels when there are several.
+Ask for the desired format explicitly. Markdown is fine.
 """
 [[profile.examples]]
 said = "help me plan customer interviews for the new onboarding flow goals questions and a way to synthesize the calls"
 prompt = """
-Help me plan customer interviews for our new onboarding flow, with goals, questions and a way to synthesize the calls.
+Help me plan customer interviews for our redesigned onboarding flow, so we learn what to change next.
 
-If essential product or onboarding-flow details are missing, ask before writing the guide.
+If you need details about the product or the changes we made, ask me before writing the guide.
 
-Step 1: Define interview goals relevant to the new onboarding flow using the information I provide.
-Step 2 (after 1): Write open, neutral questions that cover the goals without inventing a call duration.
-Step 3 (after 2): Describe how to synthesize the calls into themes and next steps.
-Step 4 (after 3): Check that each goal has relevant questions and that the synthesis method can connect answers to next steps.
-Loop: if Step 4 fails the goal coverage or synthesis checks, return to Step 2 to revise the questions and synthesis method; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report gaps.
-Done when: goals, questions and a synthesis method are provided, with each goal traceable through the questions to the synthesis.
+Step 1: Define 3 learning goals, each tied to a decision we could make from the answers.
+Step 2 (after 1): Write a 30-minute discussion guide with open, neutral questions and follow-up probes that cover every goal.
+Step 3 (after 1; parallel with 2): Set screening criteria for who to recruit.
+Step 4 (after 2): Describe a lightweight way to synthesize the calls into themes and next steps.
+Loop: if any learning goal has no question in the guide, return to Step 2 (max 2 rounds).
+Done when: every goal maps to questions in the guide and to a decision.
 
 Format: a heading for each part, with the guide in the order I would run the call."""
 [[profile.match]]
@@ -69,7 +72,7 @@ id = "gemini"
 name = "Gemini"
 kind = "ai_chat"
 style = """
-The prompt goes to Google Gemini. State the goal and supplied context and constraints; preserve a requested format without inventing one.
+The prompt goes to Google Gemini. State the goal, the context and constraints clearly, and specify the output format.
 """
 [[profile.match]]
 hosts = ["gemini.google.com", "aistudio.google.com"]
@@ -85,22 +88,22 @@ name = "Grok"
 kind = "ai_chat"
 style = """
 The prompt goes to xAI's Grok, which can search the web and X for current information.
-State the goal and supplied context and constraints; preserve a requested format without inventing one.
+State the goal, the context and constraints, and the output format.
 When the answer depends on current prices, availability, news or posts, ask it to search and cite sources.
 """
 [[profile.examples]]
 said = "um i want to buy a used car for my son he just got his license something safe and not too expensive"
 prompt = """
-Help me choose a safe, affordable used car for my son, who just got his driver's license.
+Help me choose a safe, affordable used car for my son, who just got his driver's license and will be a new driver on the road.
 
-Before recommending anything, ask only necessary questions about my budget, where we live and what he will mainly drive it for.
+Before recommending anything, ask me up to 3 short questions about my budget, where we live and what he will mainly drive it for.
 
-Step 1: Identify suitable used-car options using my stated affordability and safety priorities, leaving unstated budget and age open.
-Step 2 (after 1): Compare current prices, safety evidence and relevant reliability risks using cited sources.
-Step 3 (after 2): Explain which options fit the priorities and the uncertainties that could change the choice.
-Step 4 (after 3): Verify that the comparison supports the choice without assuming my son's age or inventing a budget.
-Loop: if Step 4 fails the safety evidence or affordability checks, return to Step 2 to correct unsupported claims and revise the choice; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report missing evidence.
-Done when: suitable options have sourced safety and price evidence and the choice follows from my priorities.
+Step 1: Shortlist 5 models and model years with strong safety ratings and reliability records for new drivers.
+Step 2 (after 1): For each, show typical current used prices, insurance considerations for a teen driver and common problems to check.
+Step 3 (after 1; parallel with 2): Explain the safety features that matter most for a new driver.
+Step 4 (after 2, 3): Give me a short checklist for inspecting and test-driving a used car.
+Loop: if any shortlisted car lacks a current price or safety rating with a source, return to Step 2 (max 2 rounds).
+Done when: every car on the shortlist has a sourced price, safety rating and known problems.
 
 Use current listings and safety ratings, cite your sources, and present the shortlist as a comparison table."""
 [[profile.match]]
@@ -119,7 +122,7 @@ id = "copilot"
 name = "Microsoft Copilot"
 kind = "ai_chat"
 style = """
-The prompt goes to Microsoft Copilot. State the task and supplied context and constraints; preserve a requested format without inventing one.
+The prompt goes to Microsoft Copilot. State the task, context and constraints clearly, and specify the output format.
 """
 [[profile.match]]
 hosts = ["copilot.microsoft.com", "m365.cloud.microsoft"]
@@ -141,11 +144,11 @@ Keep the steps short and searchable; no role-play.
 [[profile.examples]]
 said = "what time zone is tokyo in"
 prompt = """
-What time zone is Tokyo in?
+What time zone is Tokyo, Japan in?
 
-Step 1: Find Tokyo's time zone name and UTC offset using a reliable source.
-Step 2 (after 1): Verify the name and offset against the source, including any daylight-saving qualification needed for accuracy.
-Loop: if Step 2 fails the time zone accuracy check, return to Step 1 to resolve the discrepancy using authoritative evidence; then recheck Step 2 (max 2 rounds). Stop on passing checks; at the limit report uncertainty.
+Step 1: Find Tokyo's time zone name and its UTC offset.
+Step 2 (after 1): Check whether Tokyo observes daylight saving time.
+Loop: if the sources disagree on the offset, return to Step 1 with an official source (max 2 rounds).
 Done when: the answer gives the zone name and UTC offset with a cited source."""
 [[profile.match]]
 hosts = ["perplexity.ai"]
@@ -162,7 +165,7 @@ kind = "code_agent"
 style = """
 The prompt goes to an AI coding agent inside the Cursor editor.
 State the change to make, the files, functions or components involved (only those the speaker named), constraints to respect,
-and how to verify the result (tests to run or behavior to check). Use the required Step headings, not an additional numbered task list.
+and how to verify the result (tests to run or behavior to check). Use a short task description followed by bullets.
 Never invent file names, APIs or requirements.
 """
 [[profile.examples]]
@@ -171,10 +174,10 @@ prompt = """
 Fix the login button so double-clicking it sends only one login request.
 
 Step 1: Find where the login button sends its request and why a second click sends another one.
-Step 2 (after 1): Fix the duplicate-request behavior using the existing code's patterns without assuming a solution before diagnosis.
-Step 3 (after 2): Add a test that clicks the button twice and asserts a single request is sent.
+Step 2 (after 1): Ignore further clicks while a login request is in flight.
+Step 3 (after 1; parallel with 2): Add a test that clicks the button twice and asserts a single request is sent.
 Step 4 (after 2, 3): Run the test suite.
-Loop: if Step 4 fails the single-request regression or existing tests, return to Step 2 to correct the implementation and affected tests; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report remaining failures.
+Loop: if any test fails, return to Step 2 (max 3 rounds).
 Done when: the new test passes and no existing test fails."""
 [[profile.match]]
 processes = ["cursor"]
@@ -186,7 +189,7 @@ kind = "code_agent"
 style = """
 The prompt goes to GitHub Copilot Chat or agent mode in VS Code.
 State the change to make, the files or symbols involved (only those the speaker named), constraints, and how to verify the result.
-Use the required Step headings, not an additional numbered task list. Never invent file names, APIs or requirements.
+Use a short task description followed by bullets. Never invent file names, APIs or requirements.
 """
 [[profile.match]]
 processes = ["code", "code - insiders", "visual studio code", "vscodium"]
@@ -199,18 +202,17 @@ paste = "terminal"
 style = """
 The prompt goes to Claude Code, an AI coding agent running in a terminal.
 State the task, the relevant files or commands (only those the speaker named), constraints, and how to verify the result.
-Keep the required Step headings compact, one per line. No extra task list, Markdown decoration or code fences.
+Keep it compact: one short paragraph or a few hyphen bullets. No Markdown headings or code fences.
 """
 [[profile.examples]]
 said = "the build is broken after the dependency update figure out what changed fix it and then run the tests until they pass"
 prompt = """
-The build fails after the dependency update. Find the cause and fix it.
+The build fails after the latest dependency update. Find the cause and fix it.
 
 Step 1: Identify which dependency change breaks the build.
-Step 2 (after 1): Apply a scoped fix consistent with the diagnosis, without assuming whether code, configuration or the dependency needs changing.
+Step 2 (after 1): Fix the code to work with the updated dependency.
 Step 3 (after 2): Run the build and the full test suite.
-Step 4 (after 3): Verify that the original dependency-related failure is resolved and the build and test results are successful.
-Loop: if Step 4 fails the build or test checks, return to Step 2 to correct the cause using the new errors; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report what still fails.
+Loop: if the build or any test fails, return to Step 1 with the new error (max 3 rounds), then stop and tell me what still fails.
 Done when: the build succeeds and all tests pass."""
 [[profile.match]]
 processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
@@ -224,7 +226,7 @@ paste = "terminal"
 style = """
 The prompt goes to the Codex CLI coding agent running in a terminal.
 State the task, the relevant files or commands (only those the speaker named), constraints, and how to verify the result.
-Keep the required Step headings compact, one per line. No extra task list, Markdown decoration or code fences.
+Keep it compact: one short paragraph or a few hyphen bullets. No Markdown headings or code fences.
 """
 [[profile.match]]
 processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
@@ -243,7 +245,7 @@ State the task, the relevant files or commands the speaker named, and how to ver
 """
 [[profile.examples]]
 said = "the api tests are flaky figure out which ones fail fix them and then run the suite until it passes"
-prompt = "Fix the flaky API tests. Step 1: reproduce the flaky failures and identify their causes; Step 2 (after 1): fix the causes and add relevant regression coverage; Step 3 (after 2): run the suite and check the original flaky behavior; Step 4 (after 3): verify the results demonstrate the failures are resolved without hiding tests; Loop: if Step 4 fails the regression or suite checks, return to Step 2 to correct the remaining failures; then recheck Step 4 (max 2 rounds); Done when: the suite passes and the original flaky failures no longer reproduce. Stop on passing checks; at the limit report remaining failures."
+prompt = "Fix the flaky API tests. Step 1: run the API test suite several times and list the tests that fail only some of the time; Step 2 (after 1): find the cause of each flaky failure and fix it; Step 3 (after 2): run the full test suite; Loop: if any test fails, return to Step 2 (max 3 rounds); Done when: the full suite passes on every run."
 [[profile.match]]
 processes = ["windowsterminal", "wt", "openconsole", "conhost", "cmd", "powershell", "pwsh", "terminal", "com.apple.terminal", "iterm2", "com.googlecode.iterm2", "gnome-terminal-server", "gnome-terminal", "ptyxis", "konsole", "alacritty", "kitty", "wezterm-gui", "wezterm", "ghostty", "warp", "tabby", "hyper", "xterm", "tilix", "foot"]
 
@@ -258,10 +260,10 @@ Keep the visual description inside the creation step. Do not assume a generator-
 """
 [[profile.examples]]
 said = "um a fox in a forest at night kind of magical with like glowing mushrooms"
-prompt = "Create an image of a fox in a magical forest at night with glowing mushrooms; Step 1: Prepare the visual description preserving the fox, nighttime forest, glowing mushrooms and magical mood; Step 2 (after 1): Generate the requested scene using available image tools; Step 3 (after 2): Review the result for each requested visual element; Loop: if Step 3 fails the subject or setting checks, return to Step 2 to correct the generation instructions and regenerate the image; then recheck Step 3 (max 2 rounds); Done when: the image contains the fox, nighttime forest and glowing mushrooms with a magical mood. Stop on passing checks; report unavailable tools or unmet criteria at the limit."
+prompt = "Create an image of a fox in a magical forest at night with glowing mushrooms.; Step 1: Generate the requested fox and forest scene using available image tools.; Step 2 (after 1): Review the subject, nighttime setting, glowing mushrooms and magical mood.; Loop: if a stated visual requirement is unmet, return to Step 1 (max 2 rounds).; Done when: the image meets the description or unavailable capabilities are reported."
 [[profile.examples]]
 said = "design a logo for my coffee shop then make a few color versions and pick the one that works best on our menu"
-prompt = "Design a logo for my coffee shop, make a few color versions, and choose the best for our menu; Step 1: Create a logo using available tools; Step 2 (after 1): Create a few color variations without imposing a fixed count; Step 3 (after 2): Compare menu suitability and choose a version with reasons; Step 4 (after 3): Verify that the variants are distinguishable and the choice follows from menu suitability; Loop: if Step 4 fails the variation or suitability checks, return to Step 2 to revise the variants and choice; then recheck Step 4 (max 2 rounds); Done when: the logo has color variants and a justified menu-suitable choice. Stop on passing checks; report capability limits or unmet criteria at the limit."
+prompt = "Design a logo for my coffee shop, make a few color versions, and choose the best for our menu.; Step 1: Create the logo and requested color variations with available tools.; Step 2 (after 1): Compare their clarity and suitability for the menu, then recommend a version.; Loop: if none suits the menu, return to Step 1 (max 2 rounds).; Done when: the requested variants and a justified choice are available, or unmet requirements are reported."
 [[profile.match]]
 hosts = ["midjourney.com", "ideogram.ai", "leonardo.ai", "firefly.adobe.com", "krea.ai", "playground.com", "recraft.ai", "dreamstudio.ai", "openart.ai", "nightcafe.studio", "designer.microsoft.com"]
 
@@ -276,7 +278,7 @@ Keep the scene, action, camera movement and pacing inside the creation step. Do 
 """
 [[profile.examples]]
 said = "a drone shot over a lighthouse at sunset with waves crashing slow and cinematic"
-prompt = "Create a slow cinematic drone shot over a lighthouse at sunset with crashing waves; Step 1: Prepare the description preserving the lighthouse, sunset, crashing waves, slow pacing and cinematic drone movement without inventing a duration; Step 2 (after 1): Generate the requested scene using available video tools; Step 3 (after 2): Review the result for each requested scene and movement element; Loop: if Step 3 fails the scene or movement checks, return to Step 2 to correct the generation instructions and regenerate; then recheck Step 3 (max 2 rounds); Done when: the video shows the lighthouse, sunset and crashing waves with slow cinematic drone movement. Stop on passing checks; report capability limits or unmet criteria at the limit."
+prompt = "Create a slow cinematic drone shot over a lighthouse at sunset with crashing waves.; Step 1: Generate the requested scene and camera movement using available video tools.; Step 2 (after 1): Review the lighthouse, sunset, waves, pacing and cinematic style.; Loop: if a stated requirement is unmet, return to Step 1 (max 2 rounds).; Done when: the video matches the request or unavailable capabilities and unmet criteria are reported."
 [[profile.match]]
 hosts = ["sora.com", "sora.chatgpt.com", "runwayml.com", "pika.art", "klingai.com", "hailuoai.video", "dream-machine.lumalabs.ai"]
 
@@ -285,20 +287,20 @@ id = "generic"
 name = "AI assistant"
 kind = "ai_chat"
 style = """
-The prompt goes to a general-purpose AI assistant. State the goal, supplied context and constraints, and requested details; preserve a requested format without inventing one.
+The prompt goes to a general-purpose AI assistant. State the goal, the relevant context and constraints, the specific points to cover, and the desired output format.
 """
 [[profile.examples]]
 said = "so i need to plan a birthday party for my daughter she's turning eight and she loves science stuff"
 prompt = """
 Help me plan a science-themed birthday party for my daughter, who is turning 8 and loves science.
 
-Before you start, ask only necessary questions about the guests, budget and location.
+Before you start, ask me up to 3 short questions about the number of guests, budget, and whether it will be at home or at a venue.
 
-Step 1: Suggest science-themed activities appropriate for a child turning 8, with necessary supervision and safety considerations.
-Step 2 (after 1): Organize a practical party plan around suitable activities, leaving unstated budget, duration and guest count open.
-Step 3 (after 2): Identify needed supplies and preparation based on the plan.
-Step 4 (after 3): Verify age appropriateness, activity safety and consistency of the plan and supplies.
-Loop: if Step 4 fails the age suitability or safety checks, return to Step 1 to replace unsafe activities and update the plan and supplies; then recheck Step 4 (max 2 rounds). Stop on passing checks; at the limit report concerns.
-Done when: the science-themed plan suits my daughter turning 8, identifies supervision and supplies, and does not assume unstated party details.
+Step 1: Propose 3 party concepts, each with a name and a one-line pitch.
+Step 2 (after 1): For the concept I pick, plan a 2-hour schedule with 4 hands-on experiments that are safe for 8-year-olds, including the supplies for each.
+Step 3 (after 1; parallel with 2): Suggest food, decorations and a take-home favor that fit the concept.
+Step 4 (after 2, 3): Write a shopping checklist and a prep timeline for the week before.
+Loop: if any experiment is not clearly safe for 8-year-olds, return to Step 2 (max 2 rounds).
+Done when: the plan covers the schedule, experiments, food, favors and shopping list, all kid-safe.
 
 Keep it practical and kid-safe, and format each part under its own heading."""
