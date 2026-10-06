@@ -77,7 +77,8 @@ impl Credentials for OsCredentials {
 #[derive(Clone, Serialize)]
 pub struct JevStatus {
     enabled: bool,
-    key_configured: bool,
+    key_configured: Option<bool>,
+    credential_error: Option<String>,
 }
 
 enum Action {
@@ -124,9 +125,14 @@ fn manage(
             *current = next;
         }
     }
+    let (key_configured, credential_error) = match credentials.get() {
+        Ok(key) => (Some(key.is_some()), None),
+        Err(message) => (None, Some(message)),
+    };
     Ok(JevStatus {
         enabled: current.jev_enabled,
-        key_configured: credentials.get()?.is_some(),
+        key_configured,
+        credential_error,
     })
 }
 
@@ -220,16 +226,21 @@ impl JevReviewer {
         let result = (|| {
             let mut response = client
                 .post(endpoint)
-                .header(reqwest::header::AUTHORIZATION, key)
+                .bearer_auth(key)
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body)
                 .send()
                 .map_err(network_error)?;
             match response.status().as_u16() {
                 200..=299 => {}
-                401 | 403 => {
+                401 => {
                     return Err(error(
-                        "Jev authentication failed. Check the stored API key.",
+                        "Jev authentication failed (HTTP 401). TypeSafe did not accept the stored credential.",
+                    ));
+                }
+                403 => {
+                    return Err(error(
+                        "Jev access denied (HTTP 403). Check TypeSafe account and API access permissions; this does not necessarily mean the key is wrong.",
                     ));
                 }
                 429 => {
@@ -345,7 +356,8 @@ fn decode(bytes: &[u8]) -> Result<ReviewDecision, BackendError> {
     }
     let mut approved = true;
     let mut issues = Vec::new();
-    for ((_, _, issue), answer) in QUESTIONS.into_iter().zip([
+    let mut scores = Vec::new();
+    for ((name, _, issue), answer) in QUESTIONS.into_iter().zip([
         &response.answers.fidelity,
         &response.answers.constraints,
         &response.answers.steps,
@@ -356,6 +368,7 @@ fn decode(bytes: &[u8]) -> Result<ReviewDecision, BackendError> {
             return Err(invalid());
         }
         approved &= answer.noul >= 0.85;
+        scores.push(format!("{name}: {}", answer.noul));
         if answer.noul <= 0.2 {
             issues.push(issue.to_string());
         }
@@ -365,7 +378,12 @@ fn decode(bytes: &[u8]) -> Result<ReviewDecision, BackendError> {
     } else if approved {
         Ok(ReviewDecision::Approved)
     } else {
-        Ok(ReviewDecision::Uncertain { detail: "Experimental Jev review was inconclusive; its thresholds are not calibrated for this task.".into() })
+        Ok(ReviewDecision::Uncertain { detail: format!(
+            "Jev connected and completed the review, but approval was inconclusive. Scores (0-1): {}. \
+             Approval requires every check to reach 0.85; a check at or below 0.20 requests a rewrite. \
+             These experimental thresholds are not calibrated quality grades. Review and copy the draft if suitable; it was not pasted.",
+            scores.join(", ")
+        ) })
     }
 }
 
@@ -380,10 +398,14 @@ mod tests {
     struct TestCredentials {
         key: Mutex<Option<String>>,
         delete_fails: bool,
+        read_fails: bool,
     }
 
     impl Credentials for TestCredentials {
         fn get(&self) -> Result<Option<String>, String> {
+            if self.read_fails {
+                return Err("OS credential store locked.".into());
+            }
             Ok(self.key.lock().unwrap().clone())
         }
         fn save(&self, key: &str) -> Result<(), String> {
@@ -412,6 +434,7 @@ mod tests {
             credentials: Arc::new(TestCredentials {
                 key: Mutex::new(Some("synthetic-secret".into())),
                 delete_fails: false,
+                read_fails: false,
             }),
         }
     }
@@ -458,8 +481,8 @@ mod tests {
                 if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
                     let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
                     assert!(headers.starts_with("post /review "));
-                    assert!(headers.contains("authorization: synthetic-secret\r\n"));
-                    assert!(!headers.contains("bearer"));
+                    assert!(headers.contains("authorization: bearer synthetic-secret\r\n"));
+                    assert!(!headers.contains("authorization: synthetic-secret\r\n"));
                     let length = headers
                         .lines()
                         .find_map(|line| line.strip_prefix("content-length: "))
@@ -518,6 +541,22 @@ mod tests {
     }
 
     #[test]
+    fn jev_inconclusive_review_shows_scores_without_claiming_connection_failure() {
+        let mut value = response(0.91);
+        value["answers"]["completion"]["noul"] = serde_json::json!(0.8499);
+        let ReviewDecision::Uncertain { detail } = decode_value(value).unwrap() else {
+            panic!("expected inconclusive review");
+        };
+        assert!(detail.contains("connected and completed"));
+        for check in ["fidelity: 0.91", "constraints: 0.91", "steps: 0.91", "completion: 0.8499"] {
+            assert!(detail.contains(check));
+        }
+        assert!(detail.contains("every check to reach 0.85"));
+        assert!(detail.contains("not calibrated quality grades"));
+        assert!(detail.contains("it was not pasted"));
+    }
+
+    #[test]
     fn jev_rejects_malformed_and_incomplete_probabilities_without_echoing() {
         for invalid in [
             serde_json::json!(-0.1),
@@ -548,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn jev_posts_only_request_and_draft_using_direct_key_auth() {
+    fn jev_posts_only_request_and_draft_using_bearer_auth() {
         let (endpoint, server) = mock(200, response(1.0).to_string(), || {});
         assert!(matches!(
             reviewer(true)
@@ -569,8 +608,8 @@ mod tests {
     #[test]
     fn jev_classifies_http_errors_and_never_echoes_remote_body_or_key() {
         for (status, expected) in [
-            (401, "authentication"),
-            (403, "authentication"),
+            (401, "authentication failed (HTTP 401)"),
+            (403, "access denied (HTTP 403)"),
             (429, "rate limit"),
             (503, "temporarily"),
             (302, "redirect"),
@@ -691,7 +730,8 @@ mod tests {
             Action::Save("synthetic-secret".into()),
         )
         .unwrap();
-        assert!(status.key_configured && !status.enabled);
+        assert_eq!(status.key_configured, Some(true));
+        assert!(!status.enabled);
         assert!(!dir.path().join("settings.json").exists());
         assert!(
             manage(&settings, dir.path(), &credentials, Action::Enable(true))
@@ -708,7 +748,8 @@ mod tests {
         assert!(manage(&settings, &blocked, &credentials, Action::Delete).is_err());
         assert!(credentials.get().unwrap().is_some());
         let status = manage(&settings, dir.path(), &credentials, Action::Delete).unwrap();
-        assert!(!status.enabled && !status.key_configured);
+        assert!(!status.enabled);
+        assert_eq!(status.key_configured, Some(false));
         assert!(
             !settings::load_checked(dir.path())
                 .unwrap()
@@ -719,12 +760,29 @@ mod tests {
     }
 
     #[test]
+    fn jev_can_be_disabled_when_credential_store_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = settings(true);
+        let credentials = TestCredentials { read_fails: true, ..Default::default() };
+        let status = manage(&settings, dir.path(), &credentials, Action::Status).unwrap();
+        assert!(status.enabled);
+        assert_eq!(status.key_configured, None);
+        assert_eq!(status.credential_error.as_deref(), Some("OS credential store locked."));
+        let status = manage(&settings, dir.path(), &credentials, Action::Enable(false)).unwrap();
+        assert!(!status.enabled);
+        assert!(status.credential_error.is_some());
+        assert!(!settings::load_checked(dir.path()).unwrap().unwrap().jev_enabled);
+        assert!(manage(&settings, dir.path(), &credentials, Action::Enable(true)).is_err());
+    }
+
+    #[test]
     fn jev_failed_key_deletion_still_persists_disable() {
         let dir = tempfile::tempdir().unwrap();
         let settings = settings(true);
         let credentials = TestCredentials {
             key: Mutex::new(Some("synthetic-secret".into())),
             delete_fails: true,
+            read_fails: false,
         };
         assert!(manage(&settings, dir.path(), &credentials, Action::Delete).is_err());
         assert!(!settings.read().unwrap().jev_enabled);

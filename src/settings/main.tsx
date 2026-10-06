@@ -9,7 +9,7 @@ import { PromptRoutingSettings } from "./PromptRouting";
 import { JevSettings } from "./JevSettings";
 import "./settings.css";
 import { RecoveryButton } from "./RecoveryButton";
-import { Inference, useInference } from "./Inference";
+import { Inference, useInference, type InferenceState } from "./Inference";
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 1e9 ? 2 : 1)} GB`;
 
@@ -195,7 +195,8 @@ function Status({ info, onChange, guidedStep, external = false }: { info: AppInf
   );
 }
 
-function Models({ onChange, guided = false, external = false }: { onChange: () => void; guided?: boolean; external?: boolean }) {
+function Models({ onChange, inference, guided = false }: { onChange: () => void; inference: InferenceState; guided?: boolean }) {
+  const external = inference.config?.selection.kind === "connection";
   const [models, setModels] = useState<ModelStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, DownloadEvent>>({});
   const [error, setError] = useState<string | null>(null);
@@ -289,9 +290,19 @@ function Models({ onChange, guided = false, external = false }: { onChange: () =
   };
 
   return (
-    <section className={guided ? "tour-target" : undefined} aria-label="Model settings">
+    <>
+    <section aria-label="Model settings">
       <h2>Models</h2>
-      <p className="hint">Downloaded from Hugging Face over HTTPS, checked against pinned SHA-256 hashes, and run entirely on this device.</p>
+      <p className="hint">Choose how your voice becomes a prompt: local speech recognition, one prompt writer, and optional Jev quality review. Plain dictation uses only speech recognition.</p>
+      <ol className="model-flow" aria-label="Voice to prompt stages">
+        <li><a href="#speech-recognition">Speech to text</a> <span className="hint">On this device</span></li>
+        <li><a href="#prompt-writer">Prompt writer</a> <span className="hint">{external ? "Selected endpoint" : "Bundled local"}</span></li>
+        {!guided && <li><a href="#quality-review">Quality review</a> <span className="hint">Optional TypeSafe service</span></li>}
+      </ol>
+    </section>
+    <section className={guided ? "tour-target" : undefined} aria-label="Speech model">
+      <h2 id="speech-recognition" tabIndex={-1}>1. Speech recognition</h2>
+      <p className="hint">Audio stays on this device. Bundled speech and prompt models are downloaded from Hugging Face over HTTPS and checked against pinned SHA-256 hashes.</p>
       <p className="hint">Recommendations favor quality over speed. Larger models can take longer; nothing is downloaded or switched automatically just because it is recommended.</p>
       <details className="model-compatibility">
       <summary>Hardware compatibility{totalRam != null ? ` (${gb(totalRam)} RAM)` : ""}</summary>
@@ -302,14 +313,23 @@ function Models({ onChange, guided = false, external = false }: { onChange: () =
       </p>
       </details>
       {group("stt", "Speech to text")}
-      {external ? <p className="hint">Your selected endpoint supplies the prompt writer. No bundled language-model download is required.</p> : group("llm", "Prompt writer")}
       {(listenerError || error) && <div role="alert"><p className="error">{listenerError || error}</p><button onClick={() => {
         setError(null);
         setListenerAttempt((value) => value + 1);
         refresh();
       }}>Refresh models</button></div>}
-      {!guided && <JevSettings />}
     </section>
+    <Inference state={inference} onChange={onChange} guided={guided}>
+      {external ? <>
+        <p className="hint">Your selected endpoint supplies the prompt writer. No bundled language-model download is required.</p>
+        <details><summary>Manage inactive bundled prompt models</summary>
+          <p className="hint">These models are not used while an endpoint is selected. Choose Use bundled local to switch back.</p>
+          {group("llm", "Bundled prompt models")}
+        </details>
+      </> : group("llm", "Bundled prompt models")}
+    </Inference>
+    {!guided && <JevSettings />}
+    </>
   );
 }
 
@@ -445,12 +465,11 @@ function Words({ info, onChange }: { info: AppInfo | null; onChange: () => void 
   );
 }
 
-type Pane = "general" | "models" | "inference" | "prompts" | "words" | "history" | "updates";
+type Pane = "general" | "models" | "prompts" | "words" | "history" | "updates";
 
 const PANES: { id: Pane; label: string }[] = [
   { id: "general", label: "General" },
   { id: "models", label: "Models" },
-  { id: "inference", label: "Inference" },
   { id: "prompts", label: "Prompt types" },
   { id: "words", label: "Your words" },
   { id: "history", label: "History" },
@@ -469,6 +488,10 @@ function Settings() {
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [pane, setPane] = useState<Pane>(() => {
     const saved = localStorage.getItem(PANE_KEY);
+    if (saved === "inference") {
+      localStorage.setItem(PANE_KEY, "models");
+      return "models";
+    }
     const current = PANES.find((candidate) => candidate.id === saved);
     if (saved && !current) {
       console.warn(`Retired or unknown settings section "${saved}"; opening General.`);
@@ -477,6 +500,7 @@ function Settings() {
     return current?.id ?? "general";
   });
   const [visited, setVisited] = useState<Pane[]>([]);
+  const [recoveryTarget, setRecoveryTarget] = useState<string | null>(null);
   const refreshId = useRef(0);
   const refreshInfo = useCallback(() => {
     const id = ++refreshId.current;
@@ -498,6 +522,16 @@ function Settings() {
       setVisited((current) => current.includes(visiblePane) ? current : [...current, visiblePane]);
     }
   }, [visiblePane, info, onboarding]);
+
+  useEffect(() => {
+    if (!recoveryTarget || visiblePane !== "models" || !info || !onboarding || onboarding.startup_error) return;
+    const target = document.getElementById(recoveryTarget);
+    if (target) {
+      target.scrollIntoView({ block: "start" });
+      target.focus({ preventScroll: true });
+      setRecoveryTarget(null);
+    }
+  }, [recoveryTarget, visiblePane, visited, info, onboarding]);
 
   useEffect(() => {
     let disposed = false;
@@ -524,8 +558,10 @@ function Settings() {
         setLoadError("An invalid recovery section was requested. Retry the connection.");
         return;
       }
-      setPane(payload);
-      localStorage.setItem(PANE_KEY, payload);
+      const next = payload === "inference" ? "models" : payload;
+      setPane(next);
+      setRecoveryTarget(payload === "inference" ? "prompt-writer" : null);
+      localStorage.setItem(PANE_KEY, next);
       window.scrollTo(0, 0);
     }).then((unlisten) => {
       if (disposed) unlisten();
@@ -544,13 +580,14 @@ function Settings() {
 
   const open = (next: Pane) => {
     setPane(next);
+    setRecoveryTarget(null);
     localStorage.setItem(PANE_KEY, next);
     window.scrollTo(0, 0);
   };
 
   const badge = (id: Pane) => {
     if (id === "models" && info && !info.models_installed && !info.engines_ready) return <span className="badge">Set up</span>;
-    if (id === "inference" && inference.status?.state === "error") return <span className="badge">!</span>;
+    if (id === "models" && (inference.error || inference.status?.state === "error" || inference.status?.state === "configured")) return <span className="badge">!</span>;
     if (id === "general" && info && info.hotkey_errors.length > 0) return <span className="badge">!</span>;
     return null;
   };
@@ -567,8 +604,7 @@ function Settings() {
   // Keep visited panes mounted so edits survive switching; unvisited panes do no work.
   const panes: Record<Pane, React.ReactNode> = {
     general: <Status info={info} onChange={refreshInfo} guidedStep={guided ? onboarding.step : undefined} external={external} />,
-    models: <>{guided && <Inference state={inference} onChange={refreshInfo} guided />}<Models onChange={refreshInfo} guided={guided} external={external} /></>,
-    inference: <Inference state={inference} onChange={refreshInfo} />,
+    models: <Models onChange={refreshInfo} inference={inference} guided={guided} />,
     words: <Words info={info} onChange={refreshInfo} />,
     history: <History info={info} onChange={refreshInfo} external={external} />,
     prompts: <PromptRoutingSettings />,

@@ -41,11 +41,14 @@ export function JevSettings() {
   };
 
   return <section aria-label="Jev remote review">
-    <h2>Jev remote review (experimental)</h2>
+    <h2 id="quality-review" tabIndex={-1}>3. Quality review</h2>
+    <p><strong>Jev remote review (experimental)</strong> checks the generated prompt; it is not the prompt writer.</p>
     <p className="hint" id="jev-consent">Optional desktop prompt review, off by default. Enabling sends your spoken request and generated prompt to TypeSafe for Jev review. The generated prompt may contain context you opted into using. It may run twice after a bounded rewrite. No separate histories or screen context are sent. Plain dictation and CLI evaluations are not reviewed.</p>
     <p className="hint">Review uses experimental conservative thresholds, not probabilities calibrated for your task. Speech recognition stays local; generation and any rewrite use your selected inference backend.</p>
+    <p className="hint">A completed review can be inconclusive even when the connection works. All four checks must reach 0.85 for approval; a check at or below 0.20 requests one rewrite. Otherwise the draft stays available for manual review and copy, without automatic pasting.</p>
     <p className="hint">Your API key is stored only in the OS credential store, never in settings or browser storage. Saving a key does not enable review or make an API call.</p>
-    {status && <p role="status">{status.key_configured ? "API key stored in OS credential store. Stored does not mean verified; no connection test has been made." : "No API key stored."}</p>}
+    <p className="hint">Enter only the API key. Promptify adds the Bearer authentication prefix when contacting TypeSafe.</p>
+    {status && <p role="status">{status.key_configured === null ? "API key storage is unavailable. You can still disable Jev review." : status.key_configured ? "API key stored in OS credential store. Stored does not mean verified; no connection test has been made." : "No API key stored."}</p>}
     <label htmlFor="jev-key">TypeSafe API key</label>
     <div className="inline">
       <input id="jev-key" type="password" autoComplete="off" value={key} disabled={busy || !status}
@@ -67,7 +70,7 @@ export function JevSettings() {
         onChange={(event) => void change(() => api.setJevEnabled(event.target.checked))} />
       Enable Jev review and send requests and generated prompts to TypeSafe
     </label>
-    {error && <p className="error" role="alert">{error}</p>}
-    {!status && <button disabled={busy} onClick={() => void refresh()}>Retry Jev settings</button>}
+    {(error || status?.credential_error) && <p className="error" role="alert">{error || status?.credential_error}</p>}
+    {(!status || status.credential_error) && <button disabled={busy} onClick={() => void refresh()}>Retry Jev settings</button>}
   </section>;
 }

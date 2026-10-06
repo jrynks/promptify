@@ -201,7 +201,8 @@ export interface HistoryEntry {
 
 export interface JevStatus {
   enabled: boolean;
-  key_configured: boolean;
+  key_configured: boolean | null;
+  credential_error: string | null;
 }
 
 export type InferenceProvider = "custom" | "lm_studio" | "openai" | "anthropic" | "google";
@@ -230,6 +231,7 @@ export interface InferenceConfig {
   revision: number;
   selection: InferenceSelection;
   connections: InferenceConnection[];
+  verified: { connection_id: string; model: string; revision: number }[];
 }
 export interface InferenceStatus {
   state: "configured" | "ready" | "error";
@@ -250,6 +252,7 @@ export const api = {
   removeInferenceConnection: (id: string) => invoke<InferenceConfig>("remove_inference_connection", { id }),
   selectInference: (selection: InferenceSelection) => invoke<InferenceConfig>("select_inference", { selection }),
   discoverInferenceModels: (id: string) => invoke<DiscoveredInferenceModel[]>("discover_inference_models", { id }),
+  discoverInferenceDraft: (input: InferenceConnectionInput) => invoke<DiscoveredInferenceModel[]>("discover_inference_draft", { input }),
   testInferenceConnection: (id: string, model: string) => invoke<InferenceStatus>("test_inference_connection", { id, model }),
   resetInference: () => invoke<InferenceConfig>("reset_inference"),
   openRecoverySettings: (section: "general" | "models" | "inference" | "prompts") => invoke<void>("open_recovery_settings", { section }),

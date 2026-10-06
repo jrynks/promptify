@@ -22,6 +22,14 @@ use std::{
 };
 pub use types::*;
 
+fn connection_base_url(provider: Provider, base_url: &str) -> String {
+    if base_url.trim().is_empty() {
+        provider.default_base_url().unwrap_or("").into()
+    } else {
+        base_url.trim().into()
+    }
+}
+
 pub struct InferenceManager {
     data_dir: PathBuf,
     manifest: Manifest,
@@ -31,7 +39,7 @@ pub struct InferenceManager {
     credentials: Arc<dyn CredentialStore>,
     revocations: Mutex<HashMap<String, Vec<Weak<transport::SessionControl>>>>,
     local_workers: Mutex<HashMap<(Option<String>, bool), Arc<LlmWorker>>>,
-    tested: Mutex<Option<(String, String, u64)>>,
+    test_attempts: Mutex<HashMap<(String, String, u64), u64>>,
 }
 impl InferenceManager {
     pub fn new(
@@ -65,7 +73,7 @@ impl InferenceManager {
             credentials,
             revocations: Mutex::new(HashMap::new()),
             local_workers: Mutex::new(HashMap::new()),
-            tested: Mutex::new(None),
+            test_attempts: Mutex::new(HashMap::new()),
         }
     }
     pub fn config(&self) -> Result<InferenceConfig, String> {
@@ -144,7 +152,7 @@ impl InferenceManager {
             .get(&self.key(c))?
             .filter(|s| !s.is_empty())
             .map(Some)
-            .ok_or_else(|| "API credential missing. Save a key in Inference settings.".into())
+            .ok_or_else(|| "API credential missing. Save a key in Models > Prompt writer.".into())
     }
     pub fn upsert_connection(&self, input: ConnectionInput) -> Result<InferenceConfig, String> {
         let mut state = self
@@ -156,6 +164,7 @@ impl InferenceManager {
             return Err("Cannot save and remove a credential together.".into());
         }
         let old = next.connections.iter().find(|c| c.id == input.id).cloned();
+        let credential_changed = input.secret.is_some() || input.remove_secret;
         let revision = next
             .revision
             .checked_add(1)
@@ -164,11 +173,7 @@ impl InferenceManager {
             id: input.id,
             name: input.name,
             provider: input.provider,
-            base_url: if input.base_url.trim().is_empty() {
-                input.provider.default_base_url().unwrap_or("").into()
-            } else {
-                input.base_url
-            },
+            base_url: connection_base_url(input.provider, &input.base_url),
             protocol: input.protocol,
             auth: input.auth,
             model: input.model,
@@ -202,11 +207,27 @@ impl InferenceManager {
             None
         };
         c.credential_present = secret.is_some();
+        let changed = old.as_ref().is_none_or(|old| {
+            credential_changed
+                || old.base_url != c.base_url
+                || old.provider != c.provider
+                || old.protocol != c.protocol
+                || old.auth != c.auth
+                || old.model != c.model
+                || old.stream != c.stream
+                || old.consent_remote != c.consent_remote
+                || old.credential_present != c.credential_present
+        });
+        if !changed {
+            c.revision = old.as_ref().unwrap().revision;
+        } else {
+            next.verified.retain(|tested| tested.connection_id != c.id);
+        }
         next.connections.retain(|old| old.id != c.id);
         next.connections.push(c.clone());
         next.revision = revision;
         config::validate(&next)?;
-        if let Some(secret) = &secret {
+        if let Some(secret) = secret.as_ref().filter(|_| changed) {
             if let Err(error) = self.credentials.set(&self.key(&c), secret) {
                 if self.credentials.remove(&self.key(&c)).is_err() {
                     return Err(format!(
@@ -217,7 +238,7 @@ impl InferenceManager {
             }
         }
         if let Err(error) = config::save(&self.data_dir, &next) {
-            if secret.is_some() && self.credentials.remove(&self.key(&c)).is_err() {
+            if changed && secret.is_some() && self.credentials.remove(&self.key(&c)).is_err() {
                 return Err(format!(
                     "{error} Credential rollback also failed; remove the staged OS credential before retrying."
                 ));
@@ -225,10 +246,9 @@ impl InferenceManager {
             return Err(error);
         }
         *state = Ok(next.clone());
-        *self.tested.lock().unwrap() = None;
         if let Some(old) = old {
             self.revoke(&old);
-            if old.credential_present {
+            if changed && old.credential_present {
                 self.credentials.remove(&self.key(&old)).map_err(|_|"Connection saved and old sessions revoked, but old OS credential cleanup failed.")?;
             }
         }
@@ -253,6 +273,7 @@ impl InferenceManager {
             .cloned()
             .ok_or("Inference connection not found.")?;
         next.connections.retain(|c| c.id != id);
+        next.verified.retain(|tested| tested.connection_id != id);
         next.revision = next
             .revision
             .checked_add(1)
@@ -260,7 +281,6 @@ impl InferenceManager {
         config::save(&self.data_dir, &next)?;
         *state = Ok(next.clone());
         self.revoke(&old);
-        *self.tested.lock().unwrap() = None;
         if old.credential_present {
             self.credentials.remove(&self.key(&old)).map_err(
                 |_| "Connection deleted and sessions revoked, but OS credential cleanup failed.",
@@ -379,9 +399,9 @@ impl InferenceManager {
                 if let Some(c) = config.connections.iter().find(|c| &c.id == connection_id) {
                     if c.auth == AuthMode::ApiKey && !c.credential_present {
                         (StatusState::Error, Some("API credential missing.".into()))
-                    } else if self.tested.lock().unwrap().as_ref()
-                        == Some(&(connection_id.clone(), model.clone(), c.revision))
-                    {
+                    } else if let Err(error) = self.secret(c) {
+                        (StatusState::Error, Some(error))
+                    } else if config.is_verified(c, model) {
                         (StatusState::Ready, None)
                     } else {
                         (StatusState::Configured,Some("Configured but not tested. Explicit tests may incur charges or load a model.".into()))
@@ -400,6 +420,80 @@ impl InferenceManager {
             revision: config.revision,
             message,
         }
+    }
+    pub fn discover_draft(&self, input: ConnectionInput) -> Result<Vec<DiscoveredModel>, String> {
+        if input.id.is_empty()
+            || input.id.len() > 128
+            || !input
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            || input.name.len() > 1024
+            || input.model.len() > 1024
+            || input.base_url.len() > 8192
+            || input.secret.as_ref().is_some_and(|s| s.len() > 8192)
+        {
+            return Err("Invalid discovery input or input exceeds size limit.".into());
+        }
+        if input.secret.is_some() && input.remove_secret {
+            return Err("Cannot supply and remove a credential together.".into());
+        }
+        if input
+            .secret
+            .as_ref()
+            .is_some_and(|s| s.is_empty() || s.contains(['\r', '\n']))
+        {
+            return Err("Credential must be nonempty and contain no newlines.".into());
+        }
+        if input.provider == Provider::Google && input.protocol != Protocol::OpenaiChatCompletions {
+            return Err("Google preset uses its documented Chat Completions endpoint.".into());
+        }
+        let c = InferenceConnection {
+            id: input.id,
+            name: input.name,
+            provider: input.provider,
+            base_url: connection_base_url(input.provider, &input.base_url),
+            protocol: input.protocol,
+            auth: input.auth,
+            model: input.model,
+            stream: input.stream,
+            allow_insecure_lan: false,
+            consent_remote: input.consent_remote,
+            credential_present: false,
+            revision: 0,
+        };
+        let endpoint = config::endpoint(&c, "models")?;
+        let mut revoked = Arc::new(transport::SessionControl::default());
+        let secret = if c.auth == AuthMode::None {
+            None
+        } else if let Some(secret) = input.secret {
+            Some(secret)
+        } else {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "Inference state unavailable.")?;
+            let old = state
+                .as_ref()
+                .map_err(Clone::clone)?
+                .connections
+                .iter()
+                .find(|old| {
+                    old.id == c.id
+                        && old.provider == c.provider
+                        && old.protocol == c.protocol
+                        && old.auth == c.auth
+                        && old.credential_present
+                        && !input.remove_secret
+                        && config::endpoint(old, "models")
+                            .is_ok_and(|old_endpoint| old_endpoint == endpoint)
+                })
+                .ok_or("Supply a new API credential for this draft endpoint.")?;
+            let secret = self.secret(old)?;
+            revoked = self.revocation(old);
+            secret
+        };
+        transport::discover(c, secret, revoked)
     }
     pub fn discover(&self, id: &str) -> Result<Vec<DiscoveredModel>, String> {
         let state = self
@@ -423,7 +517,7 @@ impl InferenceManager {
         if model.trim().is_empty() {
             return Err("Choose a model to test.".into());
         }
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| "Inference state unavailable.")?;
@@ -434,14 +528,33 @@ impl InferenceManager {
             .find(|c| c.id == id)
             .cloned()
             .ok_or("Inference connection not found.")?;
-        let revision = config.revision;
+        let key = (id.to_owned(), model.to_owned(), c.revision);
+        let mut attempts = self
+            .test_attempts
+            .lock()
+            .map_err(|_| "Inference tests unavailable.")?;
+        let attempt = attempts
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("Inference test revision overflow.")?;
+        let mut next = config.clone();
+        next.verified
+            .retain(|tested| !(tested.connection_id == id && tested.model == model));
+        // Revoke the previous success durably before a retry can fail or be interrupted.
+        if next.verified.len() != config.verified.len() {
+            config::save(&self.data_dir, &next)?;
+            *state = Ok(next);
+        }
+        attempts.insert(key.clone(), attempt);
+        drop(attempts);
         let session = transport::HttpSession {
             connection: c.clone(),
             model: model.into(),
             secret: self.secret(&c)?,
             revoked: self.revocation(&c),
         };
-        *self.tested.lock().unwrap() = None;
         drop(state);
         let messages = [ChatMessage {
             role: Role::User,
@@ -454,18 +567,36 @@ impl InferenceManager {
             deadline: Instant::now() + Duration::from_secs(30),
         };
         let result = session.generate(&request, &CancelToken::default(), &mut |_| {});
-        let current = self.config()?;
+        let mut state_guard = self
+            .state
+            .lock()
+            .map_err(|_| "Inference state unavailable.")?;
+        let current = state_guard.as_ref().map_err(Clone::clone)?;
         if !current
             .connections
             .iter()
             .any(|item| item.id == id && item.revision == c.revision)
             || session.revoked.is_revoked()
+            || self
+                .test_attempts
+                .lock()
+                .map_err(|_| "Inference tests unavailable.")?
+                .get(&key)
+                != Some(&attempt)
         {
-            return Err("Connection changed while testing. Test the new configuration.".into());
+            return Err("Connection changed or test superseded while testing. Test the current configuration.".into());
         }
+        let revision = current.revision;
         let (state, message) = match result {
             Ok(generation) if generation.finish == promptify_core::pipeline::FinishReason::Stop => {
-                *self.tested.lock().unwrap() = Some((id.into(), model.into(), c.revision));
+                let mut next = current.clone();
+                next.verified.push(VerifiedInference {
+                    connection_id: id.into(),
+                    model: model.into(),
+                    revision: c.revision,
+                });
+                config::save(&self.data_dir, &next)?;
+                *state_guard = Ok(next);
                 (StatusState::Ready, None)
             }
             Ok(_) => (
@@ -524,10 +655,8 @@ impl InferenceManager {
                     .ok_or_else(|| {
                         BackendError("Selected inference connection unavailable.".into())
                     })?;
-                if self.tested.lock().unwrap().as_ref()
-                    != Some(&(connection_id.clone(), model.clone(), connection.revision))
-                {
-                    return Err(BackendError("Inference is configured but not verified. Explicitly test the selected model in Inference settings; tests may incur charges or load a model.".into()));
+                if !config.is_verified(connection, model) {
+                    return Err(BackendError("Inference is configured but not verified. Explicitly test the selected model in Models > Prompt writer; tests may incur charges or load a model.".into()));
                 }
                 self.secret(connection).map_err(BackendError).map(|_| ())
             }
@@ -563,7 +692,6 @@ impl InferenceManager {
         }
         config::save(&self.data_dir, &replacement)?;
         *state = Ok(replacement.clone());
-        *self.tested.lock().unwrap() = None;
         for sessions in self.revocations.lock().unwrap().values() {
             for session in sessions.iter().filter_map(Weak::upgrade) {
                 session.revoke();

@@ -2,7 +2,7 @@
 
 Speak a rough request and get a clear, well-structured prompt pasted into the AI app you are using.
 By default, everything runs on your own computer: Whisper for speech and a bundled local Qwen model for writing.
-No account or API key is needed for bundled inference. Optional **Inference** settings connect
+No account or API key is needed for bundled inference. Optional connections under **Models** connect
 LM Studio, other compatible local servers, or API-key providers directly from the desktop.
 Speech recognition stays on-device regardless of the selected language-model backend.
 The optional, experimental Jev quality reviewer
@@ -17,7 +17,9 @@ Configurable inference is an unreleased source feature, not part of the v1.2.1 i
 
 ## Inference: bundled models, LM Studio, and API keys
 
-Bundled models remain the default. Choose a different writer under **Settings -> Inference**;
+Bundled models remain the default. **Settings -> Models** groups the pipeline into local
+**Speech recognition**, **Prompt writer** (bundled models or API/local-server connections), and
+optional **Quality review** (Jev). Choose a different writer in the **Prompt writer** section;
 one explicit model handles prompt writing and structural repair throughout each job. Selecting
 another model applies to subsequent jobs. Dictation mode does not call a language model.
 
@@ -41,12 +43,38 @@ another model applies to subsequent jobs. Dictation mode does not call a languag
 Tests use synthetic content, not history or focused screen text, and may incur provider charges.
 Listing models alone does not prove the selected model can generate text. There is no automatic
 provider fallback or inference retry, and adding a key does not automatically select its model.
+After saving, click **Use** for the connection and **Test** for its selected model. Confirm the
+**Selected** line says **Ready**. Successful verification is saved across restarts for the tested
+connection and model. Changed connection settings, credentials, or an unverified model require a new
+test; restarting or switching back to an unchanged verified connection does not. On Wayland, an
+unverified selection blocks shortcut activation and opens Models settings rather than recording.
 
 Credentials are stored in the OS credential store, never in inference settings JSON. If secure
 storage is locked or unavailable, resolve the displayed error; there is no plaintext fallback.
-Public endpoints require HTTPS. Loopback HTTP is supported; unencrypted LAN connections require
-explicit acknowledgment. Promptify does not bypass TLS verification or forward credentials through
+HTTP and HTTPS endpoints are supported, including hostname-based gateways. HTTP does not require a
+separate acknowledgment; a non-blocking warning explains that requests and tokens are unencrypted.
+The general disclosure for sending context to a non-loopback endpoint still applies.
+Promptify does not bypass TLS verification or forward credentials through
 redirects. Local/LAN requests need no public tunnel or Promptify relay.
+
+Model discovery runs automatically after entering a valid endpoint and supplying any required
+authentication and remote-data consent, before saving or entering a model ID. It lists the endpoint's
+available model IDs without running inference or selecting a model for you. Choose an ID, save the
+connection, and select it explicitly. If discovery is unsupported or fails, an error and manual model
+entry remain available. Discovery uses the current edited endpoint, not the previously saved URL;
+editing an endpoint cannot silently forward its saved credential to a different endpoint.
+
+For **Agent Maestro**, use a custom connection with the API base
+`http://127.0.0.1:23333/api/openai/v1` and OpenAI Chat Completions (or OpenAI Responses).
+Its complete model catalogue is served at `/api/v1/lm/chatModels`; the Anthropic `/models` route
+lists only a subset and the OpenAI `/models` route is not provided.
+Promptify recognizes either gateway base and uses the same host and gateway prefix for discovery,
+retaining the `copilot` vendor models that Maestro's generation proxy supports, including GPT,
+Grok, Claude and Gemini. It excludes unrelated VS Code providers and recursive custom endpoints.
+The catalogue is outside Maestro's LLM-key authentication, so discovery does not send that key.
+Generation continues to use
+the selected OpenAI protocol and base URL. Keep the Agent Maestro VS Code window running; confirm
+the port with **Agent Maestro: Get API Server Status**.
 
 **Privacy changes when you select external inference:** requests go directly to the configured
 endpoint. They can include your transcript, prompt instructions, admitted application context,
@@ -87,7 +115,9 @@ Removing a connection or replacing its credentials invalidates its active sessio
 - **Quality-first recommendations**: Models highlights the highest quality tier with confirmed RAM compatibility.
   Recommendations never automatically switch your selected models or download anything. Larger models may be slower.
 
-Settings includes **General**, **Models**, **Inference**, **Prompt types**, **Your words**, **History**, and **Updates**.
+Settings includes **General**, **Models**, **Prompt types**, **Your words**, **History**, and **Updates**.
+Models brings speech downloads, prompt-writer selection and connections, and optional quality review
+into one view. Older Inference recovery links and remembered tabs open this combined view.
 Unvisited sections do not initialize their model/history/catalog work; visited sections retain unsaved edits.
 Answer mode, the Advanced playground, MCP, desktop HTTP APIs, phone pairing, LAN discovery, and relay support have
 been removed. Promptify has no external inference listener or connected-tool execution. Model downloads and update
@@ -138,6 +168,11 @@ Save your TypeSafe API key in the password field, then enable review after readi
 disclosure. Saving a key alone does not enable review. The key is kept in the OS credential
 store, never the settings file, browser storage, or logs; unavailable credential storage is
 an explicit error, not a plaintext fallback. Removing the key disables review.
+If the credential store becomes unavailable, its error remains visible and review can still be
+disabled without unlocking the store.
+Enter only the API key; Promptify sends it using Bearer authentication. Saving verifies storage,
+not authentication. HTTP 401 means TypeSafe did not accept the credential. HTTP 403 can mean a
+missing or unrecognized authentication header, or denied access; it does not prove the key is wrong.
 
 When enabled, desktop Prompt mode sends the transcript and generated draft to
 `https://api.typesafe.ai/v1/systemone` using `jev-latest`. No audio, separate screen context,
@@ -158,6 +193,10 @@ all checks must score at least 0.85 to approve; a check at or below 0.20 request
 other results require manual review. A Jev probability is **not** the same as an 8.5/10
 human quality grade. Real-service quality and false-approval/rejection rates must be measured
 on live and held-out examples before treating this reviewer as reliable.
+An inconclusive result means Jev connected and completed its review, not that authentication
+failed. The result shows all four scores and the approval rule so you can see why automatic
+pasting was withheld. Review failures still retain the draft for manual copy; no threshold is
+relaxed just to make a draft pass.
 
 ## Download and install
 
@@ -502,7 +541,7 @@ Errors that need user action keep their recovery controls nearby:
 | Microphone | Open system microphone settings; refresh microphone and shortcut detection |
 | Shortcuts / desktop access | Enable integration, retry focus detection, change shortcuts, resume paused shortcuts, retry or disable optional Ctrl+Shift hold; open macOS Accessibility or Input Monitoring settings when permission is needed |
 | Models | Download, resume, cancel, select or delete models; refresh model events; retry loading, use CPU fallback, or choose another model |
-| Inference | Select bundled/local-server/API inference; save credentials securely; discover, test, edit, or remove endpoint connections |
+| Models: Prompt writer | Select bundled/local-server/API inference; save credentials securely; discover, test, edit, or remove endpoint connections |
 | Failed results | Open General, Models or Prompt types as appropriate; dismiss any result; copy retained output and restore the previous clipboard |
 | History / vocabulary | Refresh history and its connection; edit invalid correction pairs; retry failed saves |
 | Prompt types | Retry loading; explicitly restore default routing when the routing settings need repair |
@@ -721,7 +760,7 @@ Ordinary `rewrite` and `run` commands otherwise use the saved inference selectio
 LM Studio server or API provider. API requests may incur charges. The evaluation commands retain their
 documented bundled-local model contracts; they do not silently send cases to the selected API provider.
 Dictation mode does not require language-model credentials. Configure keys in the desktop's
-Inference settings, not command-line arguments.
+Models -> Prompt writer settings, not command-line arguments.
 `route` defaults to adaptive rendering; `rewrite` and `run` retain the existing-profile default.
 Retired `mcp`, `serve`, and `remote` commands, `--mcp`/network options, and Answer mode fail explicitly before model loading.
 

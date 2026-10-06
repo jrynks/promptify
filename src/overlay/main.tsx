@@ -17,7 +17,7 @@ const BLOCK_MESSAGES: Record<string, string> = {
   insert_failed: "Couldn't paste into the app.",
   surface_unconfirmed: "AI input not confirmed. Review and copy this prompt.",
   graph_unsupported: "This graph needs a capable AI assistant. Review before copying.",
-  quality_review: "Jev did not approve this prompt. Review and copy; it was not pasted.",
+  quality_review: "Prompt generated; review needed before pasting.",
 };
 
 const FAIL_MESSAGES: Record<string, string> = {
@@ -294,7 +294,7 @@ function Overlay() {
             <div className="actions">
               {view.canCopy && <button disabled={copying} onClick={() => void copyResult()}>{copying ? "Copying..." : "Copy"}</button>}
               {view.canRestore && <button disabled={restoring} onClick={() => void restoreClipboard()}>Restore previous clipboard</button>}
-              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "inference" ? "Inference settings" : view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
+              {view.settings && <button onClick={() => { if (view.settings) void openSettings(view.settings); }}>{view.settings === "inference" || view.settings === "models" ? "Model settings" : view.settings === "prompts" ? "Prompt settings" : "Open Settings"}</button>}
               {connectionFailed && <button onClick={() => { setUiError(null); setConnectionAttempt((value) => value + 1); }}>Retry overlay connection</button>}
               <button onClick={() => scheduleHide(0)}>Dismiss</button>
             </div>

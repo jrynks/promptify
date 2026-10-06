@@ -219,6 +219,34 @@ pub fn engines_ready(state: &AppState, settings: &AppSettings) -> bool {
         && inference_available(state, settings)
 }
 
+fn engine_recovery(
+    inference: crate::inference::InferenceStatus,
+    engine_error: Option<String>,
+) -> (crate::commands::RecoverySection, String) {
+    use crate::commands::RecoverySection;
+    use crate::inference::{InferenceSelection, InferenceState};
+    if matches!(inference.selection, InferenceSelection::Connection { .. })
+        && inference.state != InferenceState::Ready
+    {
+        let detail = inference.message.unwrap_or_else(|| "Selected inference is not ready.".into());
+        return (RecoverySection::Inference, format!(
+            "{detail} Open Settings > Models > Prompt writer and click Test for the selected connection before using shortcuts."
+        ));
+    }
+    (RecoverySection::Models, engine_error.unwrap_or_else(||
+        "The speech and language engines are not ready. Open Settings > Models and wait for loading or resolve the model error.".into()
+    ))
+}
+
+pub fn show_engine_recovery(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let (section, message) = engine_recovery(state.llm.status(), state.onboarding.engine_error());
+    record_error(app, &message);
+    if let Err(error) = crate::commands::open_recovery_settings(app.clone(), section) {
+        log::warn!("could not open engine recovery settings: {error}");
+    }
+}
+
 fn migrate(settings: &mut AppSettings, existed: bool, configured: bool) -> Result<(), String> {
     if let Some(progress) = &settings.onboarding {
         if progress.version != VERSION {
@@ -771,6 +799,38 @@ mod tests {
         changed = key;
         changed.language = Some("another-model".into());
         assert!(!onboarding.ready_key(&changed));
+    }
+
+    #[test]
+    fn untested_inference_shortcut_recovery_opens_inference_not_models() {
+        use crate::commands::RecoverySection;
+        use crate::inference::{InferenceSelection, InferenceState, InferenceStatus};
+        let mut status = InferenceStatus {
+            state: InferenceState::Configured,
+            selection: InferenceSelection::Connection {
+                connection_id: "maestro".into(), model: "text-model".into(),
+            },
+            revision: 1,
+            message: Some("Configured but not tested.".into()),
+        };
+        let (section, message) = engine_recovery(status.clone(), Some("Generic loading error".into()));
+        assert!(matches!(section, RecoverySection::Inference));
+        assert!(message.contains("click Test"));
+        assert!(message.contains("Configured but not tested."));
+        status.state = InferenceState::Error;
+        status.message = Some("API credential missing.".into());
+        let (section, message) = engine_recovery(status.clone(), None);
+        assert!(matches!(section, RecoverySection::Inference));
+        assert!(message.contains("API credential missing."));
+        status.state = InferenceState::Ready;
+        let (section, message) = engine_recovery(status.clone(), Some("Speech failed to load.".into()));
+        assert!(matches!(section, RecoverySection::Models));
+        assert_eq!(message, "Speech failed to load.");
+        status.selection = InferenceSelection::BundledLocal;
+        status.state = InferenceState::Error;
+        let (section, message) = engine_recovery(status, None);
+        assert!(matches!(section, RecoverySection::Models));
+        assert!(message.contains("Settings > Models"));
     }
 
     #[test]

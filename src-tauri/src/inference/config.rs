@@ -15,16 +15,6 @@ pub fn endpoint(c: &InferenceConnection, path: &str) -> Result<reqwest::Url, Str
     let host = url.host_str().unwrap().trim_matches(['[', ']']);
     let ip = host.parse::<IpAddr>().ok();
     let loopback = host == "localhost" || ip.is_some_and(|ip| ip.is_loopback());
-    let private = ip.is_some_and(|ip| match ip {
-        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
-        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
-    });
-    if url.scheme() == "http" && !loopback && !(private && c.allow_insecure_lan) {
-        return Err(
-            "Public endpoints require HTTPS; private HTTP requires explicit LAN acknowledgment."
-                .into(),
-        );
-    }
     if !loopback && !c.consent_remote {
         return Err("Confirm remote data disclosure before using this endpoint.".into());
     }
@@ -59,6 +49,20 @@ pub fn validate(config: &InferenceConfig) -> Result<(), String> {
         endpoint(c, "models")?;
         if c.provider == Provider::Google && c.protocol != Protocol::OpenaiChatCompletions {
             return Err("Google preset uses its documented Chat Completions endpoint.".into());
+        }
+    }
+    let mut verified = std::collections::HashSet::new();
+    for tested in &config.verified {
+        if tested.model.trim().is_empty()
+            || !verified.insert((&tested.connection_id, &tested.model))
+            || !config
+                .connections
+                .iter()
+                .any(|c| c.id == tested.connection_id && c.revision == tested.revision)
+        {
+            return Err(
+                "Invalid persisted inference verification. Restore or repair the sidecar.".into(),
+            );
         }
     }
     if let InferenceSelection::Connection {

@@ -141,6 +141,7 @@ pub fn run() {
             commands::remove_inference_connection,
             commands::select_inference,
             commands::discover_inference_models,
+            commands::discover_inference_draft,
             commands::test_inference_connection,
             commands::reset_inference,
             commands::retry_focus_detection,
