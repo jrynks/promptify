@@ -8,12 +8,13 @@ Speech recognition stays on-device regardless of the selected language-model bac
 The optional, experimental Jev quality reviewer
 is a cloud service and requires a TypeSafe API key and explicit opt-in.
 
-**Latest release: [v1.2.1](https://github.com/jrynks/promptify/releases/tag/v1.2.1)**.
+**Latest release: [v1.3.0](https://github.com/jrynks/promptify/releases/tag/v1.3.0)**.
 Download a Windows x64 installer or Linux `.deb`, `.rpm`, or AppImage, with SHA-256 checksums.
 Models download separately during guided setup. See [Download and install](#download-and-install)
 for hardware requirements and platform limitations.
 
-Configurable inference is an unreleased source feature, not part of the v1.2.1 installers.
+Configurable inference is included in v1.3.0. Bundled on-device models remain the default;
+external inference and experimental Jev review require explicit configuration and opt-in.
 
 ## Inference: bundled models, LM Studio, and API keys
 
@@ -130,7 +131,23 @@ been removed. Promptify has no external inference listener or connected-tool exe
 checks still use HTTPS. Speech stays local; bundled prompt generation uses a child-process worker,
 while explicitly selected API/local-server inference uses outgoing requests to that endpoint.
 
-## What's new in v1.2.1
+## What's new in v1.3.0
+
+- **One-click prompt writer switching:** choose **On this device** or **Online or server**
+  in Models settings, or use the tray's **Prompt writer** menu. Changes apply to subsequent jobs.
+- **Bring your own inference:** use LM Studio, compatible local servers, or supported API-key
+  providers. Model discovery and manual identifiers are available; new or changed connections
+  must pass a generation check before use. Unchanged verified connections persist across restarts.
+- **Local speech and secure credentials:** speech recognition and plain dictation stay on-device.
+  API keys use the OS credential store with explicit errors, not plaintext fallbacks.
+  External generation can send admitted context to the selected endpoint; see the privacy disclosure above.
+- **Prompt quality and optional review:** shared task-graph guidance emphasizes faithful expansion
+  and meaningful bounded refinement. Experimental Jev review is opt-in cloud processing;
+  uncertain or failed reviews retain drafts for manual copy rather than authorizing paste.
+- **Fresh platform packages:** Windows x64 setup and Linux x64 deb, rpm and AppImage packages
+  include the bundled language-model worker and developer CLI.
+
+### Retained improvements from v1.2.1
 
 - **Clearer settings and recovery:** consistent spacing across all six tabs, shared shortcut errors
   shown once, and nearby actions to retry model loading, check microphones, reconnect desktop
@@ -167,7 +184,7 @@ local-model outputs. Its routing, structure and required-detail checks are only 
 read the outputs for invented restrictions, lost intent, vague steps and ineffective loops.
 The repeated live request samples multiple generations within the same worker session.
 
-### Optional Jev quality review (unreleased)
+### Optional Jev quality review (experimental)
 
 Settings -> **Models** includes an experimental **Jev quality review** option.
 Save your TypeSafe API key in the password field, then enable review after reading the cloud
@@ -207,13 +224,13 @@ relaxed just to make a draft pass.
 ## Download and install
 
 Download the x64 installer for your platform from the
-[v1.2.1 release](https://github.com/jrynks/promptify/releases/tag/v1.2.1).
+[v1.3.0 release](https://github.com/jrynks/promptify/releases/tag/v1.3.0).
 Quit any running Promptify instance before upgrading. Models are downloaded separately on first launch.
 Verify your download against the release's **SHA256SUMS.txt**.
 
 ### Windows
 
-Promptify supports Windows 10 and 11 on x64 computers with AVX2. Run **Promptify_1.2.1_x64-setup.exe**. The installer is currently
+Promptify supports Windows 10 and 11 on x64 computers with AVX2. Run **Promptify_1.3.0_x64-setup.exe**. The installer is currently
 unsigned, so Windows SmartScreen may show a warning: choose **More info**, verify that the app is **Promptify**, and then
 choose **Run anyway**.
 
@@ -236,19 +253,19 @@ Use the package for your distribution:
 
 | Distribution | Package | Install |
 | --- | --- | --- |
-| Ubuntu 22.04+, Debian 12+, Linux Mint 21+ | `.deb` | `sudo apt install ./Promptify_1.2.1_amd64.deb` |
-| Fedora and compatible RPM desktops with WebKitGTK 4.1 | `.rpm` | `sudo dnf install ./Promptify-1.2.1-1.x86_64.rpm` |
+| Ubuntu 22.04+, Debian 12+, Linux Mint 21+ | `.deb` | `sudo apt install ./Promptify_1.3.0_amd64.deb` |
+| Fedora and compatible RPM desktops with WebKitGTK 4.1 | `.rpm` | `sudo dnf install ./Promptify-1.3.0-1.x86_64.rpm` |
 | Bazzite / Fedora Atomic, Arch, and other modern glibc desktops | `.AppImage` | Make executable, then run as your normal user |
 
 For the AppImage:
 
 ```bash
-chmod +x Promptify_1.2.1_amd64.AppImage
-./Promptify_1.2.1_amd64.AppImage
+chmod +x Promptify_1.3.0_amd64.AppImage
+./Promptify_1.3.0_amd64.AppImage
 ```
 
 If FUSE 2 is unavailable (common on immutable desktops), use
-`./Promptify_1.2.1_amd64.AppImage --appimage-extract-and-run` instead. The AppImage avoids
+`./Promptify_1.3.0_amd64.AppImage --appimage-extract-and-run` instead. The AppImage avoids
 layering application packages on Bazzite; it is not a Flatpak. Your graphics driver's Vulkan
 loader and desktop audio services must be available. CPU inference is supported, but the binary
 still needs the Vulkan loader. Native `.deb`/`.rpm` installers declare their runtime dependencies.
@@ -287,7 +304,7 @@ assert an exhaustive dependency list or test clean-machine installation with
 each runtime dependency removed. Artifact verification success therefore is
 not an all-dependencies end-user installation guarantee.
 
-The v1.2.1 packages support X11 and permissioned Wayland integration on desktops providing
+The v1.3.0 packages support X11 and permissioned Wayland integration on desktops providing
 the RemoteDesktop and GlobalShortcuts portals, including KDE Plasma 6. KDE uses native KWin
 focus evidence; other Wayland desktops use accessibility metadata when available.
 An application must expose enough metadata for confirmed-field adaptive insertion.
