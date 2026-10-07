@@ -1,4 +1,4 @@
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
@@ -14,6 +14,7 @@ pub struct TrayHandles {
     dictation: MenuItem<tauri::Wry>,
     pause: CheckMenuItem<tauri::Wry>,
     updates: MenuItem<tauri::Wry>,
+    writer: Submenu<tauri::Wry>,
     last_status: std::sync::Mutex<String>,
 }
 
@@ -40,6 +41,7 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings\u{2026}", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, "updates", "Check for updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Promptify", true, None::<&str>)?;
+    let writer = Submenu::with_id(app, "writer", "Prompt writer", true)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -47,6 +49,7 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
             &prompt,
             &dictation,
             &PredefinedMenuItem::separator(app)?,
+            &writer,
             &pause,
             &autostart,
             &settings,
@@ -68,6 +71,7 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
             }
         })
         .on_menu_event(move |app, event| match event.id.as_ref() {
+            id if id.starts_with(WRITER_PREFIX) => choose_writer(app, &id[WRITER_PREFIX.len()..]),
             "settings" => show_settings(app),
             "updates" => {
                 show_settings(app);
@@ -103,8 +107,91 @@ pub fn build(app: &AppHandle, hotkeys: &HotkeyConfig) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.manage(TrayHandles { status, prompt, dictation, pause, updates, last_status: std::sync::Mutex::new("ready".into()) });
+    app.manage(TrayHandles { status, prompt, dictation, pause, updates, writer, last_status: std::sync::Mutex::new("ready".into()) });
+    refresh_writer(app);
     Ok(())
+}
+
+const WRITER_PREFIX: &str = "writer:";
+
+/// Lists prompt writers in the tray. Only checked writers switch directly; others open Settings to be checked first.
+pub fn refresh_writer(app: &AppHandle) {
+    let Some(handles) = app.try_state::<TrayHandles>() else { return };
+    let Some(state) = app.try_state::<crate::AppState>() else { return };
+    let Ok(config) = state.llm.config() else { return };
+    let result = (|| -> tauri::Result<()> {
+        for item in handles.writer.items()? {
+            handles.writer.remove(&item)?;
+        }
+        let local = matches!(config.selection, crate::inference::InferenceSelection::BundledLocal);
+        let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![Box::new(CheckMenuItem::with_id(
+            app,
+            format!("{WRITER_PREFIX}local"),
+            "On this device",
+            true,
+            local,
+            None::<&str>,
+        )?)];
+        for connection in &config.connections {
+            let (active, model) = match &config.selection {
+                crate::inference::InferenceSelection::Connection { connection_id, model } if connection_id == &connection.id => (true, model.as_str()),
+                _ => (false, connection.model.as_str()),
+            };
+            let label = format!("{} \u{b7} {model}", connection.name);
+            if active || config.is_verified(connection, model) {
+                items.push(Box::new(CheckMenuItem::with_id(app, format!("{WRITER_PREFIX}use:{}", connection.id), label, true, active, None::<&str>)?));
+            } else {
+                items.push(Box::new(MenuItem::with_id(app, format!("{WRITER_PREFIX}setup:{}", connection.id), format!("{label} \u{2014} check in Settings\u{2026}"), true, None::<&str>)?));
+            }
+        }
+        items.push(Box::new(PredefinedMenuItem::separator(app)?));
+        items.push(Box::new(MenuItem::with_id(app, format!("{WRITER_PREFIX}manage"), "Manage prompt writers\u{2026}", true, None::<&str>)?));
+        for item in &items {
+            handles.writer.append(item.as_ref())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        log::warn!("Could not update tray prompt writers: {error}");
+    }
+}
+
+fn choose_writer(app: &AppHandle, choice: &str) {
+    let open_models = |app: &AppHandle| {
+        if let Err(error) = crate::commands::open_recovery_settings(app.clone(), crate::commands::RecoverySection::Models) {
+            log::warn!("Could not open prompt writer settings: {error}");
+        }
+    };
+    let Some(state) = app.try_state::<crate::AppState>() else { return };
+    let selection = if choice == "local" {
+        if state.settings.read().unwrap().llm_model.is_none() {
+            open_models(app);
+            refresh_writer(app);
+            return;
+        }
+        crate::inference::InferenceSelection::BundledLocal
+    } else if let Some(id) = choice.strip_prefix("use:") {
+        let Ok(config) = state.llm.config() else { return };
+        let Some(connection) = config.connections.iter().find(|connection| connection.id == id) else { return };
+        let model = match &config.selection {
+            crate::inference::InferenceSelection::Connection { connection_id, model } if connection_id == id => model.clone(),
+            _ => connection.model.clone(),
+        };
+        crate::inference::InferenceSelection::Connection { connection_id: id.to_owned(), model }
+    } else {
+        open_models(app);
+        refresh_writer(app);
+        return;
+    };
+    let result = crate::onboarding::available(&state).and_then(|_| state.llm.select(selection));
+    match result {
+        Ok(_) => crate::commands::inference_changed(app),
+        Err(error) => {
+            log::warn!("Could not switch prompt writer from the tray: {error}");
+            open_models(app);
+            refresh_writer(app);
+        }
+    }
 }
 
 /// Shows what Promptify is doing in the tray tooltip and menu.

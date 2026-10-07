@@ -249,7 +249,10 @@ function Models({ onChange, inference, guided = false }: { onChange: () => void;
             return (
               <tr key={m.id} className={[unsupported ? "model-unsupported" : "", guided && recommended ? "tour-model" : ""].filter(Boolean).join(" ")}>
                 <td>
-                  <input type="radio" name={kind} checked={m.selected} disabled={!m.installed} onChange={() => act(() => api.selectModel(m.id))} aria-label={`Use ${m.display_name}`} />
+                  <input type="radio" name={kind} checked={m.selected} disabled={!m.installed} onChange={() => act(async () => {
+                    await api.selectModel(m.id);
+                    if (kind === "llm" && external) await api.selectInference({ kind: "bundled_local" });
+                  })} aria-label={`Use ${m.display_name}`} />
                 </td>
                 <td>
                   <strong>{m.display_name}</strong> {recommended && <span className="badge">Recommended</span>}{" "}
@@ -296,7 +299,7 @@ function Models({ onChange, inference, guided = false }: { onChange: () => void;
       <p className="hint">Choose how your voice becomes a prompt: local speech recognition, one prompt writer, and optional Jev quality review. Plain dictation uses only speech recognition.</p>
       <ol className="model-flow" aria-label="Voice to prompt stages">
         <li><a href="#speech-recognition">Speech to text</a> <span className="hint">On this device</span></li>
-        <li><a href="#prompt-writer">Prompt writer</a> <span className="hint">{external ? "Selected endpoint" : "Bundled local"}</span></li>
+        <li><a href="#prompt-writer">Prompt writer</a> <span className="hint">{external ? "Online or server" : "On this device"}</span></li>
         {!guided && <li><a href="#quality-review">Quality review</a> <span className="hint">Optional TypeSafe service</span></li>}
       </ol>
     </section>
@@ -319,14 +322,8 @@ function Models({ onChange, inference, guided = false }: { onChange: () => void;
         refresh();
       }}>Refresh models</button></div>}
     </section>
-    <Inference state={inference} onChange={onChange} guided={guided}>
-      {external ? <>
-        <p className="hint">Your selected endpoint supplies the prompt writer. No bundled language-model download is required.</p>
-        <details><summary>Manage inactive bundled prompt models</summary>
-          <p className="hint">These models are not used while an endpoint is selected. Choose Use bundled local to switch back.</p>
-          {group("llm", "Bundled prompt models")}
-        </details>
-      </> : group("llm", "Bundled prompt models")}
+    <Inference state={inference} onChange={onChange} guided={guided} localModel={models.find((m) => m.kind === "llm" && m.selected && m.installed)?.display_name ?? null}>
+      {group("llm", "On-device prompt models")}
     </Inference>
     {!guided && <JevSettings />}
     </>

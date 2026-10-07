@@ -23,8 +23,9 @@ pub fn inference_status(state: State<'_, AppState>) -> crate::inference::Inferen
     state.llm.status()
 }
 
-fn inference_changed(app: &AppHandle) {
+pub(crate) fn inference_changed(app: &AppHandle) {
     preload_engines(app);
+    crate::tray::refresh_writer(app);
     if let Err(error) = app.emit_to("settings", "inference-changed", ()) {
         log::warn!("could not notify settings of inference changes: {error}");
     }

@@ -230,7 +230,7 @@ fn engine_recovery(
     {
         let detail = inference.message.unwrap_or_else(|| "Selected inference is not ready.".into());
         return (RecoverySection::Inference, format!(
-            "{detail} Open Settings > Models > Prompt writer and click Test for the selected connection before using shortcuts."
+            "{detail} Open Settings > Models > Prompt writer and click Check now, or switch to On this device, before using shortcuts."
         ));
     }
     (RecoverySection::Models, engine_error.unwrap_or_else(||
@@ -815,7 +815,7 @@ mod tests {
         };
         let (section, message) = engine_recovery(status.clone(), Some("Generic loading error".into()));
         assert!(matches!(section, RecoverySection::Inference));
-        assert!(message.contains("click Test"));
+        assert!(message.contains("click Check now"));
         assert!(message.contains("Configured but not tested."));
         status.state = InferenceState::Error;
         status.message = Some("API credential missing.".into());

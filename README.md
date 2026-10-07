@@ -19,13 +19,16 @@ Configurable inference is an unreleased source feature, not part of the v1.2.1 i
 
 Bundled models remain the default. **Settings -> Models** groups the pipeline into local
 **Speech recognition**, **Prompt writer** (bundled models or API/local-server connections), and
-optional **Quality review** (Jev). Choose a different writer in the **Prompt writer** section;
-one explicit model handles prompt writing and structural repair throughout each job. Selecting
-another model applies to subsequent jobs. Dictation mode does not call a language model.
+optional **Quality review** (Jev). The **Prompt writer** section has a two-way switch:
+**On this device** (bundled models) or **Online or server** (your saved API or local-server
+connections). One click switches between them, and the **Now using** line shows the active
+writer. You can also switch from the tray menu under **Prompt writer**. One explicit model handles
+prompt writing and structural repair throughout each job. Switching applies to subsequent jobs.
+Dictation mode does not call a language model.
 
 - **LM Studio:** start the server in LM Studio's Developer tab, make a text model available, and
   add the LM Studio preset. Its default API base URL is `http://localhost:1234/v1`. Refresh the
-  model list or enter the exact model identifier, then test and select the model. If server
+  model list or enter the exact model identifier, then click **Save and use**. If server
   authentication is enabled, supply its API token; otherwise leave the token blank.
   Promptify does not start LM Studio or download/load/unload its models. Discovered models may
   not already be loaded when LM Studio uses just-in-time loading. A generation test can trigger
@@ -42,12 +45,15 @@ another model applies to subsequent jobs. Dictation mode does not call a languag
 
 Tests use synthetic content, not history or focused screen text, and may incur provider charges.
 Listing models alone does not prove the selected model can generate text. There is no automatic
-provider fallback or inference retry, and adding a key does not automatically select its model.
-After saving, click **Use** for the connection and **Test** for its selected model. Confirm the
-**Selected** line says **Ready**. Successful verification is saved across restarts for the tested
-connection and model. Changed connection settings, credentials, or an unverified model require a new
-test; restarting or switching back to an unchanged verified connection does not. On Wayland, an
-unverified selection blocks shortcut activation and opens Models settings rather than recording.
+provider fallback or inference retry. **Save and use** on a new connection checks it once with a
+tiny synthetic message and switches to it only if the check passes; if it fails, your current
+writer stays active. Switching to another saved connection or model works the same way. Successful
+checks are saved across restarts for that connection and model, so switching back to an unchanged
+connection, or restarting, needs no new check. Editing the active connection selects the edited
+model and checks it again. Until that check passes, shortcuts are paused; click **Check now** or
+switch to **On this device**. On Wayland, an unchecked selection blocks shortcut activation and
+opens Models settings rather than recording. In the tray, connections that have not passed a check
+open Settings instead of switching directly.
 
 Credentials are stored in the OS credential store, never in inference settings JSON. If secure
 storage is locked or unavailable, resolve the displayed error; there is no plaintext fallback.
@@ -541,7 +547,7 @@ Errors that need user action keep their recovery controls nearby:
 | Microphone | Open system microphone settings; refresh microphone and shortcut detection |
 | Shortcuts / desktop access | Enable integration, retry focus detection, change shortcuts, resume paused shortcuts, retry or disable optional Ctrl+Shift hold; open macOS Accessibility or Input Monitoring settings when permission is needed |
 | Models | Download, resume, cancel, select or delete models; refresh model events; retry loading, use CPU fallback, or choose another model |
-| Models: Prompt writer | Select bundled/local-server/API inference; save credentials securely; discover, test, edit, or remove endpoint connections |
+| Models: Prompt writer | Switch between on-device and online/server writers; save credentials securely; discover, check, edit, or remove endpoint connections; choose an online model from the discovered list |
 | Failed results | Open General, Models or Prompt types as appropriate; dismiss any result; copy retained output and restore the previous clipboard |
 | History / vocabulary | Refresh history and its connection; edit invalid correction pairs; retry failed saves |
 | Prompt types | Retry loading; explicitly restore default routing when the routing settings need repair |
