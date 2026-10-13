@@ -8,6 +8,9 @@ on:
       - .github/workflows/installers.yml
       - scripts/build-env.mjs
       - scripts/installer.mjs
+      - scripts/appimage.mjs
+      - scripts/appimage.test.mjs
+      - scripts/smoke-appimage.mjs
       - scripts/verify-installers.mjs
       - scripts/verify-installers.test.mjs
       - Cargo.toml
@@ -84,7 +87,7 @@ jobs:
             clang libclang-dev llvm-dev ninja-build \
             libx11-dev libxtst-dev libxi-dev libxkbcommon-dev libxdo-dev \
             libxcb1-dev libxrandr-dev libxinerama-dev libxcursor-dev libxfixes-dev \
-            patchelf rpm cpio binutils file
+            patchelf rpm cpio binutils file xvfb dbus-x11
           # Jammy's CMake 3.22 is too old; pin a 3.x release instead of using CMake 4.
           python3 -m pip install --user cmake==3.31.6
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -161,7 +164,7 @@ jobs:
         run: npm ci
 
       - name: Test installer verification
-        run: node --test scripts/verify-installers.test.mjs
+        run: node --test scripts/verify-installers.test.mjs scripts/appimage.test.mjs
 
       - name: Test core pipeline and desktop library
         run: cargo test --locked --release -p promptify-core -p promptify --lib
@@ -169,7 +172,7 @@ jobs:
       - name: Build host installers
         run: npm run installer
 
-      - name: Inspect installer payloads and executable layout
+      - name: Inspect installer payloads and smoke-test packaged UI
         id: verify
         run: node scripts/verify-installers.mjs
 

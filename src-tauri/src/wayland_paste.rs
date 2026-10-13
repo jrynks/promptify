@@ -120,6 +120,9 @@ async fn connect(token: Option<&str>, on_denied: &dyn Fn()) -> Result<(Arc<Activ
         if consent_denied(&e) { on_denied(); }
         format!("The desktop's remote-input portal failed: {e}")
     };
+    if let Err(error) = crate::desktop_integration_linux::register_portal_app().await {
+        log::warn!("Could not register host desktop portal application ID before remote-input session: {error}");
+    }
     let proxy = RemoteDesktop::new().await.map_err(failed)?;
     let session = proxy.create_session(Default::default()).await.map_err(failed)?;
     let result = async {

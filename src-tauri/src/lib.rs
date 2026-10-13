@@ -12,6 +12,8 @@ mod destination_windows;
 #[cfg(target_os = "linux")]
 mod destination_linux;
 #[cfg(target_os = "linux")]
+pub mod desktop_integration_linux;
+#[cfg(target_os = "linux")]
 mod portal_shortcuts;
 #[cfg(target_os = "macos")]
 mod destination_macos;
@@ -196,6 +198,9 @@ pub fn run() {
             let models_dir = settings::models_dir(&data_dir);
             #[cfg(target_os = "linux")]
             {
+                if let Err(e) = desktop_integration_linux::ensure_desktop_entries() {
+                    log::warn!("Could not ensure Linux desktop entries: {e}");
+                }
                 wayland_paste::init(&data_dir);
                 std::thread::Builder::new().name("kwin-focus".into()).spawn(kwin::init)?;
             }
