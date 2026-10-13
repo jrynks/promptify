@@ -1,11 +1,13 @@
 // Inspect real installer payloads against the exact sidecars staged for Tauri.
-// Requires 7z on Windows; dpkg-deb, rpm, rpm2cpio, cpio and readelf on Linux.
+// Requires 7z on Windows; dpkg-deb, rpm, rpm2cpio, cpio, readelf,
+// xvfb-run and dbus-run-session on Linux.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bundledWaylandLibraries } from "./appimage.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeDlls = ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"];
@@ -266,8 +268,13 @@ export function verifyInstallers() {
         run(path, ["--appimage-extract"], { cwd: destination, stdio: ["ignore", "ignore", "pipe"] });
         payload = join(destination, "squashfs-root");
         assert.ok(existsSync(join(payload, "AppRun")), "AppImage is missing AppRun");
+        assert.deepEqual(bundledWaylandLibraries(payload), [], "AppImage must use host Wayland libraries to remain compatible with host EGL/Mesa drivers");
       }
       const checks = verifyPayload(payload, staging, undefined, { exactBytes: kind !== "appimage", triple, smokeScratch: join(destination, "smoke") });
+      if (kind === "appimage") {
+        const stdout = run("xvfb-run", ["-a", "dbus-run-session", "--", process.execPath, join(root, "scripts", "smoke-appimage.mjs"), path, join(destination, "gui-smoke")], { timeout: 60_000 });
+        checks.guiSmoke = JSON.parse(stdout.trim());
+      }
       report.installers.push({
         file: path.slice(bundle.length + 1).replaceAll("\\", "/"),
         kind,

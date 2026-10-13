@@ -104,6 +104,9 @@ pub fn grant(app: AppHandle) -> Result<(), String> {
     let worker_app = app.clone();
     let spawn = std::thread::Builder::new().name("portal-shortcuts".into()).spawn(move || {
         let result = zbus::block_on(async {
+            if let Err(error) = crate::desktop_integration_linux::register_portal_app().await {
+                log::warn!("Could not register host desktop portal application ID before GlobalShortcuts session: {error}");
+            }
             let portal = GlobalShortcuts::new().await.map_err(|error| permission_error(&worker_app, generation, error))?;
             if portal.version() < 1 {
                 return Err("The desktop does not expose a usable GlobalShortcuts portal.".into());

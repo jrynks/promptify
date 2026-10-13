@@ -333,6 +333,9 @@ fn grant_desktop_integration(app: &AppHandle, restoring: bool) -> Result<(), Str
     }
     #[cfg(target_os = "linux")]
     if crate::wayland_paste::applies() {
+        if let Err(error) = zbus::block_on(crate::desktop_integration_linux::register_portal_app()) {
+            log::warn!("Could not register host desktop portal application ID: {error}");
+        }
         let closed_app = app.clone();
         let shortcut_app = app.clone();
         let result = (|| {

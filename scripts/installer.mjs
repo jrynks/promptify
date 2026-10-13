@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { env, root, run, tauriCli } from "./build-env.mjs";
+import { repairAppImage } from "./appimage.mjs";
 
 const triple = spawnSync("rustc", ["-vV"], { encoding: "utf8" }).stdout.match(/^host: (\S+)$/m)?.[1];
 if (!triple) {
@@ -63,4 +64,10 @@ run(process.execPath, [tauriCli, "build", "--no-bundle", "--ignore-version-misma
 // Tauri builds and bundles the CLI automatically; snapshot that final build for verification.
 copyFileSync(join(env.CARGO_TARGET_DIR, "release", `promptify-cli${exe}`), join(staging, `promptify-cli-${triple}${exe}`));
 run(process.execPath, [tauriCli, "bundle", "--bundles", bundles, "--config", JSON.stringify(config), ...process.argv.slice(2)]);
+if (process.platform === "linux") {
+  const directory = join(env.CARGO_TARGET_DIR, "release", "bundle", "appimage");
+  for (const name of readdirSync(directory).filter((name) => name.endsWith(".AppImage"))) {
+    repairAppImage(join(directory, name));
+  }
+}
 console.log(`Installers: ${join(env.CARGO_TARGET_DIR, "release", "bundle")}`);

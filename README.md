@@ -299,10 +299,22 @@ before uploading verified installers. Its Linux prerequisite command requests
 all listed packages in one APT transaction and a failed step stops that job.
 The [payload verifier](./scripts/verify-installers.mjs) requires all three Linux
 package formats, checks binaries and their layout, and runs a GUI-free CLI smoke
-test on the build host. It records package dependency metadata but does not
+test on the build host. It also launches the real AppImage under Xvfb with an
+isolated D-Bus session and fresh application data, and requires both packaged
+WebKit pages and the first-run onboarding UI to render before upload.
+It records package dependency metadata but does not
 assert an exhaustive dependency list or test clean-machine installation with
 each runtime dependency removed. Artifact verification success therefore is
 not an all-dependencies end-user installation guarantee.
+
+AppImages use the host's Wayland libraries alongside its EGL/Mesa graphics
+driver, including when the window runs through X11/XWayland. The installer
+builder removes linuxdeploy's older bundled Wayland libraries before repacking;
+mixing those libraries with newer host drivers can crash WebKit and leave a
+blank window. The payload verifier rejects that library mix. This does not
+disable graphics acceleration, change model GPU settings, or disable WebKit's
+sandbox. Building and verifying Linux installers also requires Xvfb and
+`dbus-run-session`; repacking reuses Tauri's cached AppImage output plugin.
 
 The v1.3.0 packages support X11 and permissioned Wayland integration on desktops providing
 the RemoteDesktop and GlobalShortcuts portals, including KDE Plasma 6. KDE uses native KWin
